@@ -510,8 +510,52 @@ function createOpenConnectionApi(ctx) {
      * Supports jump host connections when options.jumpHosts is provided
      */
     async function openSftp(event, options) {
-      const client = new SftpClient();
       const connId = options.sessionId || randomUUID();
+
+      if (options.sourceSessionId && !options.sudo) {
+        const sourceSession = findReusableSession?.(sessions, options.sourceSessionId, {
+          hostname: options.hostname,
+          port: options.port || 22,
+          username: options.username || "root",
+        });
+        if (sourceSession?.conn && sourceSession?.connRef) {
+          const refHolder = {
+            id: connId,
+            conn: sourceSession.conn,
+            stream: null,
+            webContentsId: event.sender?.id,
+          };
+          acquireConnectionRef?.(refHolder, sourceSession.connRef);
+          const reusedClient = createSessionBackedSftpClient(
+            connId,
+            sourceSession.conn,
+            { refHolder, sourceSessionId: options.sourceSessionId },
+          );
+          try {
+            sendSftpProgress(event.sender, connId, options.hostname, 'connecting', 'reusing terminal connection');
+            await requireSftpChannel(reusedClient);
+            reusedClient.__netcattySudoMode = false;
+            sftpClients.set(connId, reusedClient);
+            sendSftpProgress(event.sender, connId, options.hostname, 'connected', 'reused terminal connection');
+            console.log(`[SFTP] Reused terminal SSH connection ${options.sourceSessionId} for ${connId}`);
+            return { sftpId: connId };
+          } catch (reuseErr) {
+            console.warn(
+              `[SFTP] Failed to reuse terminal SSH connection ${options.sourceSessionId} for ${connId}; falling back to fresh connection:`,
+              reuseErr?.message || String(reuseErr),
+            );
+            try {
+              await reusedClient.end();
+            } catch {
+              // Ignore cleanup errors while falling back to a fresh SFTP connection.
+            }
+          }
+        } else {
+          console.log(`[SFTP] Reuse requested for ${connId} but source session is not reusable; connecting fresh`);
+        }
+      }
+
+      const client = new SftpClient();
     
       // Get default keys early to use for both chain and target
       const defaultKeys = await findAllDefaultPrivateKeysFromHelper();

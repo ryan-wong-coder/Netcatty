@@ -71,7 +71,7 @@ export const useSftpConnections = ({
   const { listLocalFiles, listRemoteFiles } = useSftpDirectoryListing();
 
   const connect = useCallback(
-    async (side: "left" | "right", host: Host | "local", options?: { forceNewTab?: boolean; onTabCreated?: (tabId: string) => void }) => {
+    async (side: "left" | "right", host: Host | "local", options?: { forceNewTab?: boolean; onTabCreated?: (tabId: string) => void; sourceSessionId?: string }) => {
       const setTabs = side === "left" ? setLeftTabs : setRightTabs;
 
       let activeTabId: string | null = null;
@@ -292,6 +292,7 @@ export const useSftpConnections = ({
               const keyFirstCredentials = {
                 sessionId: `sftp-${connectionId}`,
                 ...credentials,
+                sourceSessionId: options?.sourceSessionId,
               };
               if (!credentials.sudo) {
                 keyFirstCredentials.password = undefined;
@@ -302,6 +303,7 @@ export const useSftpConnections = ({
                 sftpId = await openSftp({
                   sessionId: `sftp-${connectionId}`,
                   ...credentials,
+                  sourceSessionId: options?.sourceSessionId,
                   privateKey: undefined,
                   certificate: undefined,
                   publicKey: undefined,
@@ -317,6 +319,7 @@ export const useSftpConnections = ({
             sftpId = await openSftp({
               sessionId: `sftp-${connectionId}`,
               ...credentials,
+              sourceSessionId: options?.sourceSessionId,
             });
           }
 

@@ -211,6 +211,7 @@ export function TerminalLayerView({ ctx }: { ctx: TerminalLayerViewContext }) {
                           updateHosts={updateHosts}
                           sftpDefaultViewMode={sftpDefaultViewMode}
                           activeHost={isVisibleSftpPanel ? sftpActiveHost : null}
+                          activeSessionId={isVisibleSftpPanel ? ctx.activeTerminalSessionIdForSftp : null}
                           initialLocation={
                             isVisibleSftpPanel
                               ? (sftpInitialLocationForTab.get(tabId) ?? null)

@@ -657,11 +657,15 @@ function statResultFromAttrs(attrs) {
   };
 }
 
-function createSessionBackedSftpClient(sessionId, sshClient) {
+function createSessionBackedSftpClient(sessionId, sshClient, options = {}) {
+  const refHolder = options?.refHolder || null;
+  let ended = false;
   const client = {
     client: sshClient,
     sftp: null,
     __netcattySessionBacked: true,
+    __netcattySourceSessionId: options?.sourceSessionId,
+    __netcattyRefHolder: refHolder,
     _reopeningPromise: null,
     async get(remotePath) {
       const sftp = await requireSftpChannel(client);
@@ -740,6 +744,8 @@ function createSessionBackedSftpClient(sessionId, sshClient) {
       });
     },
     async end() {
+      if (ended) return;
+      ended = true;
       try {
         if (client.sftp && typeof client.sftp.end === "function") {
           client.sftp.end();
@@ -750,6 +756,9 @@ function createSessionBackedSftpClient(sessionId, sshClient) {
         // Ignore channel close failures for session-backed clients.
       } finally {
         client.sftp = null;
+        if (refHolder && typeof releaseConnectionRef === "function") {
+          releaseConnectionRef(refHolder);
+        }
       }
     },
   };
@@ -862,6 +871,11 @@ function sendSftpProgress(sender, sessionId, label, status, detail) {
  * Connect through a chain of jump hosts for SFTP
  */
 const { createOpenConnectionApi } = require("./sftpBridge/openConnection.cjs");
+const {
+  acquireConnectionRef,
+  releaseConnectionRef,
+  findReusableSession,
+} = require("./sshConnectionPool.cjs");
 const openConnectionApi = createOpenConnectionApi({
   get sftpClients() { return sftpClients; },
   get sessions() { return sessions; },
@@ -875,6 +889,7 @@ const openConnectionApi = createOpenConnectionApi({
   sendSftpProgress, safeSend, authSafeSend, copySftpEncodingState, clearSftpEncodingState, normalizeEncoding,
   resolveEncodingForRequest, updateResolvedEncoding, requireSftpChannel, realpathAsync,
   connectSudoSftp: undefined,
+  acquireConnectionRef, releaseConnectionRef, findReusableSession, createSessionBackedSftpClient,
 });
 const { connectThroughChainForSftp, connectSudoSftp, openSftp } = openConnectionApi;
 const { createFileOpsApi } = require("./sftpBridge/fileOps.cjs");
