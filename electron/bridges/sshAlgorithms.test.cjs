@@ -23,9 +23,14 @@ function resetSupportCache() {
   sftpBridge._resetAlgorithmSupportCacheForTests?.();
 }
 
-function withAlgorithmRuntime({ unsupportedGroups = new Set(), hashes = ["sha1", "sha256", "sha512", "md5"] }, callback) {
+function withAlgorithmRuntime({
+  unsupportedGroups = new Set(),
+  hashes = ["sha1", "sha256", "sha512", "md5"],
+  ciphers = crypto.getCiphers(),
+}, callback) {
   const originalCreateGroup = crypto.createDiffieHellmanGroup;
   const originalGetHashes = crypto.getHashes;
+  const originalGetCiphers = crypto.getCiphers;
   const probedGroups = [];
 
   crypto.createDiffieHellmanGroup = (name) => {
@@ -36,6 +41,7 @@ function withAlgorithmRuntime({ unsupportedGroups = new Set(), hashes = ["sha1",
     return {};
   };
   crypto.getHashes = () => hashes;
+  crypto.getCiphers = () => ciphers;
 
   resetSupportCache();
   try {
@@ -43,6 +49,7 @@ function withAlgorithmRuntime({ unsupportedGroups = new Set(), hashes = ["sha1",
   } finally {
     crypto.createDiffieHellmanGroup = originalCreateGroup;
     crypto.getHashes = originalGetHashes;
+    crypto.getCiphers = originalGetCiphers;
     resetSupportCache();
   }
 }
@@ -126,6 +133,41 @@ for (const [label, buildAlgorithms] of [
   ["SSH", sshBridge.buildAlgorithms],
   ["SFTP", sftpBridge.buildSftpAlgorithms],
 ]) {
+  test(`${label} offers chacha20-poly1305 in modern defaults when the runtime supports it`, () => {
+    withAlgorithmRuntime({}, () => {
+      const algorithms = buildAlgorithms(false);
+
+      assert.ok(
+        algorithms.cipher.includes("chacha20-poly1305@openssh.com"),
+        "chacha20-poly1305@openssh.com should be offered",
+      );
+    });
+  });
+
+  test(`${label} drops chacha20-poly1305 when the runtime lacks chacha20`, () => {
+    const ciphersWithoutChacha20 = crypto.getCiphers().filter((cipher) => cipher !== "chacha20");
+
+    withAlgorithmRuntime({ ciphers: ciphersWithoutChacha20 }, () => {
+      const algorithms = buildAlgorithms(false);
+
+      assert.equal(algorithms.cipher.includes("chacha20-poly1305@openssh.com"), false);
+    });
+  });
+
+  test(`${label} cipher override is filtered against runtime support`, () => {
+    const ciphersWithoutChacha20 = crypto.getCiphers().filter((cipher) => cipher !== "chacha20");
+
+    withAlgorithmRuntime({ ciphers: ciphersWithoutChacha20 }, () => {
+      const algorithms = buildAlgorithms(false, {
+        algorithmOverrides: {
+          cipher: ["chacha20-poly1305@openssh.com", "aes256-ctr"],
+        },
+      });
+
+      assert.deepEqual(algorithms.cipher, ["aes256-ctr"]);
+    });
+  });
+
   test(`${label} keeps standard DH groups without an expensive runtime probe`, () => {
     assert.equal(typeof buildAlgorithms, "function");
 

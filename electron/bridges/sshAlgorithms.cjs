@@ -8,7 +8,23 @@ const FIXED_DH_GROUP_BY_KEX = Object.freeze({
   "diffie-hellman-group18-sha512": "modp18",
 });
 
+const CIPHER_SSL_NAME_BY_ALGORITHM = Object.freeze({
+  "chacha20-poly1305@openssh.com": "chacha20",
+  "aes128-gcm@openssh.com": "aes-128-gcm",
+  "aes256-gcm@openssh.com": "aes-256-gcm",
+  "aes128-gcm": "aes-128-gcm",
+  "aes256-gcm": "aes-256-gcm",
+  "aes128-ctr": "aes-128-ctr",
+  "aes192-ctr": "aes-192-ctr",
+  "aes256-ctr": "aes-256-ctr",
+  "aes128-cbc": "aes-128-cbc",
+  "aes192-cbc": "aes-192-cbc",
+  "aes256-cbc": "aes-256-cbc",
+  "3des-cbc": "des-ede3-cbc",
+});
+
 let _md5Supported = null;
+let _supportedCiphers = null;
 const dhGroupSupport = new Map();
 
 // MODP groups that every SSH runtime we target supports, so we skip the
@@ -52,12 +68,29 @@ function filterSupportedFixedDhKex(kexAlgorithms) {
   });
 }
 
+function supportedCiphers() {
+  if (_supportedCiphers === null) {
+    try { _supportedCiphers = new Set(crypto.getCiphers()); }
+    catch { _supportedCiphers = new Set(); }
+  }
+  return _supportedCiphers;
+}
+
+function filterRuntimeUnsupportedCiphers(cipherAlgorithms) {
+  const ciphers = supportedCiphers();
+  return cipherAlgorithms.filter((algo) => {
+    const sslName = CIPHER_SSL_NAME_BY_ALGORITHM[algo];
+    return !sslName || ciphers.has(sslName);
+  });
+}
+
 function buildBaseAlgorithms() {
   return {
-    cipher: [
+    cipher: filterRuntimeUnsupportedCiphers([
       "aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
       "aes128-ctr", "aes192-ctr", "aes256-ctr",
-    ],
+      "chacha20-poly1305@openssh.com",
+    ]),
     kex: filterSupportedFixedDhKex([
       "curve25519-sha256", "curve25519-sha256@libssh.org",
       "ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
@@ -76,7 +109,9 @@ function applyLegacyAlgorithms(algorithms) {
     "diffie-hellman-group-exchange-sha1",
   ]));
   algorithms.cipher.push(
-    "aes128-cbc", "aes256-cbc", "3des-cbc",
+    ...filterRuntimeUnsupportedCiphers([
+      "aes128-cbc", "aes256-cbc", "3des-cbc",
+    ]),
   );
   algorithms.serverHostKey = [
     "ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
@@ -168,6 +203,8 @@ function applyAlgorithmOverrides(algorithms, overrides) {
         filtered = filterSupportedFixedDhKex(copy);
       } else if (key === "hmac") {
         filtered = filterRuntimeUnsupportedHmac(copy);
+      } else if (key === "cipher") {
+        filtered = filterRuntimeUnsupportedCiphers(copy);
       } else {
         filtered = copy;
       }
@@ -240,6 +277,7 @@ function buildSftpAlgorithms(legacyEnabled, options = {}) {
 
 function _resetAlgorithmSupportCacheForTests() {
   _md5Supported = null;
+  _supportedCiphers = null;
   dhGroupSupport.clear();
 }
 

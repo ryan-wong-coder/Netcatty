@@ -137,6 +137,7 @@ const MODERN_DEFAULT_ALGORITHMS: Readonly<Record<SSHAlgorithmCategory, readonly 
     "aes128-ctr",
     "aes192-ctr",
     "aes256-ctr",
+    "chacha20-poly1305@openssh.com",
   ],
   hmac: [
     "hmac-sha2-256-etm@openssh.com",

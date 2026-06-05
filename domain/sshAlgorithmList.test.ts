@@ -42,6 +42,11 @@ test("effectiveDefaultAlgorithms (modern) never seeds CBC / arcfour / MD5", () =
   }
 });
 
+test("effectiveDefaultAlgorithms (modern) includes chacha20-poly1305", () => {
+  const result = effectiveDefaultAlgorithms(false);
+  assert.ok(result.cipher.includes("chacha20-poly1305@openssh.com"));
+});
+
 test("effectiveDefaultAlgorithms (legacy) appends sha1 KEX, CBC, and ssh-dss", () => {
   const modern = effectiveDefaultAlgorithms(false);
   const legacy = effectiveDefaultAlgorithms(true);
