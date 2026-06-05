@@ -397,6 +397,7 @@ const HostDetailsPanel: React.FC<HostDetailsPanelProps> = ({
       form.protocol,
       form.port,
       Boolean(groupDefaults?.port),
+      Boolean(groupDefaults?.telnetPort),
     );
     let cleaned: Host = {
       ...formWithoutProxyDraft,

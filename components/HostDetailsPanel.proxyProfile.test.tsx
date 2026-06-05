@@ -254,10 +254,12 @@ test("resolvePrimaryProtocolSwitchPort only migrates opposite protocol defaults"
 });
 
 test("resolvePrimaryProtocolSavePort falls back to telnet default for primary telnet", () => {
-  assert.equal(resolvePrimaryProtocolSavePort("telnet", undefined, false), 23);
-  assert.equal(resolvePrimaryProtocolSavePort("telnet", 2323, false), 2323);
-  assert.equal(resolvePrimaryProtocolSavePort("ssh", undefined, false), 22);
-  assert.equal(resolvePrimaryProtocolSavePort("ssh", undefined, true), undefined);
+  assert.equal(resolvePrimaryProtocolSavePort("telnet", undefined, false, false), 23);
+  assert.equal(resolvePrimaryProtocolSavePort("telnet", 2323, false, false), 2323);
+  assert.equal(resolvePrimaryProtocolSavePort("ssh", undefined, false, false), 22);
+  assert.equal(resolvePrimaryProtocolSavePort("ssh", undefined, true, false), undefined);
+  assert.equal(resolvePrimaryProtocolSavePort("telnet", undefined, false, true), undefined);
+  assert.equal(resolvePrimaryProtocolSavePort("telnet", undefined, true, false), undefined);
 });
 
 test("HostDetailsPanel does not offer to disable telnet when telnet is the primary protocol", () => {

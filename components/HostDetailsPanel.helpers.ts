@@ -18,8 +18,13 @@ export const resolvePrimaryProtocolSavePort = (
   protocol: Host["protocol"],
   currentPort: number | undefined,
   hasGroupSshPortDefault: boolean,
+  hasGroupTelnetPortDefault: boolean,
 ): number | undefined => {
-  if (protocol === "telnet") return currentPort ?? 23;
+  if (protocol === "telnet") {
+    if (currentPort !== undefined) return currentPort;
+    if (hasGroupTelnetPortDefault || hasGroupSshPortDefault) return undefined;
+    return 23;
+  }
   return currentPort ?? (hasGroupSshPortDefault ? undefined : 22);
 };
 
