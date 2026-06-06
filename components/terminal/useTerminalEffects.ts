@@ -257,6 +257,9 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
           onAutocompleteKeyEvent: (e: KeyboardEvent) => autocompleteKeyEventRef.current?.(e) ?? true,
           onAutocompleteInput: (data: string) => autocompleteInputRef.current?.(data),
           isRestoringSelectionRef,
+          // Defer WebGL context creation for panes that mount hidden (e.g. the
+          // background tabs of a batch connect) until they first become visible.
+          initiallyVisible: isVisible,
         });
 
         xtermRuntimeRef.current = runtime;
@@ -483,6 +486,9 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
     if (!isVisible) return;
     const timer = setTimeout(() => {
       safeFit({ requireVisible: true });
+      // A pane that mounted hidden deferred its WebGL renderer; create it now
+      // that it's visible (no-op if already active or WebGL is disabled).
+      xtermRuntimeRef.current?.ensureWebglRenderer();
       // Recover the WebGL renderer now that this tab is visible again. Hidden
       // panes stay mounted off-screen (visibility:hidden) so each keeps a live
       // WebGL context; creating another terminal's context — or the GPU dropping

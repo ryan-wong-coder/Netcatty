@@ -46,6 +46,7 @@ import { installUserCursorPreferenceGuard } from "./cursorPreference";
 import { terminalAltKeyOptions } from "./altKeyOptions";
 import { optionArrowWordJumpSequence } from "./optionArrowWordJump";
 import { watchDevicePixelRatio } from "./rendererDprWatch";
+import { shouldDeferWebglUntilVisible } from "./webglRendererPolicy";
 import { handleSerialLineModeInput } from "./serialLineInput";
 import {
   nextTerminalFontSizeForAction,
@@ -100,6 +101,12 @@ export type XTermRuntime = {
    * fall into after font changes or device pixel ratio changes.
    */
   clearTextureAtlas: () => void;
+  /**
+   * Create the WebGL renderer if it was deferred (pane mounted hidden) and has
+   * not been created yet. Idempotent; a no-op when WebGL is disabled or already
+   * active. Called when a deferred pane first becomes visible.
+   */
+  ensureWebglRenderer: () => void;
 };
 
 export type CreateXTermRuntimeContext = {
@@ -162,6 +169,12 @@ export type CreateXTermRuntimeContext = {
   // Set to true while we're programmatically restoring a selection so that
   // copy-on-select listeners can suppress redundant clipboard writes.
   isRestoringSelectionRef?: RefObject<boolean>;
+
+  // Whether the pane is visible at creation time. When false, WebGL renderer
+  // creation is deferred until the pane first becomes visible (batch-connect
+  // background tabs) to avoid spinning up many WebGL contexts at once. Defaults
+  // to visible (immediate WebGL) when omitted.
+  initiallyVisible?: boolean;
 };
 
 const detectPlatform = (): XTermPlatform => {
@@ -382,7 +395,12 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     __xtermRendererPreference?: string;
   };
 
-  if (performanceConfig.useWebGLAddon) {
+  // Idempotent: creates the WebGL renderer on first call and no-ops afterwards
+  // (or when WebGL is disabled for this device). Panes that mount hidden defer
+  // this until they first become visible — see shouldDeferWebglUntilVisible —
+  // so batch-connecting many hosts doesn't spin up every WebGL context at once.
+  const loadWebglRenderer = () => {
+    if (webglLoaded || !performanceConfig.useWebGLAddon) return;
     try {
       // WebglAddon constructor only accepts `preserveDrawingBuffer?: boolean`.
       // Passing an object here (legacy API assumption) unintentionally enables
@@ -400,10 +418,22 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
         webglErr instanceof Error ? webglErr.message : webglErr,
       );
     }
-  } else {
+    scopedWindow.__xtermWebGLLoaded = webglLoaded;
+  };
+
+  if (!performanceConfig.useWebGLAddon) {
     logger.info(
       "[XTerm] Skipping WebGL addon (DOM preferred for low-memory devices)",
     );
+  } else if (
+    shouldDeferWebglUntilVisible({
+      useWebGLAddon: performanceConfig.useWebGLAddon,
+      initiallyVisible: ctx.initiallyVisible ?? true,
+    })
+  ) {
+    logger.info("[XTerm] Deferring WebGL addon until pane becomes visible");
+  } else {
+    loadWebglRenderer();
   }
 
   scopedWindow.__xtermWebGLLoaded = webglLoaded;
@@ -1037,6 +1067,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     searchAddon,
     keywordHighlighter,
     clearTextureAtlas: clearWebglTextureAtlas,
+    ensureWebglRenderer: loadWebglRenderer,
     dispose: () => {
       ctx.container.removeEventListener(
         "wheel",
