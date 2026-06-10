@@ -127,6 +127,29 @@ export const enAiMessages: Messages = {
   'ai.userSkills.status.ready': 'Ready',
   'ai.userSkills.status.warning': 'Warning',
 
+  // AI Quick Messages
+  'ai.quickMessages.title': 'Quick Messages',
+  'ai.quickMessages.description': 'Create reusable prompts you can insert from the AI chat with / or the quick-message button. Unlike user skills, quick messages fill the composer with text.',
+  'ai.quickMessages.add': 'Add Quick Message',
+  'ai.quickMessages.createTitle': 'New Quick Message',
+  'ai.quickMessages.editTitle': 'Edit Quick Message',
+  'ai.quickMessages.name': 'Name',
+  'ai.quickMessages.name.placeholder': 'e.g. Check disk space',
+  'ai.quickMessages.slug': 'Command',
+  'ai.quickMessages.slug.placeholder': 'disk-check',
+  'ai.quickMessages.descriptionField': 'Description (optional)',
+  'ai.quickMessages.descriptionField.placeholder': 'Short hint about what this prompt does',
+  'ai.quickMessages.content': 'Message content',
+  'ai.quickMessages.content.placeholder': 'Full prompt text to insert when selected...',
+  'ai.quickMessages.empty': 'No quick messages yet. Add a few prompts you use often.',
+  'ai.quickMessages.confirmDelete': 'Delete quick message "{name}"?',
+  'ai.quickMessages.error.nameRequired': 'Name is required.',
+  'ai.quickMessages.error.invalidSlug': 'Command may only contain lowercase letters, numbers, and hyphens.',
+  'ai.quickMessages.error.contentRequired': 'Message content is required.',
+  'ai.quickMessages.error.slugTaken': 'This command is already used by another quick message.',
+  'ai.quickMessages.error.slugConflictsWithSkill': 'This command conflicts with user skill "/{slug}". Choose another.',
+  'ai.quickMessages.error.maxItems': 'You can save at most {max} quick messages.',
+
   // AI Chat
   'ai.chat.noProvider': 'No AI provider is configured. Go to **Settings → AI → Providers** to add and enable a provider.',
   'ai.chat.toolDenied': 'Action was rejected by the user.',
@@ -185,6 +208,13 @@ export const enAiMessages: Messages = {
   'ai.chat.menuImage': 'Image',
   'ai.chat.menuMentionHost': 'Mention Host',
   'ai.chat.menuUserSkills': 'User Skills',
+  'ai.chat.menuSlashCommands': 'Slash Commands',
+  'ai.chat.slashCommands': 'Slash commands',
+  'ai.chat.slashQuickMessages': 'Quick messages',
+  'ai.chat.slashUserSkills': 'User skills',
+  'ai.chat.quickMessages': 'Slash commands',
+  'ai.chat.slashNoResults': 'No matching commands',
+  'ai.chat.slashEmptyHint': 'Add prompts in Settings → AI → Quick Messages.',
 
   // AI Error
   'ai.codex.bridgeError': 'Codex main-process handlers are not loaded yet. Fully restart Netcatty, or restart the Electron dev process, then try again.',

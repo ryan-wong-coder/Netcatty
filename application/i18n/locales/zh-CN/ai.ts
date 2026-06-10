@@ -127,6 +127,29 @@ export const zhCNAiMessages: Messages = {
   'ai.userSkills.status.ready': '正常',
   'ai.userSkills.status.warning': '警告',
 
+  // AI Quick Messages
+  'ai.quickMessages.title': '快捷消息',
+  'ai.quickMessages.description': '创建常用提示词，在 AI 聊天框输入 / 或点击快捷按钮即可插入到输入框。与用户 Skills 不同，快捷消息会直接填入消息内容。',
+  'ai.quickMessages.add': '添加快捷消息',
+  'ai.quickMessages.createTitle': '新建快捷消息',
+  'ai.quickMessages.editTitle': '编辑快捷消息',
+  'ai.quickMessages.name': '名称',
+  'ai.quickMessages.name.placeholder': '例如：检查磁盘空间',
+  'ai.quickMessages.slug': '命令',
+  'ai.quickMessages.slug.placeholder': 'disk-check',
+  'ai.quickMessages.descriptionField': '说明（可选）',
+  'ai.quickMessages.descriptionField.placeholder': '简短描述这条快捷消息的用途',
+  'ai.quickMessages.content': '消息内容',
+  'ai.quickMessages.content.placeholder': '输入选择后要插入的完整提示词...',
+  'ai.quickMessages.empty': '还没有快捷消息。添加几条常用提示，聊天时就能一键插入。',
+  'ai.quickMessages.confirmDelete': '确定删除快捷消息「{name}」吗？',
+  'ai.quickMessages.error.nameRequired': '请填写名称。',
+  'ai.quickMessages.error.invalidSlug': '命令只能包含小写字母、数字和连字符。',
+  'ai.quickMessages.error.contentRequired': '请填写消息内容。',
+  'ai.quickMessages.error.slugTaken': '该命令已被其他快捷消息使用。',
+  'ai.quickMessages.error.slugConflictsWithSkill': '该命令与用户 Skill「/{slug}」冲突，请换一个命令。',
+  'ai.quickMessages.error.maxItems': '最多只能保存 {max} 条快捷消息。',
+
   // AI Chat
   'ai.chat.noProvider': '尚未配置 AI 提供商。请前往 **设置 → AI → 提供商** 添加并启用一个提供商。',
   'ai.chat.toolDenied': '操作已被用户拒绝。',
@@ -185,6 +208,13 @@ export const zhCNAiMessages: Messages = {
   'ai.chat.menuImage': '图片',
   'ai.chat.menuMentionHost': '提及主机',
   'ai.chat.menuUserSkills': '用户 Skills',
+  'ai.chat.menuSlashCommands': '快捷命令',
+  'ai.chat.slashCommands': '快捷命令',
+  'ai.chat.slashQuickMessages': '快捷消息',
+  'ai.chat.slashUserSkills': '用户 Skills',
+  'ai.chat.quickMessages': '快捷命令',
+  'ai.chat.slashNoResults': '没有匹配的命令',
+  'ai.chat.slashEmptyHint': '可在 设置 → AI → 快捷消息 中添加常用提示词。',
 
   // AI Error
   'ai.codex.bridgeError': 'Codex 主进程处理器尚未加载。请完全重启 Netcatty 或重启 Electron 开发进程，然后重试。',

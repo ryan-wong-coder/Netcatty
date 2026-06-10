@@ -43,6 +43,8 @@ import { ClaudeCodeCard } from "./ai/ClaudeCodeCard";
 import { CopilotCliCard } from "./ai/CopilotCliCard";
 import { SafetySettings } from "./ai/SafetySettings";
 import { WebSearchSettings } from "./ai/WebSearchSettings";
+import { QuickMessagesSettings } from "./ai/QuickMessagesSettings";
+import type { AIQuickMessage } from "../../../infrastructure/ai/quickMessages";
 import {
   areExternalAgentListsEqual,
   buildManagedAgentState,
@@ -79,6 +81,8 @@ interface SettingsAITabProps {
   setMaxIterations: (value: number) => void;
   webSearchConfig: WebSearchConfig | null;
   setWebSearchConfig: (config: WebSearchConfig | null) => void;
+  quickMessages: AIQuickMessage[];
+  setQuickMessages: (value: AIQuickMessage[] | ((prev: AIQuickMessage[]) => AIQuickMessage[])) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +114,8 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
   setMaxIterations,
   webSearchConfig,
   setWebSearchConfig,
+  quickMessages,
+  setQuickMessages,
 }) => {
   const { t } = useI18n();
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
@@ -436,6 +442,15 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
     };
   }, [refreshUserSkillsStatus]);
 
+  const reservedUserSkillSlugs = useMemo(
+    () => (userSkillsStatus?.ok && userSkillsStatus.skills
+      ? userSkillsStatus.skills
+          .filter((skill) => skill.status === 'ready' && typeof skill.slug === 'string' && skill.slug.length > 0)
+          .map((skill) => skill.slug)
+      : []),
+    [userSkillsStatus],
+  );
+
   const handleOpenUserSkillsFolder = useCallback(async () => {
     const bridge = getBridge();
     if (!bridge?.aiUserSkillsOpenFolder) return;
@@ -697,6 +712,12 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
               ) : null}
             </SettingCard>
           </SettingsSection>
+
+          <QuickMessagesSettings
+            quickMessages={quickMessages}
+            setQuickMessages={setQuickMessages}
+            reservedUserSkillSlugs={reservedUserSkillSlugs}
+          />
 
           <WebSearchSettings
             webSearchConfig={webSearchConfig}

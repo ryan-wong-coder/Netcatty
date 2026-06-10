@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
 import { useRef } from 'react';
+import { subscribeWindowFullscreenChanged } from '../../application/state/useWindowControls';
 import { resolveFontWeightBold } from '../../lib/fontWeightAvailability';
-import { netcattyBridge } from '../../infrastructure/services/netcattyBridge';
 
 type TerminalEffectsContext = Record<string, any>;
 
@@ -1045,7 +1045,7 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
     window.addEventListener('focus', handleWindowFocus);
 
     // Fullscreen changes layout for every visible pane.
-    const unsubscribeFullscreen = netcattyBridge.get()?.onWindowFullScreenChanged?.((isFullscreen) => {
+    const unsubscribeFullscreen = subscribeWindowFullscreenChanged((isFullscreen) => {
       scheduleLayoutRecoveryRefit(isFullscreen ? [0, 150, 400] : [0, 100, 300]);
     });
 

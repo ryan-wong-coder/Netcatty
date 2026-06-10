@@ -155,6 +155,8 @@ const SettingsAITabContainer: React.FC = () => {
                 setMaxIterations={aiState.setMaxIterations}
                 webSearchConfig={aiState.webSearchConfig}
                 setWebSearchConfig={aiState.setWebSearchConfig}
+                quickMessages={aiState.quickMessages}
+                setQuickMessages={aiState.setQuickMessages}
             />
         </AITabErrorBoundary>
     );

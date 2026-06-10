@@ -17,7 +17,10 @@ import {
   STORAGE_KEY_AI_AGENT_MODEL_MAP,
   STORAGE_KEY_AI_AGENT_PROVIDER_MAP,
   STORAGE_KEY_AI_WEB_SEARCH,
+  STORAGE_KEY_AI_QUICK_MESSAGES,
 } from '../../infrastructure/config/storageKeys';
+import type { AIQuickMessage } from '../../infrastructure/ai/quickMessages';
+import { sanitizeQuickMessages } from '../../infrastructure/ai/quickMessages';
 import type {
   AIDraft,
   AISession,
@@ -160,6 +163,11 @@ export function useAIState() {
     localStorageAdapter.read<WebSearchConfig>(STORAGE_KEY_AI_WEB_SEARCH) ?? null
   );
 
+  // ── Quick Messages (slash prompts) ──
+  const [quickMessages, setQuickMessagesRaw] = useState<AIQuickMessage[]>(() =>
+    sanitizeQuickMessages(localStorageAdapter.read<unknown>(STORAGE_KEY_AI_QUICK_MESSAGES)),
+  );
+
   useEffect(() => {
     setLatestAISessionsSnapshot(sessions);
   }, [sessions]);
@@ -273,6 +281,16 @@ export function useAIState() {
     } else {
       localStorageAdapter.remove(STORAGE_KEY_AI_WEB_SEARCH);
     }
+  }, []);
+
+  const setQuickMessages = useCallback((value: AIQuickMessage[] | ((prev: AIQuickMessage[]) => AIQuickMessage[])) => {
+    setQuickMessagesRaw((prev) => {
+      const nextRaw = typeof value === 'function' ? value(prev) : value;
+      const next = sanitizeQuickMessages(nextRaw);
+      localStorageAdapter.write(STORAGE_KEY_AI_QUICK_MESSAGES, next);
+      emitAIStateChanged(STORAGE_KEY_AI_QUICK_MESSAGES);
+      return next;
+    });
   }, []);
 
   // ── Persist helpers ──
@@ -466,6 +484,11 @@ export function useAIState() {
           case STORAGE_KEY_AI_WEB_SEARCH:
             setWebSearchConfigRaw(localStorageAdapter.read<WebSearchConfig>(STORAGE_KEY_AI_WEB_SEARCH) ?? null);
             break;
+          case STORAGE_KEY_AI_QUICK_MESSAGES: {
+            const messages = localStorageAdapter.read<unknown>(STORAGE_KEY_AI_QUICK_MESSAGES);
+            setQuickMessagesRaw(sanitizeQuickMessages(messages));
+            break;
+          }
         }
       } catch (err) {
         console.warn('[useAIState] Cross-window sync: failed to process storage event for key', e.key, err);
@@ -999,6 +1022,8 @@ export function useAIState() {
     setAgentProvider,
     webSearchConfig,
     setWebSearchConfig,
+    quickMessages,
+    setQuickMessages,
     sessions,
     activeSessionIdMap,
     draftsByScope,
@@ -1054,6 +1079,8 @@ export function useAIState() {
     setAgentProvider,
     webSearchConfig,
     setWebSearchConfig,
+    quickMessages,
+    setQuickMessages,
     sessions,
     activeSessionIdMap,
     draftsByScope,

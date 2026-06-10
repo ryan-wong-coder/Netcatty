@@ -126,6 +126,7 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
   commandBlocklist,
   maxIterations = 20,
   webSearchConfig,
+  quickMessages = [],
   scopeType,
   scopeTargetId,
   scopeHostIds,
@@ -991,6 +992,7 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
         terminalSessions={terminalSessions}
         selectedUserSkills={selectedUserSkills}
         userSkillOptions={userSkillOptions}
+        quickMessages={quickMessages}
         addSelectedUserSkill={addSelectedUserSkill}
         removeSelectedUserSkill={removeSelectedUserSkill}
         globalPermissionMode={globalPermissionMode}
@@ -1037,6 +1039,7 @@ const AI_CHAT_SIDE_PANEL_AI_STATE_KEYS = [
   'commandBlocklist',
   'maxIterations',
   'webSearchConfig',
+  'quickMessages',
 ] as const satisfies readonly (keyof AIChatSidePanelProps)[];
 
 function aiChatSidePanelPropsAreEqual(

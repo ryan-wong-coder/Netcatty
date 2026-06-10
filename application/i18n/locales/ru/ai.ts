@@ -127,6 +127,29 @@ export const ruAiMessages: Messages = {
   'ai.userSkills.status.ready': 'Готово',
   'ai.userSkills.status.warning': 'Предупреждение',
 
+  // AI Quick Messages
+  'ai.quickMessages.title': 'Быстрые сообщения',
+  'ai.quickMessages.description': 'Создавайте часто используемые подсказки и вставляйте их в AI-чат через / или кнопку быстрых сообщений. В отличие от user skills, быстрые сообщения заполняют поле ввода текстом.',
+  'ai.quickMessages.add': 'Добавить быстрое сообщение',
+  'ai.quickMessages.createTitle': 'Новое быстрое сообщение',
+  'ai.quickMessages.editTitle': 'Редактировать быстрое сообщение',
+  'ai.quickMessages.name': 'Название',
+  'ai.quickMessages.name.placeholder': 'например: Проверить диск',
+  'ai.quickMessages.slug': 'Команда',
+  'ai.quickMessages.slug.placeholder': 'disk-check',
+  'ai.quickMessages.descriptionField': 'Описание (необязательно)',
+  'ai.quickMessages.descriptionField.placeholder': 'Краткая подсказка о назначении',
+  'ai.quickMessages.content': 'Текст сообщения',
+  'ai.quickMessages.content.placeholder': 'Полный текст подсказки для вставки...',
+  'ai.quickMessages.empty': 'Быстрых сообщений пока нет. Добавьте несколько часто используемых подсказок.',
+  'ai.quickMessages.confirmDelete': 'Удалить быстрое сообщение «{name}»?',
+  'ai.quickMessages.error.nameRequired': 'Укажите название.',
+  'ai.quickMessages.error.invalidSlug': 'Команда может содержать только строчные буквы, цифры и дефисы.',
+  'ai.quickMessages.error.contentRequired': 'Укажите текст сообщения.',
+  'ai.quickMessages.error.slugTaken': 'Эта команда уже используется другим быстрым сообщением.',
+  'ai.quickMessages.error.slugConflictsWithSkill': 'Команда конфликтует с user skill «/{slug}». Выберите другую.',
+  'ai.quickMessages.error.maxItems': 'Можно сохранить не более {max} быстрых сообщений.',
+
   // AI Chat
   'ai.chat.noProvider': 'AI-провайдер не настроен. Перейдите в **Настройки → AI → Провайдеры**, чтобы добавить и включить провайдера.',
   'ai.chat.toolDenied': 'Действие было отклонено пользователем.',
@@ -185,6 +208,13 @@ export const ruAiMessages: Messages = {
   'ai.chat.menuImage': 'Изображение',
   'ai.chat.menuMentionHost': 'Упомянуть хост',
   'ai.chat.menuUserSkills': 'Пользовательские skills',
+  'ai.chat.menuSlashCommands': 'Команды /',
+  'ai.chat.slashCommands': 'Команды /',
+  'ai.chat.slashQuickMessages': 'Быстрые сообщения',
+  'ai.chat.slashUserSkills': 'User skills',
+  'ai.chat.quickMessages': 'Команды /',
+  'ai.chat.slashNoResults': 'Нет подходящих команд',
+  'ai.chat.slashEmptyHint': 'Добавьте подсказки в Настройки → AI → Быстрые сообщения.',
 
   // AI Error
   'ai.codex.bridgeError': 'Обработчики главного процесса Codex ещё не загружены. Полностью перезапустите Netcatty или dev-процесс Electron и попробуйте снова.',

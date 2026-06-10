@@ -31,6 +31,7 @@ import {
 } from '../domain/customKeyBindings';
 import { isEncryptedCredentialPlaceholder } from '../domain/credentials';
 import { localStorageAdapter } from '../infrastructure/persistence/localStorageAdapter';
+import { sanitizeQuickMessages } from '../infrastructure/ai/quickMessages';
 import { emitAIStateChanged } from './state/aiStateEvents';
 import { rehydrateGlobalSftpBookmarks } from './state/sftp/globalSftpBookmarks';
 import {
@@ -79,6 +80,7 @@ import {
   STORAGE_KEY_AI_AGENT_MODEL_MAP,
   STORAGE_KEY_AI_AGENT_PROVIDER_MAP,
   STORAGE_KEY_AI_WEB_SEARCH,
+  STORAGE_KEY_AI_QUICK_MESSAGES,
   STORAGE_KEY_PORT_FORWARDING,
 } from '../infrastructure/config/storageKeys';
 
@@ -244,6 +246,7 @@ export const SYNCABLE_SETTING_STORAGE_KEYS = [
   STORAGE_KEY_AI_AGENT_MODEL_MAP,
   STORAGE_KEY_AI_AGENT_PROVIDER_MAP,
   STORAGE_KEY_AI_WEB_SEARCH,
+  STORAGE_KEY_AI_QUICK_MESSAGES,
 ] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -448,6 +451,8 @@ export function collectSyncableSettings(): SyncPayload['settings'] {
   if (agentProviderMap) ai.agentProviderMap = agentProviderMap;
   const webSearchConfig = readRecordSetting(STORAGE_KEY_AI_WEB_SEARCH);
   if (webSearchConfig) ai.webSearchConfig = stripDeviceBoundApiKey(webSearchConfig);
+  const quickMessages = readArraySetting(STORAGE_KEY_AI_QUICK_MESSAGES);
+  if (quickMessages) ai.quickMessages = sanitizeQuickMessages(quickMessages);
   if (Object.keys(ai).length > 0) settings.ai = ai;
 
   return Object.keys(settings).length > 0 ? settings : undefined;
@@ -582,6 +587,9 @@ function applySyncableSettings(settings: NonNullable<SyncPayload['settings']>): 
         );
       }
     }
+    if (ai.quickMessages != null) {
+      localStorageAdapter.write(STORAGE_KEY_AI_QUICK_MESSAGES, sanitizeQuickMessages(ai.quickMessages));
+    }
     // After all AI writes, reconcile per-agent bindings against the final
     // provider list. Sync payloads can land with a new `providers` set but
     // no `agentProviderMap`, or with a stale `agentProviderMap` that
@@ -622,6 +630,7 @@ function notifyAIStateAfterSync(ai: NonNullable<SyncPayload['settings']>['ai']):
     touched.push(STORAGE_KEY_AI_AGENT_MODEL_MAP);
   }
   if (ai.webSearchConfig !== undefined) touched.push(STORAGE_KEY_AI_WEB_SEARCH);
+  if (ai.quickMessages != null) touched.push(STORAGE_KEY_AI_QUICK_MESSAGES);
   for (const key of touched) {
     emitAIStateChanged(key);
   }

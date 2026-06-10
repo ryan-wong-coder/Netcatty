@@ -272,6 +272,7 @@ export interface SyncPayload {
       agentModelMap?: Record<string, string>;
       agentProviderMap?: Record<string, string>;
       webSearchConfig?: Record<string, unknown> | null;
+      quickMessages?: Array<Record<string, unknown>>;
     };
   };
 
