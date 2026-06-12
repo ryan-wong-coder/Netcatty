@@ -44,6 +44,7 @@ const {
   hasCloudSyncEntityData,
   hasMeaningfulCloudSyncData,
   shouldPromptCloudVaultRecovery,
+  SYNCABLE_SETTING_STORAGE_KEYS,
 } = await import("./syncPayload.ts");
 const storageKeys = await import("../infrastructure/config/storageKeys.ts");
 
@@ -124,6 +125,7 @@ test("buildSyncPayload includes AI configuration settings", () => {
   localStorage.setItem(storageKeys.STORAGE_KEY_AI_AGENT_MODEL_MAP, JSON.stringify({ codex: "gpt-test" }));
   localStorage.setItem(storageKeys.STORAGE_KEY_AI_AGENT_PROVIDER_MAP, JSON.stringify({ catty: "openai-main" }));
   localStorage.setItem(storageKeys.STORAGE_KEY_AI_WEB_SEARCH, JSON.stringify(webSearch));
+  localStorage.setItem(storageKeys.STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION, "false");
 
   const payload = buildSyncPayload(vault([]));
 
@@ -140,7 +142,16 @@ test("buildSyncPayload includes AI configuration settings", () => {
     agentModelMap: { codex: "gpt-test" },
     agentProviderMap: { catty: "openai-main" },
     webSearchConfig: webSearch,
+    showTerminalSelectionAction: false,
   });
+});
+
+test("terminal selection AI preference is syncable for auto-sync detection", () => {
+  assert.ok(
+    (SYNCABLE_SETTING_STORAGE_KEYS as readonly string[]).includes(
+      storageKeys.STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION,
+    ),
+  );
 });
 
 test("buildSyncPayload includes host tree sidebar visibility setting", () => {
@@ -215,6 +226,7 @@ test("applySyncPayload restores AI configuration settings", async () => {
         agentModelMap: { claude: "claude-test" },
         agentProviderMap: { catty: "anthropic-main" },
         webSearchConfig: webSearch,
+        showTerminalSelectionAction: false,
       },
     },
     syncedAt: 1,
@@ -234,6 +246,7 @@ test("applySyncPayload restores AI configuration settings", async () => {
   assert.deepEqual(JSON.parse(localStorage.getItem(storageKeys.STORAGE_KEY_AI_AGENT_MODEL_MAP)!), { claude: "claude-test" });
   assert.deepEqual(JSON.parse(localStorage.getItem(storageKeys.STORAGE_KEY_AI_AGENT_PROVIDER_MAP)!), { catty: "anthropic-main" });
   assert.deepEqual(JSON.parse(localStorage.getItem(storageKeys.STORAGE_KEY_AI_WEB_SEARCH)!), webSearch);
+  assert.equal(localStorage.getItem(storageKeys.STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION), "false");
 });
 
 test("applySyncPayload restores host tree sidebar visibility setting", async () => {

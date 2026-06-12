@@ -82,6 +82,7 @@ import {
   STORAGE_KEY_AI_AGENT_PROVIDER_MAP,
   STORAGE_KEY_AI_WEB_SEARCH,
   STORAGE_KEY_AI_QUICK_MESSAGES,
+  STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION,
   STORAGE_KEY_PORT_FORWARDING,
 } from '../infrastructure/config/storageKeys';
 
@@ -251,6 +252,7 @@ export const SYNCABLE_SETTING_STORAGE_KEYS = [
   STORAGE_KEY_AI_AGENT_PROVIDER_MAP,
   STORAGE_KEY_AI_WEB_SEARCH,
   STORAGE_KEY_AI_QUICK_MESSAGES,
+  STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION,
 ] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -457,6 +459,10 @@ export function collectSyncableSettings(): SyncPayload['settings'] {
   if (webSearchConfig) ai.webSearchConfig = stripDeviceBoundApiKey(webSearchConfig);
   const quickMessages = readArraySetting(STORAGE_KEY_AI_QUICK_MESSAGES);
   if (quickMessages) ai.quickMessages = sanitizeQuickMessages(quickMessages);
+  const showTerminalSelectionAction = localStorageAdapter.readBoolean(STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION);
+  if (showTerminalSelectionAction != null) {
+    ai.showTerminalSelectionAction = showTerminalSelectionAction;
+  }
   if (Object.keys(ai).length > 0) settings.ai = ai;
 
   return Object.keys(settings).length > 0 ? settings : undefined;
@@ -594,6 +600,12 @@ function applySyncableSettings(settings: NonNullable<SyncPayload['settings']>): 
     if (ai.quickMessages != null) {
       localStorageAdapter.write(STORAGE_KEY_AI_QUICK_MESSAGES, sanitizeQuickMessages(ai.quickMessages));
     }
+    if (ai.showTerminalSelectionAction != null) {
+      localStorageAdapter.writeBoolean(
+        STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION,
+        ai.showTerminalSelectionAction,
+      );
+    }
     // After all AI writes, reconcile per-agent bindings against the final
     // provider list. Sync payloads can land with a new `providers` set but
     // no `agentProviderMap`, or with a stale `agentProviderMap` that
@@ -635,6 +647,9 @@ function notifyAIStateAfterSync(ai: NonNullable<SyncPayload['settings']>['ai']):
   }
   if (ai.webSearchConfig !== undefined) touched.push(STORAGE_KEY_AI_WEB_SEARCH);
   if (ai.quickMessages != null) touched.push(STORAGE_KEY_AI_QUICK_MESSAGES);
+  if (ai.showTerminalSelectionAction != null) {
+    touched.push(STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION);
+  }
   for (const key of touched) {
     emitAIStateChanged(key);
   }
