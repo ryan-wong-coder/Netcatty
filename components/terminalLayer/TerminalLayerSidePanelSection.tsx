@@ -513,6 +513,7 @@ function TerminalLayerSidePanelTabBody({ ctx }: { ctx: SidePanelContext }) {
                     isVisible={isVisibleSystemPanel}
                     terminalSettings={terminalSettings}
                     snippets={snippets}
+                    onRequestTerminalFocus={refocusActiveTerminalSession}
                   />
                 </div>
               );

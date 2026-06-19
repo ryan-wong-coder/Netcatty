@@ -3,6 +3,7 @@ import { ChevronDown, Eye, EyeOff, FileKey, FolderLock, FolderOpen, Key, KeyRoun
 import type { Host } from "../types";
 import { cn } from "../lib/utils";
 import { DistroAvatar } from "./DistroAvatar";
+import { HostIconPicker } from "./HostIconPicker";
 import { Button } from "./ui/button";
 import { Combobox } from "./ui/combobox";
 import { HostDetailsSection, HostDetailsSettingRow } from "./host-details";
@@ -69,6 +70,28 @@ export const HostDetailsConnectionSections: React.FC<HostDetailsConnectionSectio
               className="h-10 flex-1"
             />
           </div>
+        </HostDetailsSection>
+
+        <HostDetailsSection
+          icon={<DistroAvatar host={form as Host} fallback="H" size="sm" />}
+          title={t("hostDetails.icon.title")}
+          hint={t("hostDetails.icon.desc")}
+        >
+          <HostIconPicker
+            iconMode={form.iconMode}
+            iconId={form.iconId}
+            iconColor={form.iconColor}
+            onChange={(next) => {
+              update("iconMode", next.iconMode);
+              update("iconId", next.iconId);
+              update("iconColor", next.iconColor);
+            }}
+            onReset={() => {
+              update("iconMode", undefined);
+              update("iconId", undefined);
+              update("iconColor", undefined);
+            }}
+          />
         </HostDetailsSection>
 
         <HostDetailsSection
@@ -362,20 +385,20 @@ export const HostDetailsConnectionSections: React.FC<HostDetailsConnectionSectio
 
             {/* Selected credential display */}
             {!selectedIdentity && form.identityFileId && (
-              <div className="flex items-center gap-2 p-2 rounded-md bg-secondary/50 border border-border/60">
+              <div className="flex items-center gap-2 min-w-0 overflow-hidden p-2 rounded-md bg-secondary/50 border border-border/60">
                 {form.authMethod === "certificate" ? (
-                  <Shield size={14} className="text-primary" />
+                  <Shield size={14} className="text-primary shrink-0" />
                 ) : (
-                  <Key size={14} className="text-primary" />
+                  <Key size={14} className="text-primary shrink-0" />
                 )}
-                <span className="text-sm flex-1 truncate">
+                <span className="text-sm min-w-0 flex-1 truncate">
                   {availableKeys.find((k) => k.id === form.identityFileId)
                     ?.label || "Key"}
                 </span>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6"
+                  className="h-6 w-6 shrink-0"
                   onClick={() => {
                     update("identityFileId", undefined);
                     update("authMethod", "password");
