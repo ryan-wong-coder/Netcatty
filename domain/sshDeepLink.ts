@@ -124,6 +124,17 @@ const normalizeBareHostReference = (value: string): string | null => {
   return decoded;
 };
 
+const isDocumentRelativeLink = (value: string): boolean => {
+  const trimmed = value.trim();
+  return trimmed.startsWith("#")
+    || trimmed.startsWith("/")
+    || trimmed.startsWith("./")
+    || trimmed.startsWith("../")
+    || trimmed.includes("/")
+    || trimmed.includes("?")
+    || trimmed.includes("#");
+};
+
 const parseBareHostReference = (value: string): SshDeepLinkTarget | null => {
   const reference = normalizeBareHostReference(value);
   if (!reference) return null;
@@ -152,6 +163,9 @@ export const buildSshNoteLinkOpenHost = (
   }
 
   if (URL_SCHEME_PATTERN.test(normalizedHref)) {
+    return null;
+  }
+  if (isDocumentRelativeLink(normalizedHref)) {
     return null;
   }
 

@@ -168,6 +168,28 @@ test("buildSshNoteLinkOpenHost treats a bare host link as an existing ssh host r
   assert.equal(openHost?.protocol, "ssh");
 });
 
+test("buildSshNoteLinkOpenHost leaves document-relative note links alone", () => {
+  const hosts = [
+    host({ id: "docs", label: "docs", hostname: "docs.example.com" }),
+    host({ id: "section", label: "section", hostname: "section.example.com" }),
+  ];
+
+  for (const [href, label] of [
+    ["/docs", "docs"],
+    ["#section", "section"],
+    ["./docs", "docs"],
+    ["../docs", "docs"],
+    ["docs/page", "docs"],
+    ["docs?tab=install", "docs"],
+    ["docs#install", "docs"],
+  ] as const) {
+    assert.equal(
+      buildSshNoteLinkOpenHost(hosts, href, label, { id: "draft-id", now: 456 }),
+      null,
+    );
+  }
+});
+
 test("buildSshNoteLinkOpenHost does not treat sanitized editor links as hosts", () => {
   const openHost = buildSshNoteLinkOpenHost(
     [host({ id: "match", hostname: "10.2.0.32", username: "root" })],

@@ -1,15 +1,30 @@
 import {
+  BlockTypeSelect,
+  BoldItalicUnderlineToggles,
+  CodeToggle,
+  CreateLink,
+  InsertCodeBlock,
+  InsertTable,
+  InsertThematicBreak,
+  ListsToggle,
   codeBlockPlugin,
+  codeMirrorPlugin,
   headingsPlugin,
+  linkDialogPlugin,
   linkPlugin,
   listsPlugin,
   markdownShortcutPlugin,
   MDXEditor,
   type MDXEditorMethods,
   quotePlugin,
+  Separator,
   tablePlugin,
   thematicBreakPlugin,
+  toolbarPlugin,
+  UndoRedo,
 } from "@mdxeditor/editor";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { ExternalLink } from "lucide-react";
 import {
   $createRangeSelection,
@@ -29,9 +44,13 @@ export interface InlineMarkdownEditorProps {
   placeholder: string;
   onChange: (value: string) => void;
   hosts?: Host[];
+  editorMode?: NoteEditorMode;
   onOpenHost?: (host: Host) => void;
   onOpenExternalLink?: (url: string) => void | Promise<void>;
+  previewEmptyLabel?: string;
 }
+
+export type NoteEditorMode = "edit" | "preview";
 
 type HostPickerState = {
   open: boolean;
@@ -60,8 +79,82 @@ const HOST_PICKER_ROW_HEIGHT = 34;
 const HOST_PICKER_EMPTY_HEIGHT = 40;
 const HOST_PICKER_LIST_VERTICAL_PADDING = 8;
 const HOST_PICKER_LIST_MAX_HEIGHT = 256;
+const NOTE_CODE_BLOCK_LANGUAGES = {
+  bash: "Bash",
+  c: "C",
+  conf: "Config",
+  cpp: "C++",
+  csharp: "C#",
+  css: "CSS",
+  dockerfile: "Dockerfile",
+  env: "Env",
+  go: "Go",
+  html: "HTML",
+  ini: "INI",
+  java: "Java",
+  javascript: "JavaScript",
+  js: "JavaScript",
+  json: "JSON",
+  jsx: "JavaScript (React)",
+  markdown: "Markdown",
+  md: "Markdown",
+  nginx: "Nginx",
+  plaintext: "Plain text",
+  python: "Python",
+  rust: "Rust",
+  sh: "Shell",
+  shell: "Shell",
+  sql: "SQL",
+  toml: "TOML",
+  ts: "TypeScript",
+  tsx: "TypeScript (React)",
+  typescript: "TypeScript",
+  yaml: "YAML",
+  yml: "YAML",
+  zsh: "Zsh",
+} satisfies Record<string, string>;
+
+const noteCodeHighlightStyle = HighlightStyle.define([
+  { tag: tags.meta, class: "netcatty-code-token-muted" },
+  { tag: tags.link, class: "netcatty-code-token-link" },
+  { tag: tags.heading, class: "netcatty-code-token-heading" },
+  { tag: tags.emphasis, class: "netcatty-code-token-emphasis" },
+  { tag: tags.strong, class: "netcatty-code-token-strong" },
+  { tag: [tags.keyword, tags.regexp, tags.escape, tags.special(tags.string)], class: "netcatty-code-token-keyword" },
+  { tag: [tags.atom, tags.bool, tags.url, tags.labelName], class: "netcatty-code-token-name" },
+  { tag: [tags.literal, tags.inserted, tags.number], class: "netcatty-code-token-value" },
+  { tag: [tags.string, tags.deleted], class: "netcatty-code-token-string" },
+  { tag: [tags.variableName, tags.propertyName], class: "netcatty-code-token-variable" },
+  { tag: [tags.definition(tags.variableName), tags.local(tags.variableName)], class: "netcatty-code-token-variable" },
+  { tag: [tags.typeName, tags.namespace, tags.className, tags.macroName], class: "netcatty-code-token-type" },
+  { tag: [tags.definition(tags.propertyName), tags.special(tags.variableName)], class: "netcatty-code-token-property" },
+  { tag: tags.comment, class: "netcatty-code-token-muted" },
+  { tag: tags.invalid, class: "netcatty-code-token-invalid" },
+]);
+
+const NOTE_CODE_MIRROR_EXTENSIONS = [syntaxHighlighting(noteCodeHighlightStyle)];
 
 type RectLike = Pick<DOMRect, "bottom" | "height" | "left" | "top" | "width">;
+
+const NoteMarkdownToolbar = React.memo(function NoteMarkdownToolbar() {
+  return (
+    <>
+      <UndoRedo />
+      <Separator />
+      <BlockTypeSelect />
+      <Separator />
+      <BoldItalicUnderlineToggles options={["Bold", "Italic"]} />
+      <CodeToggle />
+      <Separator />
+      <ListsToggle options={["bullet", "number", "check"]} />
+      <Separator />
+      <CreateLink />
+      <InsertCodeBlock />
+      <InsertTable />
+      <InsertThematicBreak />
+    </>
+  );
+});
 
 const isSshCandidateHost = (host: Host): boolean =>
   Boolean(host.hostname?.trim()) && (host.protocol === undefined || host.protocol === "ssh");
@@ -96,6 +189,34 @@ const getEstimatedHostPickerHeight = (availableHostCount: number): number => {
     ? availableHostCount * HOST_PICKER_ROW_HEIGHT + HOST_PICKER_LIST_VERTICAL_PADDING
     : HOST_PICKER_EMPTY_HEIGHT;
   return HOST_PICKER_HEADER_HEIGHT + Math.min(HOST_PICKER_LIST_MAX_HEIGHT, listHeight);
+};
+
+const PASTED_MARKDOWN_PATTERNS = [
+  /^ {0,3}#{1,6}\s+\S/m,
+  /^ {0,3}(?:[-+*]|\d+[.)])\s+\S/m,
+  /^ {0,3}>\s+\S/m,
+  /^ {0,3}(?:```|~~~)/m,
+  /^ {0,3}[-*_](?:\s*[-*_]){2,}\s*$/m,
+  /^ {0,3}\|?.+\|.+\n {0,3}\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m,
+  /(^|[^!])\[[^\]\n]+\]\([^) \n]+(?:\s+"[^"\n]*")?\)/,
+  /(^|[\s([{])(?:\*\*|__)\S[\s\S]*?\S(?:\*\*|__)(?=$|[\s\])}.,;:!?])/,
+  /(^|[\s([{])`[^`\n]+`(?=$|[\s\])}.,;:!?])/,
+];
+
+export const shouldInsertClipboardTextAsMarkdown = (text: string): boolean => {
+  const markdown = text.replace(/\r\n?/g, "\n").trim();
+  if (!markdown) return false;
+  return PASTED_MARKDOWN_PATTERNS.some((pattern) => pattern.test(markdown));
+};
+
+export const isNotePasteInsideCodeBlock = (target: EventTarget | null): boolean => {
+  if (typeof Element === "undefined") return false;
+  const element = target instanceof Element
+    ? target
+    : typeof Node !== "undefined" && target instanceof Node
+      ? target.parentElement
+      : null;
+  return Boolean(element?.closest(".cm-editor, [class*=\"_codeMirrorWrapper_\"]"));
 };
 
 export const resolveHostPickerPopupPosition = ({
@@ -136,24 +257,32 @@ export const resolveHostPickerPopupPosition = ({
   return { left, top };
 };
 
+const SUPPORTED_NOTE_EXTERNAL_LINK_PROTOCOL_PATTERN = /^(?:https?:|mailto:)/i;
+
+export const isSupportedNoteExternalHref = (href: string): boolean => {
+  const trimmed = href.trim();
+  if (!SUPPORTED_NOTE_EXTERNAL_LINK_PROTOCOL_PATTERN.test(trimmed)) return false;
+  try {
+    const url = new URL(trimmed);
+    return ["http:", "https:", "mailto:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+};
+
 const openExternalLink = async (
   href: string,
   onOpenExternalLink?: (url: string) => void | Promise<void>,
-) => {
-  let url: URL;
-  try {
-    url = new URL(href, window.location.href);
-  } catch {
-    return;
-  }
-
-  if (!["http:", "https:", "mailto:"].includes(url.protocol)) return;
+): Promise<boolean> => {
+  if (!isSupportedNoteExternalHref(href)) return false;
+  const url = new URL(href.trim());
 
   if (onOpenExternalLink) {
     await onOpenExternalLink(url.toString());
-    return;
+    return true;
   }
   window.open(url.toString(), "_blank", "noopener,noreferrer");
+  return true;
 };
 
 export const shouldHandleHostPickerNavigationKey = (
@@ -224,8 +353,10 @@ export function InlineMarkdownEditor({
   placeholder,
   onChange,
   hosts = [],
+  editorMode: controlledEditorMode,
   onOpenHost,
   onOpenExternalLink,
+  previewEmptyLabel,
 }: InlineMarkdownEditorProps) {
   const editorRef = useRef<MDXEditorMethods>(null);
   const latestMarkdownRef = useRef(value);
@@ -240,6 +371,7 @@ export function InlineMarkdownEditor({
     top: 32,
   });
   const [linkAction, setLinkAction] = useState<LinkActionState | null>(null);
+  const editorMode = controlledEditorMode ?? "edit";
   const hostPickerRangeRef = useRef<Range | null>(null);
   const plugins = useMemo(() => [
     headingsPlugin(),
@@ -247,10 +379,21 @@ export function InlineMarkdownEditor({
     quotePlugin(),
     thematicBreakPlugin(),
     linkPlugin(),
+    linkDialogPlugin(),
     tablePlugin(),
     codeBlockPlugin({ defaultCodeBlockLanguage: "" }),
+    codeMirrorPlugin({
+      codeBlockLanguages: NOTE_CODE_BLOCK_LANGUAGES,
+      codeMirrorExtensions: NOTE_CODE_MIRROR_EXTENSIONS,
+    }),
+    ...(editorMode === "edit" ? [
+      toolbarPlugin({
+        toolbarContents: () => <NoteMarkdownToolbar />,
+        toolbarClassName: "netcatty-note-markdown-toolbar",
+      }),
+    ] : []),
     markdownShortcutPlugin(),
-  ], []);
+  ], [editorMode]);
   const hostCandidates = useMemo(
     () => hosts.filter(isSshCandidateHost),
     [hosts],
@@ -273,6 +416,16 @@ export function InlineMarkdownEditor({
       selectedIndex: Math.max(0, filteredHosts.length - 1),
     }));
   }, [filteredHosts.length, hostPicker.open, hostPicker.selectedIndex]);
+
+  useEffect(() => {
+    if (editorMode === "edit") return;
+    hostPickerRangeRef.current = null;
+    setHostPicker((current) => ({ ...current, open: false, query: "", selectedIndex: 0 }));
+  }, [editorMode]);
+
+  useEffect(() => {
+    setLinkAction(null);
+  }, [editorMode]);
 
   const getHostPickerContext = useCallback(() => {
     const container = containerRef.current;
@@ -336,8 +489,9 @@ export function InlineMarkdownEditor({
   }, [getHostPickerContext]);
 
   const scheduleHostPickerUpdate = useCallback(() => {
+    if (editorMode !== "edit") return;
     window.requestAnimationFrame(updateHostPickerFromSelection);
-  }, [updateHostPickerFromSelection]);
+  }, [editorMode, updateHostPickerFromSelection]);
 
   const annotateHostLinks = useCallback(() => {
     const container = containerRef.current;
@@ -400,6 +554,7 @@ export function InlineMarkdownEditor({
   }, [commitMarkdown, getHostPickerContext]);
 
   const handleKeyDownCapture = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (editorMode !== "edit") return;
     if (!shouldHandleHostPickerNavigationKey(hostPicker.open, event.key, filteredHosts.length)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -434,19 +589,21 @@ export function InlineMarkdownEditor({
     }
   }, [
     filteredHosts,
+    editorMode,
     hostPicker.open,
     hostPicker.selectedIndex,
     insertHostLink,
   ]);
 
   const handleKeyUpCapture = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (editorMode !== "edit") return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (hostCandidates.length === 0) return;
     if (["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) return;
     scheduleHostPickerUpdate();
-  }, [hostCandidates.length, scheduleHostPickerUpdate]);
+  }, [editorMode, hostCandidates.length, scheduleHostPickerUpdate]);
 
-  const openLink = useCallback((href: string, label?: string) => {
+  const openLink = useCallback((href: string, label?: string): boolean => {
     const host = buildSshNoteLinkOpenHost(hosts, href, label, {
       id: crypto.randomUUID(),
       now: Date.now(),
@@ -455,11 +612,39 @@ export function InlineMarkdownEditor({
       if (onOpenHost) {
         onOpenHost(host);
       }
+      return true;
+    }
+
+    if (!isSupportedNoteExternalHref(href)) return false;
+    void openExternalLink(href, onOpenExternalLink);
+    return true;
+  }, [hosts, onOpenExternalLink, onOpenHost]);
+
+  const handleClickCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (editorMode !== "preview") {
+      scheduleHostPickerUpdate();
       return;
     }
 
-    void openExternalLink(href, onOpenExternalLink);
-  }, [hosts, onOpenExternalLink, onOpenHost]);
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const link = target.closest<HTMLAnchorElement>("a[href]");
+    const renderedHref = link?.getAttribute("href") || link?.href;
+    if (!link || !renderedHref || !containerRef.current?.contains(link)) return;
+
+    const label = link.textContent?.trim() || renderedHref;
+    const href = resolveRenderedMarkdownLinkHref(
+      latestMarkdownRef.current,
+      label,
+      renderedHref,
+    );
+    const handled = openLink(href, label);
+    if (!handled) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.nativeEvent.stopImmediatePropagation?.();
+  }, [editorMode, openLink, scheduleHostPickerUpdate]);
 
   const activateLinkAction = useCallback((
     event: React.SyntheticEvent<HTMLElement>,
@@ -478,6 +663,11 @@ export function InlineMarkdownEditor({
   }, [openLink]);
 
   const handleMouseMoveCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (editorMode !== "edit") {
+      setLinkAction(null);
+      return;
+    }
+
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.closest("[data-note-link-action]")) return;
@@ -503,6 +693,14 @@ export function InlineMarkdownEditor({
       label,
       renderedHref,
     );
+    const canOpenLink = Boolean(buildSshNoteLinkOpenHost(hosts, href, label, {
+      id: "note-link-hover",
+      now: 0,
+    })) || isSupportedNoteExternalHref(href);
+    if (!canOpenLink) {
+      setLinkAction(null);
+      return;
+    }
     const linkRect = link.getBoundingClientRect();
     setLinkAction({
       href,
@@ -510,7 +708,7 @@ export function InlineMarkdownEditor({
       left: Math.max(0, Math.min(containerRect.width - LINK_ACTION_SIZE - 6, linkRect.right - containerRect.left + 2)),
       top: Math.max(0, linkRect.top - containerRect.top - 2),
     });
-  }, [linkAction]);
+  }, [editorMode, hosts, linkAction]);
 
   const handleBlurCapture = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
     const nextTarget = event.relatedTarget;
@@ -518,19 +716,37 @@ export function InlineMarkdownEditor({
     setHostPicker((current) => ({ ...current, open: false, query: "", selectedIndex: 0 }));
   }, []);
 
+  const handlePasteCapture = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    if (editorMode !== "edit") return;
+    if (isNotePasteInsideCodeBlock(event.target)) return;
+    const markdown = event.clipboardData.getData("text/plain");
+    if (!shouldInsertClipboardTextAsMarkdown(markdown)) return;
+
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.nativeEvent.stopImmediatePropagation?.();
+    setHostPicker((current) => ({ ...current, open: false, query: "", selectedIndex: 0 }));
+    setLinkAction(null);
+    editor.insertMarkdown(markdown);
+  }, [editorMode]);
+
   return (
     <div
       ref={containerRef}
-      className="relative h-full"
+      className="relative flex h-full flex-col"
       onBlurCapture={handleBlurCapture}
-      onClickCapture={scheduleHostPickerUpdate}
+      onClickCapture={handleClickCapture}
       onInputCapture={scheduleHostPickerUpdate}
       onKeyDownCapture={handleKeyDownCapture}
       onKeyUpCapture={handleKeyUpCapture}
       onMouseLeave={() => setLinkAction(null)}
       onMouseMoveCapture={handleMouseMoveCapture}
+      onPasteCapture={handlePasteCapture}
     >
-      {linkAction && (
+      {editorMode === "edit" && linkAction && (
         <button
           type="button"
           data-note-link-action="true"
@@ -575,15 +791,23 @@ export function InlineMarkdownEditor({
           </div>
         </div>
       )}
-      <MDXEditor
-        ref={editorRef}
-        markdown={value}
-        placeholder={placeholder}
-        plugins={plugins}
-        className="netcatty-mdx-editor"
-        contentEditableClassName="netcatty-mdx-content"
-        onChange={commitMarkdown}
-      />
+      {editorMode === "preview" && !value.trim() ? (
+        <div className="netcatty-note-preview-empty">
+          {previewEmptyLabel ?? placeholder}
+        </div>
+      ) : (
+        <MDXEditor
+          key={editorMode}
+          ref={editorRef}
+          markdown={value}
+          placeholder={placeholder}
+          plugins={plugins}
+          readOnly={editorMode === "preview"}
+          className={cn("netcatty-mdx-editor", editorMode === "preview" && "netcatty-mdx-editor--preview")}
+          contentEditableClassName="netcatty-mdx-content"
+          onChange={commitMarkdown}
+        />
+      )}
     </div>
   );
 }

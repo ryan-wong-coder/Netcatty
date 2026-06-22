@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -167,6 +168,15 @@ test("NotesManager exposes shared tree drag targets and context menus", () => {
   assert.match(markup, /draggable="true"/);
   assert.match(markup, /data-open="false"/);
   assert.match(markup, /role="separator"/);
+});
+
+test("NotesManager restores and persists the note editor mode without resetting on note switch", () => {
+  const source = readFileSync(new URL("./NotesManager.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /STORAGE_KEY_VAULT_NOTES_EDITOR_MODE/);
+  assert.match(source, /useStoredString<NoteEditorMode>\(\s*STORAGE_KEY_VAULT_NOTES_EDITOR_MODE,\s*"edit",\s*isNoteEditorMode/s);
+  assert.doesNotMatch(source, /localStorageAdapter/);
+  assert.doesNotMatch(source, /setNoteEditorMode\("edit"\)/);
 });
 
 test("NotesManager renders nested notebook folders", () => {

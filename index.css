@@ -826,6 +826,8 @@ html[data-theme-transition] *::after {
 }
 
 .netcatty-mdx-editor {
+  container-type: inline-size;
+  min-width: 0;
   --basePageBg: hsl(var(--background));
   --baseBase: hsl(var(--background));
   --baseBgSubtle: hsl(var(--secondary) / 0.45);
@@ -843,6 +845,90 @@ html[data-theme-transition] *::after {
   --accentSolidHover: hsl(var(--primary) / 0.9);
   background: transparent;
   color: hsl(var(--foreground));
+}
+
+.netcatty-note-preview-empty {
+  min-height: calc(100vh - 15rem);
+  color: hsl(var(--muted-foreground));
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.netcatty-note-markdown-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-content: flex-start !important;
+  height: auto !important;
+  overflow: visible !important;
+  align-items: center !important;
+  min-height: 2rem !important;
+  margin-bottom: 0.75rem;
+  border: 1px solid hsl(var(--border) / 0.6) !important;
+  border-radius: 6px !important;
+  background: hsl(var(--background) / 0.96) !important;
+  color: hsl(var(--foreground)) !important;
+  box-shadow: none !important;
+}
+
+.netcatty-note-markdown-toolbar > * {
+  flex-shrink: 0;
+}
+
+.netcatty-note-markdown-toolbar button,
+.netcatty-note-markdown-toolbar [role="button"],
+.netcatty-note-markdown-toolbar [role="combobox"] {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.netcatty-note-markdown-toolbar button:hover,
+.netcatty-note-markdown-toolbar [role="button"]:hover,
+.netcatty-note-markdown-toolbar [role="combobox"]:hover,
+.netcatty-note-markdown-toolbar button[data-state="on"],
+.netcatty-note-markdown-toolbar button[data-state="open"] {
+  background: hsl(var(--secondary)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.netcatty-note-markdown-toolbar [role="separator"] {
+  flex-shrink: 0;
+  background: hsl(var(--border) / 0.7) !important;
+}
+
+@container (max-width: 34rem) {
+  .netcatty-note-markdown-toolbar {
+    gap: 0.125rem !important;
+    row-gap: 0.125rem !important;
+    flex-wrap: wrap !important;
+    align-content: flex-start !important;
+    min-height: 1.9rem !important;
+    padding: 0.125rem !important;
+  }
+
+  .netcatty-note-markdown-toolbar button,
+  .netcatty-note-markdown-toolbar [role="button"] {
+    width: 1.75rem !important;
+    min-width: 1.75rem !important;
+    height: 1.75rem !important;
+    padding: 0 !important;
+  }
+
+  .netcatty-note-markdown-toolbar [role="combobox"] {
+    min-width: 7.25rem !important;
+    max-width: 8.5rem !important;
+    height: 1.75rem !important;
+    padding: 0 0.45rem !important;
+  }
+
+  .netcatty-note-markdown-toolbar [role="separator"] {
+    margin: 0 0.125rem !important;
+  }
 }
 
 .netcatty-mdx-editor,
@@ -943,10 +1029,177 @@ html[data-theme-transition] *::after {
 }
 
 .netcatty-mdx-content pre {
-  border: 1px solid hsl(var(--border) / 0.45);
+  border: 0;
   border-radius: 6px;
   background: hsl(var(--secondary) / 0.35);
   padding: 0.75rem;
+}
+
+.netcatty-mdx-editor [class*="_codeMirrorWrapper_"] {
+  margin: 0.85rem 0 1rem;
+  border: 0 !important;
+  border-radius: 6px;
+  background: transparent !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.netcatty-mdx-editor [class*="_codeMirrorToolbar_"] {
+  position: static !important;
+  right: auto !important;
+  top: auto !important;
+  z-index: auto !important;
+  gap: 0.125rem;
+  padding: 0.125rem;
+  border-bottom-left-radius: 0 !important;
+  background: transparent !important;
+}
+
+.netcatty-mdx-editor--preview [class*="_codeMirrorToolbar_"] {
+  display: none !important;
+}
+
+.netcatty-mdx-editor [class*="_codeMirrorToolbar_"] [class*="_toolbarCodeBlockLanguageSelectTrigger_"] {
+  height: 1.45rem !important;
+  width: auto !important;
+  min-width: 3.75rem;
+  padding: 0 0.4rem !important;
+  font-size: 11px !important;
+  line-height: 1 !important;
+}
+
+.netcatty-mdx-editor [class*="_codeMirrorToolbar_"] button {
+  min-height: 1.45rem !important;
+  height: 1.45rem !important;
+  min-width: 1.45rem !important;
+  width: auto !important;
+  padding: 0 0.35rem !important;
+  background: hsl(var(--background) / 0.88) !important;
+}
+
+.netcatty-mdx-editor [class*="_codeMirrorToolbar_"] [class*="_toolbarCodeBlockLanguageSelectTrigger_"] span {
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+
+.netcatty-mdx-editor [class*="_toolbarCodeBlockLanguageSelectContent_"] {
+  width: 9.5rem !important;
+  font-size: 11px !important;
+}
+
+.netcatty-mdx-editor [class*="_toolbarCodeBlockLanguageSelectContent_"] [class*="_selectItem_"] {
+  font-size: 11px !important;
+}
+
+.netcatty-mdx-editor .cm-editor {
+  --note-code-token-muted: hsl(var(--muted-foreground) / 0.9);
+  --note-code-token-keyword: color-mix(in oklab, hsl(var(--primary)) 82%, hsl(var(--foreground)));
+  --note-code-token-name: color-mix(in oklab, hsl(var(--primary)) 50%, hsl(var(--foreground)));
+  --note-code-token-value: color-mix(in oklab, hsl(var(--primary)) 38%, hsl(var(--foreground)));
+  --note-code-token-string: color-mix(in oklab, hsl(var(--primary)) 24%, hsl(var(--foreground)));
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: 6px;
+  background: hsl(var(--secondary) / 0.35) !important;
+  color: hsl(var(--foreground) / 0.9) !important;
+  font-family: var(--font-mono);
+  font-size: 13px !important;
+}
+
+.netcatty-mdx-editor .cm-scroller {
+  background: transparent !important;
+  color: hsl(var(--foreground) / 0.9) !important;
+  font-family: var(--font-mono);
+}
+
+.netcatty-mdx-editor .cm-content {
+  background: transparent !important;
+  color: hsl(var(--foreground) / 0.9) !important;
+  font-family: var(--font-mono);
+  padding: 0.25rem 0 !important;
+}
+
+.netcatty-mdx-editor .cm-line {
+  color: inherit !important;
+  line-height: 1.45 !important;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-muted {
+  color: var(--note-code-token-muted) !important;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-keyword {
+  color: var(--note-code-token-keyword) !important;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-name,
+.netcatty-mdx-editor .cm-content .netcatty-code-token-variable,
+.netcatty-mdx-editor .cm-content .netcatty-code-token-type,
+.netcatty-mdx-editor .cm-content .netcatty-code-token-property {
+  color: var(--note-code-token-name) !important;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-value {
+  color: var(--note-code-token-value) !important;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-string {
+  color: var(--note-code-token-string) !important;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-link {
+  color: hsl(var(--primary)) !important;
+  text-decoration: underline;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-heading,
+.netcatty-mdx-editor .cm-content .netcatty-code-token-strong {
+  font-weight: 600;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-emphasis {
+  font-style: italic;
+}
+
+.netcatty-mdx-editor .cm-content .netcatty-code-token-invalid {
+  color: hsl(var(--destructive)) !important;
+}
+
+.netcatty-mdx-editor .cm-gutters {
+  border-right: 1px solid hsl(var(--border) / 0.35) !important;
+  background: hsl(var(--secondary) / 0.24) !important;
+  color: hsl(var(--muted-foreground) / 0.75) !important;
+  font-family: var(--font-mono);
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  padding: 0 !important;
+}
+
+.netcatty-mdx-editor .cm-gutterElement {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+.netcatty-mdx-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 0.45rem 0 0.55rem !important;
+}
+
+.netcatty-mdx-editor .cm-activeLine,
+.netcatty-mdx-editor .cm-activeLineGutter {
+  background: transparent !important;
+}
+
+.netcatty-mdx-editor .cm-editor:focus-within .cm-activeLine,
+.netcatty-mdx-editor .cm-editor:focus-within .cm-activeLineGutter {
+  background: hsl(var(--primary) / 0.08) !important;
+}
+
+.netcatty-mdx-editor .cm-selectionBackground {
+  background: hsl(var(--primary) / 0.22) !important;
+}
+
+.netcatty-mdx-editor .cm-cursor {
+  border-left-color: hsl(var(--foreground)) !important;
 }
 
 .netcatty-mdx-content blockquote {

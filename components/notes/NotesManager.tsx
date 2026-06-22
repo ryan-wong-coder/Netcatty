@@ -5,8 +5,10 @@ import {
   FileText,
   Folder,
   FolderPlus,
+  Glasses,
   MoreHorizontal,
   Minimize2,
+  PencilLine,
   Plus,
   Search,
   X,
@@ -15,6 +17,7 @@ import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useStat
 import { useI18n } from "../../application/i18n/I18nProvider";
 import { useApplicationBackend } from "../../application/state/useApplicationBackend";
 import { useStoredNumber } from "../../application/state/useStoredNumber";
+import { useStoredString } from "../../application/state/useStoredString";
 import {
   ancestorNoteGroupPaths,
   cleanNoteGroupPath,
@@ -29,7 +32,10 @@ import {
   resolveMovedNoteGroupPath,
 } from "../../domain/notes";
 import { getNextVaultOrder, reorderVaultItems, reorderVaultStrings, sortByVaultOrder } from "../../domain/vaultOrder";
-import { STORAGE_KEY_VAULT_NOTES_TREE_WIDTH } from "../../infrastructure/config/storageKeys";
+import {
+  STORAGE_KEY_VAULT_NOTES_EDITOR_MODE,
+  STORAGE_KEY_VAULT_NOTES_TREE_WIDTH,
+} from "../../infrastructure/config/storageKeys";
 import { cn } from "../../lib/utils";
 import type { Host, VaultNote } from "../../types";
 import { Button } from "../ui/button";
@@ -58,6 +64,7 @@ import {
   markVaultDropIndicator,
   markVaultInsideDropIndicator,
 } from "../vault/vaultReorderDrag";
+import type { NoteEditorMode } from "./InlineMarkdownEditor";
 
 const InlineMarkdownEditor = lazy(() =>
   import("./InlineMarkdownEditor").then((module) => ({ default: module.InlineMarkdownEditor })),
@@ -79,6 +86,12 @@ const NOTES_TREE_MIN_WIDTH = 220;
 const NOTES_TREE_MAX_WIDTH = 520;
 const NOTE_DRAG_TYPE = "application/x-netcatty-note-id";
 const NOTE_GROUP_DRAG_TYPE = "application/x-netcatty-note-group-path";
+
+export const normalizeNoteEditorMode = (value: string | null): NoteEditorMode | null =>
+  value === "edit" || value === "preview" ? value : null;
+
+const isNoteEditorMode = (value: string | null): value is NoteEditorMode =>
+  normalizeNoteEditorMode(value) !== null;
 
 const InlineMarkdownEditorFallback = () => (
   <div
@@ -318,6 +331,11 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
   const [query, setQuery] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(() => initialOpenNoteId ?? (isSidebarMode ? null : notes[0]?.id ?? null));
+  const [noteEditorMode, setNoteEditorMode] = useStoredString<NoteEditorMode>(
+    STORAGE_KEY_VAULT_NOTES_EDITOR_MODE,
+    "edit",
+    isNoteEditorMode,
+  );
   const [overlayNoteId, setOverlayNoteId] = useState<string | null>(() => initialOpenNoteId);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(notes.flatMap((note) => note.group ? ancestorNoteGroupPaths(note.group) : [])),
@@ -438,6 +456,32 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
   const handleOpenHostFromNote = useCallback((host: Host, noteId: string) => {
     onOpenHost?.(host, { noteId });
   }, [onOpenHost]);
+
+  const renderNoteModeToggle = () => {
+    const label = noteEditorMode === "edit" ? t("notes.mode.preview") : t("notes.mode.edit");
+    const Icon = noteEditorMode === "edit" ? Glasses : PencilLine;
+
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            data-note-mode-switch
+            aria-label={label}
+            className="app-no-drag h-8 w-8 shrink-0 rounded-md p-0 text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
+            onClick={() => setNoteEditorMode((currentMode) => (
+              currentMode === "edit" ? "preview" : "edit"
+            ))}
+          >
+            <Icon size={16} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+    );
+  };
 
   const addNoteToGroup = (group: string | null) => {
     const note = createNote(group, getNextVaultOrder(sortedNotes));
@@ -1185,7 +1229,7 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
         <main className="flex min-w-0 flex-1 flex-col bg-background">
           {selectedNote ? (
             <>
-              <div className="flex min-h-[54px] shrink-0 items-center gap-3 px-8 pt-6 pb-1">
+              <div className="flex min-h-[54px] shrink-0 items-center gap-3 px-8 pt-6 pb-1" data-note-title-row>
                 <div className="min-w-0 flex-1">
                   <input
                     className="h-7 w-full bg-transparent text-lg font-semibold outline-none placeholder:text-muted-foreground"
@@ -1198,6 +1242,7 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
                     })}
                   />
                 </div>
+                {renderNoteModeToggle()}
               </div>
               <ScrollArea className="min-h-0 flex-1">
                 <div className="min-h-full w-full px-8 pt-2 pb-6">
@@ -1207,6 +1252,8 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
                         key={selectedNote.id}
                         value={selectedNote.content}
                         placeholder={t("notes.editor.placeholder")}
+                        editorMode={noteEditorMode}
+                        previewEmptyLabel={t("notes.preview.empty")}
                         onChange={(content) => saveNote({
                           ...selectedNote,
                           content,
@@ -1261,17 +1308,20 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
             </div>
           </div>
           <div className="flex min-h-0 flex-1 flex-col bg-background">
-            <div className="flex min-h-[54px] shrink-0 items-center px-4 pt-5 pb-1">
-              <input
-                className="h-7 w-full bg-transparent text-lg font-semibold outline-none placeholder:text-muted-foreground"
-                value={overlayNote.title}
-                placeholder={t("notes.title.placeholder")}
-                onChange={(event) => saveNote({
-                  ...overlayNote,
-                  title: event.target.value,
-                  updatedAt: Date.now(),
-                })}
-              />
+            <div className="flex min-h-[54px] shrink-0 items-center gap-3 px-4 pt-5 pb-1" data-note-title-row>
+              <div className="min-w-0 flex-1">
+                <input
+                  className="h-7 w-full bg-transparent text-lg font-semibold outline-none placeholder:text-muted-foreground"
+                  value={overlayNote.title}
+                  placeholder={t("notes.title.placeholder")}
+                  onChange={(event) => saveNote({
+                    ...overlayNote,
+                    title: event.target.value,
+                    updatedAt: Date.now(),
+                  })}
+                />
+              </div>
+              {renderNoteModeToggle()}
             </div>
             <ScrollArea className="min-h-0 flex-1">
               <div className="min-h-full w-full px-4 pt-2 pb-6">
@@ -1281,11 +1331,13 @@ export const NotesManager: React.FC<NotesManagerProps> = ({
                       key={overlayNote.id}
                       value={overlayNote.content}
                       placeholder={t("notes.editor.placeholder")}
+                      editorMode={noteEditorMode}
                       onChange={(content) => saveNote({
                         ...overlayNote,
                         content,
                         updatedAt: Date.now(),
                       })}
+                      previewEmptyLabel={t("notes.preview.empty")}
                       hosts={hosts}
                       onOpenHost={(host) => handleOpenHostFromNote(host, overlayNote.id)}
                       onOpenExternalLink={openExternal}
