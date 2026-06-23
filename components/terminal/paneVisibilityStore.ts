@@ -32,6 +32,17 @@ export function getPaneVisible(sessionId: string): boolean {
   return visibleBySession.get(sessionId) ?? false;
 }
 
+/** True when a workspace pane (or similar) publishes visibility for this session. */
+export function hasPaneVisibilityEntry(sessionId: string): boolean {
+  return visibleBySession.has(sessionId);
+}
+
+/** Prefer the store when present; otherwise fall back to the Terminal `isVisible` prop. */
+export function resolvePaneVisible(sessionId: string, fallbackVisible: boolean): boolean {
+  if (!visibleBySession.has(sessionId)) return fallbackVisible;
+  return visibleBySession.get(sessionId)!;
+}
+
 export function subscribePaneVisible(sessionId: string, listener: Listener): () => void {
   let set = listenersBySession.get(sessionId);
   if (!set) {

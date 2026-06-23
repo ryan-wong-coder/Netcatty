@@ -1638,6 +1638,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
 
   useTerminalHibernateEffect({
     sessionId,
+    isVisible,
     isVisibleRef,
     getSessionConnectedRef,
     status,

@@ -5,13 +5,14 @@ import {
 } from "../../domain/terminalHibernate";
 import { logger } from "../../lib/logger";
 import {
-  getPaneVisible,
+  resolvePaneVisible,
   subscribePaneVisible,
 } from "./paneVisibilityStore";
 import type { TerminalSession } from "../../types";
 
 type UseTerminalHibernateEffectOptions = {
   sessionId: string;
+  isVisible: boolean;
   isVisibleRef: React.MutableRefObject<boolean>;
   getSessionConnectedRef: React.MutableRefObject<() => boolean>;
   status: TerminalSession["status"];
@@ -33,6 +34,7 @@ type UseTerminalHibernateEffectOptions = {
 
 export function useTerminalHibernateEffect({
   sessionId,
+  isVisible,
   isVisibleRef,
   getSessionConnectedRef,
   status,
@@ -50,13 +52,15 @@ export function useTerminalHibernateEffect({
 }: UseTerminalHibernateEffectOptions): void {
   const hiddenSinceRef = useRef<number | null>(null);
   const hibernateTimerRef = useRef<number | null>(null);
-  const paneVisibleRef = useRef(getPaneVisible(sessionId));
+  const paneVisibleRef = useRef(resolvePaneVisible(sessionId, isVisible));
   const onHibernateRef = useRef(onHibernate);
   const onWakeRef = useRef(onWake);
   onHibernateRef.current = onHibernate;
   onWakeRef.current = onWake;
 
   useEffect(() => {
+    const resolveVisible = () => resolvePaneVisible(sessionId, isVisibleRef.current);
+
     const clearHibernateTimer = () => {
       if (hibernateTimerRef.current !== null) {
         window.clearTimeout(hibernateTimerRef.current);
@@ -84,7 +88,7 @@ export function useTerminalHibernateEffect({
       hibernateTimerRef.current = window.setTimeout(() => {
         hibernateTimerRef.current = null;
         if (hiddenSinceRef.current !== hiddenAt) return;
-        if (getPaneVisible(sessionId)) return;
+        if (resolveVisible()) return;
         onHibernateRef.current();
       }, hibernateDelayMs);
     };
@@ -107,7 +111,7 @@ export function useTerminalHibernateEffect({
       void Promise.resolve(onWakeRef.current(getPayload, { sessionConnected })).then((accepted) => {
         if (accepted !== false) {
           clearHibernateState();
-          if (!getPaneVisible(sessionId)) {
+          if (!resolveVisible()) {
             scheduleHibernate();
           }
         }
@@ -120,7 +124,7 @@ export function useTerminalHibernateEffect({
         tryWake();
       }
       const unsubscribeDisabled = subscribePaneVisible(sessionId, () => {
-        if (hibernatedRef.current && getPaneVisible(sessionId)) {
+        if (hibernatedRef.current && resolveVisible()) {
           tryWake();
         }
       });
@@ -143,10 +147,10 @@ export function useTerminalHibernateEffect({
       scheduleHibernate();
     };
 
-    applyVisibility(getPaneVisible(sessionId));
+    applyVisibility(resolveVisible());
 
     const unsubscribe = subscribePaneVisible(sessionId, () => {
-      const visible = getPaneVisible(sessionId);
+      const visible = resolveVisible();
       if (visible === paneVisibleRef.current) return;
       applyVisibility(visible);
     });
@@ -166,6 +170,7 @@ export function useTerminalHibernateEffect({
     hibernateAlternateScreenRef,
     hibernatedRef,
     isSearchOpen,
+    isVisible,
     isVisibleRef,
     sessionId,
     status,
