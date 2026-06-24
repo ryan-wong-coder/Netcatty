@@ -649,6 +649,14 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
         cleanupTelnetStartupWait();
         disposeTelnetExit?.();
       };
+
+      // Many telnet endpoints (especially no-auth devices) stay silent until
+      // the client sends data. Mark connected once the socket session is
+      // attached so the connection overlay dismisses and keyboard input works
+      // (issue #1632).
+      ctx.updateStatus("connected");
+      ctx.setProgressValue(100);
+
       if (waitsForAutoLogin) {
         return;
       }

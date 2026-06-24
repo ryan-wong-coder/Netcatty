@@ -237,6 +237,76 @@ test("startTelnet preserves an explicitly cleared telnet password", async () => 
   assert.equal(capturedOptions.password, "");
 });
 
+test("startTelnet marks the session connected before the server sends output", async () => {
+  let status = "connecting";
+  let progressValue = 0;
+
+  const terminalBackend = {
+    backendAvailable: () => true,
+    telnetAvailable: () => true,
+    moshAvailable: () => true,
+    localAvailable: () => true,
+    serialAvailable: () => true,
+    execAvailable: () => true,
+    startSSHSession: async () => "ssh-session",
+    startTelnetSession: async () => "telnet-session",
+    startMoshSession: async () => "mosh-session",
+    startLocalSession: async () => "local-session",
+    startSerialSession: async () => "serial-session",
+    execCommand: async () => ({}),
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: noop,
+    resizeSession: noop,
+  };
+
+  const ctx = {
+    host: {
+      id: "host-1",
+      label: "Example",
+      hostname: "example.test",
+      telnetPort: 23,
+    },
+    keys: [],
+    resolvedChainHosts: [],
+    sessionId: "session-1",
+    terminalSettings: {},
+    terminalBackend,
+    sessionRef: { current: null },
+    hasConnectedRef: { current: false },
+    hasRunStartupCommandRef: { current: false },
+    disposeDataRef: { current: null },
+    disposeExitRef: { current: null },
+    fitAddonRef: { current: null },
+    serializeAddonRef: { current: null },
+    pendingAuthRef: { current: null },
+    updateStatus: (next: string) => { status = next; },
+    setStatus: noop,
+    setError: noop,
+    setNeedsAuth: noop,
+    setAuthRetryMessage: noop,
+    setAuthPassword: noop,
+    setProgressLogs: noop,
+    setProgressValue: (value: number) => { progressValue = value; },
+    setChainProgress: noop,
+  };
+
+  const term = {
+    cols: 120,
+    rows: 32,
+    write: noop,
+    writeln: noop,
+    scrollToBottom: noop,
+  };
+
+  await createTerminalSessionStarters(ctx as never).startTelnet(term as never);
+
+  assert.equal(status, "connected");
+  assert.equal(progressValue, 100);
+  assert.equal(ctx.sessionRef.current, "telnet-session");
+});
+
 test("startTelnet rejects unreadable saved telnet passwords before connecting", async () => {
   let started = false;
   let error = "";
