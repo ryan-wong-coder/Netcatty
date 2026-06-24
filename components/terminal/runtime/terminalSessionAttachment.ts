@@ -18,6 +18,15 @@ import {
   writeTerminalDataWithLineTimestamps,
 } from "./terminalLineTimestamps";
 import { createSudoPasswordAutofill } from "./terminalSudoAutofill";
+import {
+  filterTerminalSessionData,
+  resetTerminalSyncBlockFilter,
+} from "./terminalSyncBlockFilter";
+import {
+  enqueueCoalescedTerminalWrite,
+  flushTerminalWriteCoalescer,
+  resetTerminalWriteCoalescer,
+} from "./terminalWriteCoalescer";
 
 export const buildTermEnv = (host: Host, terminalSettings?: TerminalSettings) => {
   const env: Record<string, string> = {
@@ -141,17 +150,28 @@ export const writeSessionData = (
   term: XTerm,
   data: string,
 ) => {
+  enqueueCoalescedTerminalWrite(term, data, (batch) => {
+    writeSessionDataImmediate(ctx, term, batch);
+  });
+};
+
+const writeSessionDataImmediate = (
+  ctx: TerminalSessionStartersContext,
+  term: XTerm,
+  data: string,
+) => {
   const flow = getFlowController(ctx, term);
   flow.received(data.length);
   enqueueTerminalWrite(term, (done) => {
+    const displayData = filterTerminalSessionData(term, data);
     const settings = ctx.terminalSettingsRef?.current ?? ctx.terminalSettings;
     const forcePromptNewLine = settings?.forcePromptNewLine ?? false;
     if (!forcePromptNewLine && ctx.promptLineBreakStateRef?.current) {
       ctx.promptLineBreakStateRef.current.pendingCommand = false;
       ctx.promptLineBreakStateRef.current.suppressNextPromptCache = false;
     }
-    const pasteDisplayData = prepareTerminalDataForUserPasteDisplay(term, data);
-    const displayData = prepareTerminalDataForPromptLineBreak(
+    const pasteDisplayData = prepareTerminalDataForUserPasteDisplay(term, displayData);
+    const preparedDisplayData = prepareTerminalDataForPromptLineBreak(
       term,
       pasteDisplayData,
       ctx.promptLineBreakStateRef?.current,
@@ -177,10 +197,10 @@ export const writeSessionData = (
       }
       done();
       // Acknowledge the chunk so back-pressure can ease once xterm catches up.
-      flow.written(data.length);
+      flow.written(displayData.length);
     };
 
-    writeTerminalDataWithLineTimestamps(term, displayData, afterWrite);
+    writeTerminalDataWithLineTimestamps(term, preparedDisplayData, afterWrite);
   });
 };
 
@@ -246,6 +266,9 @@ export const attachSessionToTerminal = (
   ctx.sessionRef.current = id;
   // Clear any stale back-pressure accounting from a prior session on this term.
   getFlowController(ctx, term).reset();
+  flushTerminalWriteCoalescer(term);
+  resetTerminalWriteCoalescer(term);
+  resetTerminalSyncBlockFilter(term);
   resetTerminalLineTimestamps(term);
   ctx.onSessionAttached?.(id);
   const sudoAutofill = createSudoPasswordAutofill({

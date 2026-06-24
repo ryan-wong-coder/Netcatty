@@ -1031,6 +1031,10 @@ const TerminalComponent: React.FC<TerminalProps> = ({
         const term = termRef.current;
         if (!term) return;
 
+        const buffer = term.buffer.active;
+        const wasPinnedToBottom = buffer.viewportY >= buffer.baseY;
+        const savedViewportY = buffer.viewportY;
+
         const dimensions = fitAddon.proposeDimensions();
         if (!dimensions || Number.isNaN(dimensions.cols) || Number.isNaN(dimensions.rows)) return;
 
@@ -1043,6 +1047,18 @@ const TerminalComponent: React.FC<TerminalProps> = ({
           term.resize(dimensions.cols, dimensions.rows);
           forceSyncRenderAfterResize(term);
         }
+
+        // Preserve scroll position across resize (superset/Tabby pattern).
+        if (wasPinnedToBottom) {
+          term.scrollToBottom();
+        } else {
+          const targetY = Math.min(savedViewportY, term.buffer.active.baseY);
+          if (term.buffer.active.viewportY !== targetY) {
+            term.scrollToLine(targetY);
+          }
+        }
+        term.refresh(0, Math.max(0, term.rows - 1));
+
         if (typeof requestAnimationFrame === "function") {
           requestAnimationFrame(() => {
             autocompleteRepositionRef.current?.();

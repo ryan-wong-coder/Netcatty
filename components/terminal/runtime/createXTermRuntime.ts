@@ -35,9 +35,10 @@ import { isMacPlatform } from "../../../lib/utils";
 import { netcattyBridge } from "../../../infrastructure/services/netcattyBridge";
 import {
   clearTerminalViewport,
-  isEraseViewportSequence,
   isEraseScrollbackSequence,
+  isEraseViewportSequence,
   preserveTerminalViewportInScrollback,
+  shouldPreserveViewportBeforeFullErase,
 } from "../clearTerminalViewport";
 import {
   createKittyKeyboardModeState,
@@ -1058,9 +1059,30 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
   // OSC 7 format: \x1b]7;file://hostname/path\x07 or \x1b]7;file://hostname/path\x1b\\
   let currentCwd: string | undefined = undefined;
 
+  // Track DEC 2026 synchronized-output blocks so CSI 2 J can erase in place for
+  // Codex/Claude Code TUIs instead of pushing visible rows into scrollback.
+  let inDec2026SyncBlock = false;
+
+  const dec2026SyncStartDisposable = term.parser.registerCsiHandler(
+    { prefix: "?", final: "h", params: [2026] },
+    () => {
+      inDec2026SyncBlock = true;
+      return false;
+    },
+  );
+  const dec2026SyncEndDisposable = term.parser.registerCsiHandler(
+    { prefix: "?", final: "l", params: [2026] },
+    () => {
+      inDec2026SyncBlock = false;
+      return false;
+    },
+  );
+
   const eraseScrollbackDisposable = term.parser.registerCsiHandler({ final: "J" }, (params) => {
     if (isEraseViewportSequence(params)) {
-      preserveTerminalViewportInScrollback(term);
+      if (shouldPreserveViewportBeforeFullErase(term, inDec2026SyncBlock)) {
+        preserveTerminalViewportInScrollback(term);
+      }
       return false;
     }
     if (!isEraseScrollbackSequence(params)) {
@@ -1251,6 +1273,8 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
       stopDprWatch();
       keywordHighlighter.dispose();
       eraseScrollbackDisposable.dispose();
+      dec2026SyncStartDisposable.dispose();
+      dec2026SyncEndDisposable.dispose();
       for (const disposable of cursorPositionReportRequestDisposables) {
         disposable.dispose();
       }
