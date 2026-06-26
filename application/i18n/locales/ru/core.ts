@@ -284,7 +284,6 @@ export const ruCoreMessages: Messages = {
   'settings.terminal.theme.selectButton': 'Выбрать тему',
   'settings.terminal.theme.followApp': 'Следовать теме приложения',
   'settings.terminal.theme.followApp.desc': 'Автоматически подбирать фон терминала под текущую тему приложения для более цельного вида.',
-  'settings.terminal.theme.followingTheme': 'Текущая автоматическая тема терминала',
   'settings.terminal.theme.darkTheme': 'Тема терминала для тёмного режима',
   'settings.terminal.theme.lightTheme': 'Тема терминала для светлого режима',
   'settings.terminal.theme.auto': 'Авто (как тема приложения)',

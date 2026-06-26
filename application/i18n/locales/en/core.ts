@@ -295,7 +295,6 @@ export const enCoreMessages: Messages = {
   'settings.terminal.theme.selectButton': 'Select Theme',
   'settings.terminal.theme.followApp': 'Follow Application Theme',
   'settings.terminal.theme.followApp.desc': 'Automatically match the terminal background to the current app theme for a seamless look.',
-  'settings.terminal.theme.followingTheme': 'Current automatic terminal theme',
   'settings.terminal.theme.darkTheme': 'Dark mode terminal theme',
   'settings.terminal.theme.lightTheme': 'Light mode terminal theme',
   'settings.terminal.theme.auto': 'Auto (match app theme)',

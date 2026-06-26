@@ -178,7 +178,6 @@ export const zhCNTerminalMessages: Messages = {
   'settings.terminal.theme.selectButton': '选择主题',
   'settings.terminal.theme.followApp': '跟随应用主题',
   'settings.terminal.theme.followApp.desc': '终端背景色自动匹配当前应用主题，保持视觉一致性。',
-  'settings.terminal.theme.followingTheme': '当前自动终端主题',
   'settings.terminal.theme.darkTheme': '深色模式终端主题',
   'settings.terminal.theme.lightTheme': '浅色模式终端主题',
   'settings.terminal.theme.auto': '自动（跟随界面主题）',
