@@ -1,4 +1,8 @@
-import { classifyDistroId, detectVendorFromSshVersion } from "../../../domain/host";
+import {
+  classifyDistroId,
+  detectVendorFromSshVersion,
+  normalizeDistroId,
+} from "../../../domain/host";
 import { logger } from "../../../lib/logger";
 import type { TerminalSessionStartersContext } from "./createTerminalSessionStarters.types";
 
@@ -87,9 +91,10 @@ export const runDistroDetection = async (
       if (!res?.success) return;
       const data = `${res.stdout || ""}\n${res.stderr || ""}`;
       const idMatch = data.match(/^ID="?([\w-]+)"?$/im);
-      const distro = idMatch
+      const rawDistro = idMatch
         ? idMatch[1]
         : (data.split(/\s+/)[0] || "").toLowerCase();
+      const distro = normalizeDistroId(rawDistro) || rawDistro;
       if (distro) ctx.onOsDetected?.(ctx.host.id, distro);
     }
   } catch (err) {

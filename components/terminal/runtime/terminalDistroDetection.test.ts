@@ -39,3 +39,40 @@ test("runDistroDetection uses SSH banner but skips POSIX probes for manually mar
   assert.equal(distroProbeCalls, 0);
   assert.deepEqual(detected, ["hpe"]);
 });
+
+test("runDistroDetection normalizes Darwin probe output to macos", async () => {
+  let remoteInfoCalls = 0;
+  let distroProbeCalls = 0;
+  const detected: string[] = [];
+  const token = registerConnectionToken("macos-session");
+
+  await runDistroDetection({
+    host: {
+      id: "macos-host",
+      label: "Mac mini",
+      hostname: "mac-mini.local",
+      username: "dev",
+    },
+    terminalBackend: {
+      getSessionRemoteInfo: async () => {
+        remoteInfoCalls += 1;
+        return { success: true, remoteSshVersion: "SSH-2.0-OpenSSH_9.9" };
+      },
+      getSessionDistroInfo: async () => {
+        distroProbeCalls += 1;
+        return {
+          success: true,
+          stdout: "Darwin mac-mini.local 24.5.0 Darwin Kernel Version 24.5.0\n",
+          stderr: "",
+        };
+      },
+    },
+    onOsDetected: (_hostId: string, distro: string) => {
+      detected.push(distro);
+    },
+  } as never, "macos-session", token);
+
+  assert.equal(remoteInfoCalls, 1);
+  assert.equal(distroProbeCalls, 1);
+  assert.deepEqual(detected, ["macos"]);
+});
