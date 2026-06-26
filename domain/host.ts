@@ -51,6 +51,10 @@ export const LINUX_DISTRO_OPTIONS = [
   'openeuler',
 ] as const;
 
+export const POSIX_PLATFORM_OPTIONS = [
+  'macos',
+] as const;
+
 /**
  * Known network-device vendor IDs that Netcatty can detect from the SSH
  * server identification string. When a host is classified as one of these,
@@ -76,6 +80,17 @@ export type NetworkDeviceVendor = typeof NETWORK_DEVICE_OPTIONS[number];
 export const normalizeDistroId = (value?: string) => {
   const v = (value || '').toLowerCase().trim();
   if (!v) return '';
+  if (
+    v === 'darwin' ||
+    v === 'macos' ||
+    v === 'mac os' ||
+    v === 'mac os x' ||
+    v.includes('darwin kernel') ||
+    v.includes('macos') ||
+    v.includes('mac os')
+  ) {
+    return 'macos';
+  }
   if (v.includes('ubuntu')) return 'ubuntu';
   if (v.includes('debian')) return 'debian';
   if (v.includes('centos')) return 'centos';
@@ -177,10 +192,11 @@ export const detectVendorFromSshVersion = (softwareVersion?: string): '' | Netwo
 export type DeviceClass = 'linux-like' | 'network-device' | 'other';
 
 export const classifyDistroId = (distroId?: string): DeviceClass => {
-  const v = (distroId || '').toLowerCase().trim();
+  const v = normalizeDistroId(distroId) || (distroId || '').toLowerCase().trim();
   if (!v) return 'other';
   if ((NETWORK_DEVICE_OPTIONS as readonly string[]).includes(v)) return 'network-device';
   if ((LINUX_DISTRO_OPTIONS as readonly string[]).includes(v)) return 'linux-like';
+  if ((POSIX_PLATFORM_OPTIONS as readonly string[]).includes(v)) return 'linux-like';
   return 'other';
 };
 

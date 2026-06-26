@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import type { Host } from "./models.ts";
 import {
+  classifyDistroId,
   detectVendorFromSshVersion,
   migrateHostsFromLegacyLineTimestamps,
   normalizeDistroId,
@@ -324,6 +325,18 @@ test("normalizeDistroId maps openEuler before the generic Linux fallback", () =>
   assert.equal(normalizeDistroId("openeuler"), "openeuler");
   assert.equal(normalizeDistroId("openEuler"), "openeuler");
   assert.notEqual(normalizeDistroId("openeuler"), "linux");
+});
+
+test("normalizeDistroId maps Darwin and macOS labels to macos", () => {
+  assert.equal(normalizeDistroId("Darwin"), "macos");
+  assert.equal(normalizeDistroId("Darwin Kernel Version 24.5.0"), "macos");
+  assert.equal(normalizeDistroId("macOS"), "macos");
+  assert.equal(normalizeDistroId("Mac OS X"), "macos");
+});
+
+test("classifyDistroId treats macos as a POSIX stats target", () => {
+  assert.equal(classifyDistroId("macos"), "linux-like");
+  assert.equal(classifyDistroId("Darwin"), "linux-like");
 });
 
 test("shouldProbeSessionCwd allows the probe on a plain Linux host", () => {

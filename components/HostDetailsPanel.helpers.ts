@@ -1,6 +1,10 @@
 import type { GroupConfig } from "../domain/models";
 import type { Host } from "../types";
-import { LINUX_DISTRO_OPTIONS, NETWORK_DEVICE_OPTIONS } from "../domain/host";
+import {
+  LINUX_DISTRO_OPTIONS,
+  NETWORK_DEVICE_OPTIONS,
+  POSIX_PLATFORM_OPTIONS,
+} from "../domain/host";
 
 export const parseOptionalPortInput = (value: string): number | undefined =>
   value ? Number(value) : undefined;
@@ -76,5 +80,6 @@ export const resolveDetailsTelnetPassword = (
 
 export const LINUX_DISTRO_OPTION_IDS = [
   ...LINUX_DISTRO_OPTIONS,
+  ...POSIX_PLATFORM_OPTIONS,
   ...NETWORK_DEVICE_OPTIONS,
 ];
