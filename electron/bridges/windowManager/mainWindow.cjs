@@ -338,6 +338,10 @@ function createMainWindowApi(ctx) {
         updateNormalBounds();
         scheduleSaveState();
       });
+
+      win.on("show", () => {
+        safeSend("netcatty:window:shown");
+      });
     
       // Ensure native background matches frontend background, even before first paint.
       try {

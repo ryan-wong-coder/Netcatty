@@ -47,6 +47,8 @@ export const TerminalServerStats: React.FC<TerminalServerStatsProps> = ({
     isConnected,
     isVisible,
   });
+  const hasNetworkDetails = serverStats.netInterfaces.length > 0;
+  const hasLatency = serverStats.latencyMs !== null;
 
   if (!enabled || !isConnected || !serverStats.lastUpdated) return null;
 
@@ -316,7 +318,7 @@ export const TerminalServerStats: React.FC<TerminalServerStatsProps> = ({
                   </HoverCardContent>
                 </HoverCard>
                 {/* Network - with HoverCard for per-interface details */}
-                {serverStats.netInterfaces.length > 0 && (
+                {(hasNetworkDetails || hasLatency) && (
                   <HoverCard openDelay={200} closeDelay={100}>
                     <HoverCardTrigger asChild>
                       <button
@@ -348,25 +350,29 @@ export const TerminalServerStats: React.FC<TerminalServerStatsProps> = ({
                             {formatLatency(serverStats.latencyMs)}
                           </span>
                         </div>
-                        <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                          {serverStats.netInterfaces.map((iface, index) => (
-                            <div key={index} className="flex items-center justify-between gap-4 min-w-[200px]">
-                              <span className="text-[10px] text-muted-foreground font-mono">
-                                {iface.name}
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <span className="flex items-center gap-0.5 text-emerald-400">
-                                  <ArrowDownToLine size={9} />
-                                  {formatNetSpeed(iface.rxSpeed)}
+                        {hasNetworkDetails ? (
+                          <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                            {serverStats.netInterfaces.map((iface, index) => (
+                              <div key={index} className="flex items-center justify-between gap-4 min-w-[200px]">
+                                <span className="text-[10px] text-muted-foreground font-mono">
+                                  {iface.name}
                                 </span>
-                                <span className="flex items-center gap-0.5 text-sky-400">
-                                  <ArrowUpFromLine size={9} />
-                                  {formatNetSpeed(iface.txSpeed)}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="flex items-center gap-0.5 text-emerald-400">
+                                    <ArrowDownToLine size={9} />
+                                    {formatNetSpeed(iface.rxSpeed)}
+                                  </span>
+                                  <span className="flex items-center gap-0.5 text-sky-400">
+                                    <ArrowUpFromLine size={9} />
+                                    {formatNetSpeed(iface.txSpeed)}
+                                  </span>
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-muted-foreground">{t("terminal.serverStats.noData")}</div>
+                        )}
                       </div>
                     </HoverCardContent>
                   </HoverCard>

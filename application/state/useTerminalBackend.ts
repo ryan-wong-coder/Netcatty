@@ -74,6 +74,14 @@ export const useTerminalBackend = () => {
     return bridge.execCommand(options);
   }, []);
 
+  const setupOsc7Tracking = useCallback(async (sessionId: string, command: string) => {
+    const bridge = netcattyBridge.get();
+    if (!bridge?.setupOsc7Tracking) {
+      return { success: false, error: "setupOsc7Tracking unavailable" };
+    }
+    return bridge.setupOsc7Tracking(sessionId, command);
+  }, []);
+
   const writeToSession = useCallback((sessionId: string, data: string, options?: Parameters<NonNullable<NetcattyBridge["writeToSession"]>>[2]) => {
     const bridge = netcattyBridge.get();
     bridge?.writeToSession?.(sessionId, data, options);
@@ -328,6 +336,7 @@ export const useTerminalBackend = () => {
       cancelZmodem,
       onZmodemEvent,
       execCommand,
+      setupOsc7Tracking,
       getSessionPwd,
       getSessionRemoteInfo,
       getSessionDistroInfo,
@@ -377,6 +386,7 @@ export const useTerminalBackend = () => {
       cancelZmodem,
       onZmodemEvent,
       execCommand,
+      setupOsc7Tracking,
       getSessionPwd,
       getSessionRemoteInfo,
       getSessionDistroInfo,

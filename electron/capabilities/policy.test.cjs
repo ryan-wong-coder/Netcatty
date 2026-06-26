@@ -195,3 +195,282 @@ test("evaluatePermissionWithGrants skips approval when a grant matches", () => {
   assert.equal(decision.allowed, true);
   assert.equal(decision.requiresApproval, false);
 });
+
+test("evaluatePermissionWithGrants does not let a comment grant approve a multiline command", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "# 1a) clear the kernel_options_post profile field",
+        "cobbler profile edit --name=openEuler-22.03-aarch64 --kernel-options-post=\"\"",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-comment",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "# *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let a here-doc body grant approve the command", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cat <<'EOF'",
+        "rm -rf /tmp/demo",
+        "EOF",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-rm",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "rm *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let a piped here-doc body grant approve the command", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cat <<EOF | grep needle",
+        "rm -rf /tmp/demo",
+        "EOF",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-rm",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "rm *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let an fd-prefixed here-doc body grant approve the command", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cat 0<<EOF",
+        "rm -rf /tmp/demo",
+        "EOF",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-rm",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "rm *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let a background command grant approve the next command", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: "cd /tmp; sleep 1 & rm -rf demo",
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-sleep",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "sleep *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let cwd substitutions hide before a later grant", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: "cd \"$(pwd)\"; ls -la",
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-ls",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "ls *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let quoted here-doc operator text hide later commands", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cd /tmp; echo '<<EOF'",
+        "rm -rf demo",
+        "EOF",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-echo",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "echo *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants keeps commands after mixed-quoted here-doc delimiters grantable", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cat <<E\"OF\"",
+        "body text",
+        "EOF",
+        "ls -la",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-cat",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "cat *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants does not let arithmetic shifts hide following commands", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "ls $((1 << 2))",
+        "rm -rf demo",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-ls",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "ls *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants keeps commands after ANSI-C quoted here-doc delimiters grantable", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cat <<$'E\\x4fF'",
+        "body text",
+        "EOF",
+        "rm -rf demo",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-cat",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "cat *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("evaluatePermissionWithGrants keeps commands after dollar-quoted here-doc delimiters grantable", () => {
+  const decision = evaluatePermissionWithGrants({
+    rpcMethod: "netcatty/exec",
+    permissionMode: PERMISSION_MODES.CONFIRM,
+    params: {
+      chatSessionId: "chat-1",
+      sessionId: "session-a",
+      command: [
+        "cat <<$'EOF'",
+        "body text",
+        "EOF",
+        "rm -rf demo",
+      ].join("\n"),
+    },
+    context: { chatSessionCancelled: false },
+  }, [{
+    id: "grant-cat",
+    capabilityId: "terminal.execute",
+    sessionPattern: "session-a",
+    commandPattern: "cat *",
+    createdAt: Date.now(),
+  }]);
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.requiresApproval, true);
+});

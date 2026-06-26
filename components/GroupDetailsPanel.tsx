@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Check,
   Eye,
   EyeOff,
@@ -6,6 +7,7 @@ import {
   MoreHorizontal,
   Palette,
   Plus,
+  Router,
   Settings2,
   Trash2,
 } from "lucide-react";
@@ -45,12 +47,21 @@ import { Button } from "./ui/button";
 import { Combobox } from "./ui/combobox";
 import { Dropdown, DropdownContent, DropdownTrigger } from "./ui/dropdown";
 import { Input } from "./ui/input";
+import { Switch } from "./ui/switch";
 import { TerminalFontSelect } from "./settings/TerminalFontSelect";
 import { useAvailableFonts } from "../application/state/fontStore";
 import { toast } from "./ui/toast";
 import { GroupSshSettingsSection } from "./GroupSshSettingsSection";
 
 type SubPanel = "none" | "proxy" | "chain" | "env-vars" | "theme-select";
+
+const ToggleRow: React.FC<{ label: string; hint?: React.ReactNode; enabled: boolean; onToggle: () => void }> = ({ label, hint, enabled, onToggle }) => {
+  return (
+    <HostDetailsSettingRow label={label} hint={hint}>
+      <Switch checked={enabled} onCheckedChange={() => onToggle()} />
+    </HostDetailsSettingRow>
+  );
+};
 
 interface GroupDetailsPanelProps {
   groupPath: string;
@@ -104,6 +115,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelProps> = ({
   const hasSshFields = (c: Partial<GroupConfig>) =>
     c.protocol === 'ssh' ||
     c.port !== undefined || !!c.username || !!c.password || !!c.identityFileId ||
+    c.deviceType !== undefined ||
     c.agentForwarding !== undefined || c.authMethod !== undefined || !!c.identityId ||
     !!c.proxyProfileId || !!c.proxyConfig || !!c.hostChain || !!c.startupCommand || c.legacyAlgorithms !== undefined || c.skipEcdsaHostKey !== undefined || c.algorithms !== undefined || c.backspaceBehavior !== undefined ||
     (c.environmentVariables && c.environmentVariables.length > 0) ||
@@ -164,6 +176,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelProps> = ({
       delete next.identityId;
       delete next.identityFileId;
       delete next.identityFilePaths;
+      delete next.deviceType;
       delete next.agentForwarding;
       delete next.startupCommand;
       delete next.legacyAlgorithms;
@@ -342,6 +355,11 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelProps> = ({
     if (!parentGroup || groupConfigs.length === 0) return false;
     return !!resolveGroupDefaults(parentGroup, groupConfigs).skipEcdsaHostKey;
   }, [groupConfigs, parentGroup]);
+  const inheritedDeviceType = useMemo(() => {
+    if (!parentGroup || groupConfigs.length === 0) return undefined;
+    return resolveGroupDefaults(parentGroup, groupConfigs).deviceType;
+  }, [groupConfigs, parentGroup]);
+  const effectiveDeviceType = form.deviceType ?? inheritedDeviceType;
   const effectiveThemeId = form.themeOverride === false
     ? inheritedThemeId
     : (form.theme || inheritedThemeId);
@@ -387,6 +405,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelProps> = ({
         ...(form.identityId !== undefined && { identityId: form.identityId }),
         ...(form.identityFileId !== undefined && { identityFileId: form.identityFileId }),
         ...(form.identityFilePaths !== undefined && { identityFilePaths: form.identityFilePaths }),
+        ...(form.deviceType !== undefined && { deviceType: form.deviceType }),
         ...(form.agentForwarding !== undefined && { agentForwarding: form.agentForwarding }),
         ...(form.startupCommand !== undefined && { startupCommand: form.startupCommand }),
         ...(form.legacyAlgorithms !== undefined && { legacyAlgorithms: form.legacyAlgorithms }),
@@ -593,6 +612,28 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelProps> = ({
           setActiveSubPanel={setActiveSubPanel}
           chainedHosts={chainedHosts}
         />
+
+        {sshEnabled && (!form.protocol || form.protocol === "ssh") && !form.moshEnabled && !form.etEnabled && (
+          <HostDetailsSection
+            icon={<Router size={14} className="text-muted-foreground" />}
+            title={t("hostDetails.section.deviceType")}
+          >
+            <ToggleRow
+              label={t("hostDetails.deviceType")}
+              hint={t("hostDetails.deviceType.desc")}
+              enabled={effectiveDeviceType === "network"}
+              onToggle={() => update("deviceType", effectiveDeviceType === "network" ? "general" : "network")}
+            />
+            {effectiveDeviceType === "network" && (
+              <div className="flex items-start gap-2 p-2 rounded-md bg-yellow-500/10 border border-yellow-500/20">
+                <AlertTriangle size={14} className="text-yellow-500 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-yellow-600 dark:text-yellow-400 break-words">
+                  {t("hostDetails.deviceType.warning")}
+                </p>
+              </div>
+            )}
+          </HostDetailsSection>
+        )}
 
         {/* Telnet Section (if enabled) */}
         {telnetEnabled && (

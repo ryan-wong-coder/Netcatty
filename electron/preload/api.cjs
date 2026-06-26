@@ -99,6 +99,9 @@ function createPreloadApi(ctx) {
   signalSystemProcess: async (options) => {
     return ipcRenderer.invoke("netcatty:system:signalProcess", options);
   },
+  setupOsc7Tracking: async (sessionId, command) => {
+    return ipcRenderer.invoke("netcatty:system:setupOsc7Tracking", { sessionId, command });
+  },
   listTmuxSessions: async (sessionId) => {
     return ipcRenderer.invoke("netcatty:system:listTmuxSessions", { sessionId });
   },
@@ -507,6 +510,14 @@ function createPreloadApi(ctx) {
   onWindowFullScreenChanged: (cb) => {
     fullscreenChangeListeners.add(cb);
     return () => fullscreenChangeListeners.delete(cb);
+  },
+  onWindowShown: (cb) => {
+    windowShownListeners.add(cb);
+    return () => windowShownListeners.delete(cb);
+  },
+  onWindowWillHide: (cb) => {
+    windowWillHideListeners.add(cb);
+    return () => windowWillHideListeners.delete(cb);
   },
   
   // Settings window

@@ -1,5 +1,8 @@
 import cattyToolSpecs from './generated/cattyToolSpecs.json';
-import { buildAlwaysAllowCommandPatterns } from '../shared/shellCommandGrant';
+import {
+  buildAlwaysAllowCommandPatterns,
+  extractGrantableShellCommandSegments,
+} from '../shared/shellCommandGrant';
 
 export interface PermissionGrantRule {
   id: string;
@@ -106,14 +109,13 @@ export function matchPermissionGrant(
   if (rules.length === 0) return null;
 
   const args = ctx.args ?? {};
+  const command = typeof args.command === 'string' ? args.command : '';
+  const commandGrantMatch = command ? matchCommandPatternGrants(rules, ctx, command, args) : null;
+  if (commandGrantMatch) return commandGrantMatch;
 
   for (const rule of rules) {
     if (rule.capabilityId !== ctx.capabilityId) continue;
-
-    if (rule.commandPattern) {
-      const command = typeof args.command === 'string' ? args.command : '';
-      if (!patternMatches(rule.commandPattern, command)) continue;
-    }
+    if (rule.commandPattern) continue;
 
     if (!argsPatternMatches(rule.argsPattern, args)) continue;
 
@@ -121,6 +123,32 @@ export function matchPermissionGrant(
   }
 
   return null;
+}
+
+function matchCommandPatternGrants(
+  rules: readonly PermissionGrantRule[],
+  ctx: PermissionGrantMatchContext,
+  command: string,
+  args: Record<string, unknown>,
+): PermissionGrantRule | null {
+  const commandSegments = extractGrantableShellCommandSegments(command);
+  if (commandSegments.length === 0) return null;
+
+  const eligibleRules = rules.filter((rule) => (
+    rule.capabilityId === ctx.capabilityId
+    && Boolean(rule.commandPattern)
+    && argsPatternMatches(rule.argsPattern, args)
+  ));
+  if (eligibleRules.length === 0) return null;
+
+  let firstMatch: PermissionGrantRule | null = null;
+  for (const segment of commandSegments) {
+    const matched = eligibleRules.find((rule) => patternMatches(rule.commandPattern!, segment));
+    if (!matched) return null;
+    firstMatch ??= matched;
+  }
+
+  return firstMatch;
 }
 
 export function sanitizePermissionGrants(raw: unknown): PermissionGrantRule[] {
@@ -215,7 +243,7 @@ export function buildGrantsFromApproval(
   const commandPatterns = resolveCommandGrantPatterns(capabilityId, args);
   const createdAt = Date.now();
 
-  if (!commandPatterns || commandPatterns.length === 0) {
+  if (!commandPatterns) {
     return [{
       id: createPermissionGrantId(),
       capabilityId,
@@ -223,6 +251,8 @@ export function buildGrantsFromApproval(
       createdAt,
     }];
   }
+
+  if (commandPatterns.length === 0) return [];
 
   return commandPatterns.map((commandPattern) => ({
     id: createPermissionGrantId(),
@@ -237,8 +267,8 @@ export function buildGrantFromApproval(
   capabilityId: string,
   args: Record<string, unknown>,
   chatSessionId?: string,
-): PermissionGrantRule {
-  return buildGrantsFromApproval(capabilityId, args, chatSessionId)[0];
+): PermissionGrantRule | null {
+  return buildGrantsFromApproval(capabilityId, args, chatSessionId)[0] ?? null;
 }
 
 let activeRules: PermissionGrantRule[] = [];
