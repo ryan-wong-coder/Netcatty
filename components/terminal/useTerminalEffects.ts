@@ -1242,14 +1242,20 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
       !inWorkspace || isFocusMode || isFocused
     );
 
+    const recoverWebglRendererOnAppResume = () => {
+      xtermRuntimeRef.current?.ensureWebglRenderer();
+    };
+
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
       if (!shouldRecoverOnAppResume()) return;
+      recoverWebglRendererOnAppResume();
       scheduleLayoutRecoveryRefit();
     };
 
     const handleWindowFocus = () => {
       if (!shouldRecoverOnAppResume()) return;
+      recoverWebglRendererOnAppResume();
       scheduleLayoutRecoveryRefit();
     };
 
