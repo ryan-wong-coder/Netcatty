@@ -24,6 +24,12 @@ import {
   resolveHostTerminalThemeId,
   type TerminalHostUpdate,
 } from "../domain/terminalAppearance";
+import {
+  isTerminalEncodingPreference,
+  resolveInitialTerminalEncoding,
+  terminalEncodingPreferenceToCharset,
+  type TerminalEncodingPreference,
+} from "../domain/terminalEncodingPreference";
 import { resolveRestoreCwdIntent } from "../domain/sessionRestore";
 import {
   buildTerminalContextReadResult,
@@ -37,6 +43,7 @@ import { supportsZmodemTerminalDragDrop } from "../lib/zmodemDragDrop";
 import { resolveHostAuth } from "../domain/sshAuth";
 import { useTerminalBackend } from "../application/state/useTerminalBackend";
 import { useStoredBoolean } from "../application/state/useStoredBoolean";
+import { readStoredStringValue, useStoredString } from "../application/state/useStoredString";
 import { useSessionLogBackend } from "../application/state/useSessionLogBackend";
 import { useTerminalLayoutSuppressActive } from "../application/state/terminalLayoutSuppressStore";
 // SFTPModal removed - SFTP is now handled by SftpSidePanel in TerminalLayer
@@ -48,7 +55,10 @@ import { useAvailableFonts } from "../application/state/fontStore";
 import { composeFontFamilyStack, type SupportedPlatform } from "../infrastructure/config/cjkFonts";
 import { resolveTerminalFontFamilyId } from "../infrastructure/config/fonts";
 import { getBuiltinTerminalThemeById } from "../infrastructure/config/terminalThemes";
-import { STORAGE_KEY_TERMINAL_COMPOSE_BAR_OPEN } from "../infrastructure/config/storageKeys";
+import {
+  STORAGE_KEY_TERMINAL_COMPOSE_BAR_OPEN,
+  STORAGE_KEY_TERMINAL_ENCODING,
+} from "../infrastructure/config/storageKeys";
 import { useCustomThemes } from "../application/state/customThemeStore";
 
 import { TerminalConnectionDialog } from "./terminal/TerminalConnectionDialog";
@@ -161,19 +171,6 @@ import {
   type TerminalProps,
 } from "./terminal/terminalHelpers";
 import { terminalPropsAreEqual } from "./terminal/terminalMemo";
-
-const resolveInitialTerminalEncoding = (charset?: string): 'utf-8' | 'gb18030' => {
-  if (!charset) return 'utf-8';
-  const raw = String(charset).trim().toLowerCase();
-  const localeCodeset = raw.match(/\.([^@]+)(?:@.*)?$/)?.[1];
-  const candidates = [raw, localeCodeset].filter((value): value is string => Boolean(value));
-  return candidates.some((candidate) => {
-    const normalized = candidate.replace(/[^a-z0-9]/g, "");
-    return ["gb18030", "gbk", "gb2312", "cp936", "ms936"].includes(normalized);
-  })
-    ? 'gb18030'
-    : 'utf-8';
-};
 
 const TerminalComponent: React.FC<TerminalProps> = ({
   host,
@@ -587,8 +584,20 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     STORAGE_KEY_TERMINAL_COMPOSE_BAR_OPEN,
     false,
   );
-  const [terminalEncoding, setTerminalEncoding] = useState<'utf-8' | 'gb18030'>(() => {
-    return resolveInitialTerminalEncoding(host?.charset);
+  const [, setRememberedTerminalEncoding] = useStoredString(
+    STORAGE_KEY_TERMINAL_ENCODING,
+    'utf-8',
+    isTerminalEncodingPreference,
+  );
+  const [terminalEncoding, setTerminalEncoding] = useState<TerminalEncodingPreference>(() => {
+    return resolveInitialTerminalEncoding(
+      host?.charset,
+      readStoredStringValue(
+        STORAGE_KEY_TERMINAL_ENCODING,
+        'utf-8',
+        isTerminalEncodingPreference,
+      ),
+    );
   });
   const terminalEncodingRef = useRef(terminalEncoding);
   terminalEncodingRef.current = terminalEncoding;
@@ -1809,13 +1818,20 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     onAddSelectionToAI?.(sessionId, selection);
   }, [onAddSelectionToAI, sessionId]);
 
-  const handleSetTerminalEncoding = useCallback((encoding: 'utf-8' | 'gb18030') => {
+  const handleSetTerminalEncoding = useCallback((encoding: TerminalEncodingPreference) => {
     setTerminalEncoding(encoding);
+    setRememberedTerminalEncoding(encoding);
     userPickedEncodingRef.current = true;
+    if (host.id && host.protocol !== 'local' && !host.id.startsWith('local-') && !host.id.startsWith('serial-')) {
+      handleUpdateHostFromTerminal({
+        id: host.id,
+        charset: terminalEncodingPreferenceToCharset(encoding),
+      });
+    }
     if (sessionRef.current) {
       setSessionEncoding(sessionRef.current, encoding);
     }
-  }, [setSessionEncoding]);
+  }, [handleUpdateHostFromTerminal, host.id, host.protocol, setRememberedTerminalEncoding, setSessionEncoding]);
 
   const handleOpenSFTP = useCallback(async () => {
     if (onOpenSftp) {

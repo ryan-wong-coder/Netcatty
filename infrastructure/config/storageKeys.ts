@@ -200,6 +200,7 @@ export const STORAGE_KEY_TERMINAL_HOST_TREE_WIDTH = 'netcatty_terminal_host_tree
 export const STORAGE_KEY_TERMINAL_HOST_TREE_COLLAPSED = 'netcatty_terminal_host_tree_collapsed_v1';
 export const STORAGE_KEY_TERMINAL_COMPOSE_BAR_OPEN = 'netcatty_terminal_compose_bar_open_v1';
 export const STORAGE_KEY_TERMINAL_SEARCH_OPEN = 'netcatty_terminal_search_open_v1';
+export const STORAGE_KEY_TERMINAL_ENCODING = 'netcatty_terminal_encoding_v1';
 
 // Port Forwarding (transient cross-window broadcast key)
 export const STORAGE_KEY_PF_RECONNECT_CANCEL = '__netcatty_pf_cancel_reconnect';
