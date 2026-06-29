@@ -9,11 +9,25 @@ const assertHandlerRecoversWebglBeforeRefit = (
   const handlerIndex = source.indexOf(`const ${handlerName} = () => {`);
   assert.notEqual(handlerIndex, -1, `${handlerName} must exist`);
 
-  const nextHandlerIndex = source.indexOf("const ", handlerIndex + 1);
-  const handlerSource = source.slice(
-    handlerIndex,
-    nextHandlerIndex === -1 ? undefined : nextHandlerIndex,
-  );
+  const bodyStart = source.indexOf("{", handlerIndex);
+  assert.notEqual(bodyStart, -1, `${handlerName} must have a body`);
+
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        bodyEnd = index + 1;
+        break;
+      }
+    }
+  }
+  assert.notEqual(bodyEnd, -1, `${handlerName} body must close`);
+
+  const handlerSource = source.slice(handlerIndex, bodyEnd);
   const recoveryIndex = handlerSource.indexOf("recoverWebglRendererOnAppResume()");
   const refitIndex = handlerSource.indexOf("scheduleLayoutRecoveryRefit()");
 
