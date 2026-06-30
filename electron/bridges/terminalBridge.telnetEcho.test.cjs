@@ -4,6 +4,7 @@ const net = require("node:net");
 const { setTimeout: delay } = require("node:timers/promises");
 
 const terminalBridge = require("./terminalBridge.cjs");
+const { FLOW_HIGH_WATER_MARK } = require("./terminalFlowAck.cjs");
 const { IAC, WILL, WONT, DO, OPT } = require("./telnetProtocol.cjs");
 
 function listen(server) {
@@ -200,6 +201,148 @@ test("replaced Telnet sockets close without affecting the replacement session", 
     for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => oldServer.close(resolve));
     await new Promise((resolve) => newServer.close(resolve));
+  }
+});
+
+test("replacing a Telnet session discards buffered output from the old session", async () => {
+  const sessionId = `telnet-echo-test-${nextSessionId++}`;
+  const sockets = new Set();
+  let newSocket = null;
+  const newServer = net.createServer((socket) => {
+    newSocket = socket;
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+  });
+
+  const newPort = await listen(newServer);
+  const sessions = new Map();
+  const sentEvents = [];
+  let discarded = 0;
+  let flushed = 0;
+  let destroyed = 0;
+  let cancelled = 0;
+  let released = 0;
+
+  sessions.set(sessionId, {
+    type: "telnet-native",
+    socket: {
+      destroy() {
+        destroyed += 1;
+      },
+    },
+    zmodemSentry: {
+      cancel() {
+        cancelled += 1;
+      },
+    },
+    discardPendingData() {
+      discarded += 1;
+    },
+    flushPendingData() {
+      flushed += 1;
+    },
+    releaseTelnetGeneration() {
+      released += 1;
+    },
+  });
+
+  terminalBridge.init({
+    sessions,
+    electronModule: {
+      webContents: {
+        fromId: () => ({
+          send(channel, payload) {
+            sentEvents.push({ channel, payload });
+          },
+        }),
+      },
+    },
+  });
+
+  try {
+    await terminalBridge.startTelnetSession(
+      { sender: { id: 1 } },
+      { sessionId, hostname: "127.0.0.1", port: newPort },
+    );
+    await waitFor(() => newSocket);
+
+    assert.equal(discarded, 1);
+    assert.equal(flushed, 0);
+    assert.equal(destroyed, 1);
+    assert.equal(cancelled, 1);
+    assert.equal(released, 1);
+    assert.equal(sentEvents.some((evt) => evt.channel === "netcatty:data"), false);
+    assert.equal(sessions.get(sessionId)?.type, "telnet-native");
+  } finally {
+    terminalBridge.cleanupAllSessions();
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => newServer.close(resolve));
+  }
+});
+
+test("Telnet paced backlog records buffered pressure while draining", async () => {
+  const sessionId = `telnet-echo-test-${nextSessionId++}`;
+  const sockets = new Set();
+  let serverSocket = null;
+  const server = net.createServer((socket) => {
+    serverSocket = socket;
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+  });
+
+  const port = await listen(server);
+  const sessions = new Map();
+  const sentEvents = [];
+  terminalBridge.init({
+    sessions,
+    electronModule: {
+      webContents: {
+        fromId: () => ({
+          send(channel, payload) {
+            sentEvents.push({ channel, payload });
+          },
+        }),
+      },
+    },
+  });
+
+  try {
+    await terminalBridge.startTelnetSession(
+      { sender: { id: 1 } },
+      { sessionId, hostname: "127.0.0.1", port },
+    );
+    await waitFor(() => serverSocket);
+
+    const session = sessions.get(sessionId);
+    session.flowState = {
+      rendererPaused: true,
+      unackedBytes: 0,
+      bufferedBytes: 0,
+      appliedPause: false,
+      outputPaused: true,
+    };
+    const flood = "x".repeat(FLOW_HIGH_WATER_MARK + 10);
+    serverSocket.write(flood);
+
+    await waitFor(() => (sessions.get(sessionId)?.flowState?.bufferedBytes || 0) > 0);
+    let flowState = sessions.get(sessionId)?.flowState;
+    assert.equal(flowState?.appliedPause, true);
+    assert.deepEqual(sentEvents.filter((evt) => evt.channel === "netcatty:data"), []);
+
+    terminalBridge.setSessionFlowPaused(
+      { sender: {} },
+      { sessionId, paused: false },
+    );
+
+    await waitFor(() => sentEvents.some((evt) => evt.channel === "netcatty:data"));
+    flowState = sessions.get(sessionId)?.flowState;
+    assert.equal(flowState?.rendererPaused, false);
+  } finally {
+    terminalBridge.cleanupAllSessions();
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 

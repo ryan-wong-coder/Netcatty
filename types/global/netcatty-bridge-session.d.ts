@@ -301,7 +301,13 @@ declare global {
     }): void;
     onSessionData(
       sessionId: string,
-      cb: (data: string) => void,
+      cb: (
+        data: string,
+        meta?: {
+          droppedOutputMayAffectTerminalState?: boolean;
+          droppedOutputAlternateScreenAction?: "enter" | "leave";
+        },
+      ) => void,
       options?: { replayBacklog?: boolean },
     ): () => void;
     onSessionExit(

@@ -4,7 +4,25 @@ const assert = require("node:assert/strict");
 const {
   armTerminalInterruptOutputGate,
   filterTerminalInterruptOutput,
+  stashPendingInterruptOutputMeta,
+  takePendingInterruptOutputMeta,
 } = require("./terminalInterruptOutputGate.cjs");
+
+test("pending interrupt metadata clears stale alternate-screen action on later unknown risk", () => {
+  const session = {};
+
+  stashPendingInterruptOutputMeta(session, {
+    droppedOutputMayAffectTerminalState: true,
+    droppedOutputAlternateScreenAction: "leave",
+  });
+  stashPendingInterruptOutputMeta(session, {
+    droppedOutputMayAffectTerminalState: true,
+  });
+
+  assert.deepEqual(takePendingInterruptOutputMeta(session), {
+    droppedOutputMayAffectTerminalState: true,
+  });
+});
 
 test("drops flood output after Ctrl+C and resumes from the interrupt echo", () => {
   const session = {};

@@ -61,6 +61,24 @@ test("send posts terminal output over the dedicated port", () => {
   ]);
 });
 
+test("send includes terminal output metadata when present", () => {
+  const channel = createTerminalOutputChannel({
+    MessageChannelMain: FakeMessageChannelMain,
+  });
+  channel.openSession("session-1", { id: 42, postMessage() {} });
+
+  assert.equal(channel.send("session-1", "hello", { droppedOutputMayAffectTerminalState: true }), true);
+
+  const entry = channel.getSessionForTest("session-1");
+  assert.deepEqual(entry.port.messages, [
+    {
+      sessionId: "session-1",
+      data: "hello",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    },
+  ]);
+});
+
 test("openSession can reserve the output port for transfer to a worker", () => {
   const channel = createTerminalOutputChannel({
     MessageChannelMain: FakeMessageChannelMain,

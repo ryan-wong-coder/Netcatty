@@ -31,11 +31,11 @@ function createTerminalOutputChannel(options = {}) {
     return transferToWorker ? port1 : true;
   }
 
-  function send(sessionId, data) {
+  function send(sessionId, data, meta) {
     if (!sessionId || !data) return false;
     const entry = sessions.get(sessionId);
     if (!entry || entry.transferToWorker) return false;
-    entry.port.postMessage({ sessionId, data });
+    entry.port.postMessage(meta ? { sessionId, data, meta } : { sessionId, data });
     return true;
   }
 

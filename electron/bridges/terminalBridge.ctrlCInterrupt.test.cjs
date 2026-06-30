@@ -167,7 +167,10 @@ test("interruptSession filters pending SSH output under high output pressure", (
     webContentsId: 1,
     takePendingData() {
       calls.push(["take-pending"]);
-      return "stale frame\x1b[?1049l";
+      return {
+        data: "stale frame\x1b[?1049l",
+        meta: { droppedOutputMayAffectTerminalState: true },
+      };
     },
     discardPendingData() {
       calls.push(["discard"]);
@@ -201,8 +204,59 @@ test("interruptSession filters pending SSH output under high output pressure", (
     ["write", "\x03"],
   ]);
   assert.deepEqual(sent, [
-    ["netcatty:data", { sessionId: "ssh-1", data: "\x1b[?1049l" }],
+    ["netcatty:data", {
+      sessionId: "ssh-1",
+      data: "\x1b[?1049l",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    }],
   ]);
+});
+
+test("interruptSession preserves pending metadata when drained output is fully filtered", () => {
+  const calls = [];
+  const sent = [];
+  const sessions = new Map();
+  const session = {
+    cols: 80,
+    rows: 24,
+    webContentsId: 1,
+    takePendingData() {
+      calls.push(["take-pending"]);
+      return {
+        data: "stale frame without prompt",
+        meta: { droppedOutputMayAffectTerminalState: true },
+      };
+    },
+    flowState: {
+      rendererPaused: false,
+      unackedBytes: FLOW_HIGH_WATER_MARK + 1300,
+      appliedPause: false,
+    },
+    stream: {
+      pause() {
+        calls.push(["pause"]);
+      },
+      resume() {},
+      write(data) {
+        calls.push(["write", data]);
+      },
+    },
+  };
+  sessions.set("ssh-1", session);
+  initBridge(sessions, sent);
+
+  terminalBridge.interruptSession({ sender: {} }, { sessionId: "ssh-1" });
+
+  assert.deepEqual(sent, []);
+  assert.deepEqual(session._pendingInterruptOutputMeta, {
+    droppedOutputMayAffectTerminalState: true,
+  });
+
+  terminalBridge.writeToSession({ sender: {} }, { sessionId: "ssh-1", data: "x" });
+
+  assert.deepEqual(session._pendingInterruptOutputMeta, {
+    droppedOutputMayAffectTerminalState: true,
+  });
 });
 
 test("interruptSession does not arm SSH output drain for tiny in-flight echo", () => {

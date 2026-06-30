@@ -33,10 +33,16 @@ function createTerminalOutputPortRegistry(options = {}) {
       if (closedTerminalDataSessions.has(targetSessionId)) return;
       if (!message.data) return;
       try {
-        const data = typeof filterData === "function"
+        const filtered = typeof filterData === "function"
           ? filterData(targetSessionId, message.data, message)
           : message.data;
-        if (data) deliverToListeners?.(targetSessionId, data);
+        const data = filtered && typeof filtered === "object" && "data" in filtered
+          ? filtered.data
+          : filtered;
+        const meta = filtered && typeof filtered === "object" && "data" in filtered
+          ? filtered.meta
+          : message.meta;
+        if (data) deliverToListeners?.(targetSessionId, data, meta);
       } catch (err) {
         onPortError("Terminal output port callback failed", err);
       }

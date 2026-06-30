@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const { createSystemKnownHostsApi } = require("../sshBridge/systemKnownHosts.cjs");
 const { emitTerminalSessionData } = require("../emitTerminalSessionData.cjs");
 const {
+  setBufferedOutputBytes,
   shouldAcceptSessionOutput,
   shouldProcessSessionOutput,
 } = require("../terminalFlowAck.cjs");
@@ -825,16 +826,17 @@ main();
 
         const {
           bufferData: bufferEtData,
-          flush: flushEt,
           flushPaced: flushEtPaced,
           discard: discardEt,
-        } = createPtyOutputBuffer((data) => {
+        } = createPtyOutputBuffer((data, meta) => {
           const contents = electronModule.webContents.fromId(session.webContentsId);
           emitTerminalSessionData(contents, sessionId, data, {
             cols: session.cols,
             rows: session.rows,
+            meta,
           });
         }, {
+          onPendingBytesChange: (bytes) => setBufferedOutputBytes(session, bytes),
           shouldAcceptOutput: () => shouldAcceptSessionOutput(session),
         });
         session.flushPendingData = flushEtPaced;
@@ -880,15 +882,19 @@ main();
           });
         }
 
+        let etExitFinalized = false;
         proc.onExit((evt) => {
-          flushEt();
-          try { session.etStatsConn?.end(); } catch { /* ignore */ }
-          cleanupSessionExternalAuthArtifacts(session);
-          sessionLogStreamManager.stopStream(sessionId);
-          closeTerminalOutputSession?.(sessionId);
-          sessions.delete(sessionId);
-          const contents = electronModule.webContents.fromId(session.webContentsId);
-          contents?.send("netcatty:exit", { sessionId, ...evt, reason: evt.exitCode === 0 ? "exited" : "error" });
+          flushEtPaced(() => {
+            if (etExitFinalized) return;
+            etExitFinalized = true;
+            try { session.etStatsConn?.end(); } catch { /* ignore */ }
+            cleanupSessionExternalAuthArtifacts(session);
+            sessionLogStreamManager.stopStream(sessionId);
+            closeTerminalOutputSession?.(sessionId);
+            sessions.delete(sessionId);
+            const contents = electronModule.webContents.fromId(session.webContentsId);
+            contents?.send("netcatty:exit", { sessionId, ...evt, reason: evt.exitCode === 0 ? "exited" : "error" });
+          });
         });
 
         return { sessionId };

@@ -9,16 +9,36 @@ function createTerminalDataBacklog(options = {}) {
     return value.slice(value.length - maxBytesPerSession);
   }
 
-  function append(sessionId, data) {
+  function append(sessionId, data, meta) {
     if (!sessionId || !data) return;
-    const previous = pendingBySession.get(sessionId) || "";
-    pendingBySession.set(sessionId, trimToLimit(previous + data));
+    const previous = pendingBySession.get(sessionId) || { data: "", meta: undefined };
+    const droppedOutputMayAffectTerminalState = Boolean(
+      previous.meta?.droppedOutputMayAffectTerminalState
+      || meta?.droppedOutputMayAffectTerminalState
+    );
+    const droppedOutputAlternateScreenAction = meta?.droppedOutputMayAffectTerminalState
+      ? meta?.droppedOutputAlternateScreenAction
+      : (meta?.droppedOutputAlternateScreenAction ?? previous.meta?.droppedOutputAlternateScreenAction);
+    const nextMeta = droppedOutputMayAffectTerminalState || droppedOutputAlternateScreenAction
+      ? {
+        ...(droppedOutputMayAffectTerminalState ? { droppedOutputMayAffectTerminalState: true } : {}),
+        ...(droppedOutputAlternateScreenAction ? { droppedOutputAlternateScreenAction } : {}),
+      }
+      : undefined;
+    pendingBySession.set(sessionId, {
+      data: trimToLimit(previous.data + data),
+      meta: nextMeta,
+    });
+  }
+
+  function takeEntry(sessionId) {
+    const entry = pendingBySession.get(sessionId) || { data: "", meta: undefined };
+    pendingBySession.delete(sessionId);
+    return entry;
   }
 
   function take(sessionId) {
-    const data = pendingBySession.get(sessionId) || "";
-    pendingBySession.delete(sessionId);
-    return data;
+    return takeEntry(sessionId).data;
   }
 
   function clear(sessionId) {
@@ -26,12 +46,13 @@ function createTerminalDataBacklog(options = {}) {
   }
 
   function size(sessionId) {
-    return pendingBySession.get(sessionId)?.length ?? 0;
+    return pendingBySession.get(sessionId)?.data.length ?? 0;
   }
 
   return {
     append,
     take,
+    takeEntry,
     clear,
     size,
   };
@@ -48,12 +69,12 @@ function createTerminalDataDispatcher({
   onCallbackError = console.error,
   shouldDropSession = () => false,
 }) {
-  return function deliverToListeners(sessionId, data) {
+  return function deliverToListeners(sessionId, data, meta) {
     if (!data) return;
     if (shouldDropSession(sessionId)) return;
 
     if (!hasSessionListeners(displayDataListeners, sessionId)) {
-      terminalDataBacklog?.append?.(sessionId, data);
+      terminalDataBacklog?.append?.(sessionId, data, meta);
     }
 
     const set = dataListeners.get(sessionId);
@@ -61,7 +82,7 @@ function createTerminalDataDispatcher({
 
     set.forEach((cb) => {
       try {
-        cb(data);
+        cb(data, meta);
       } catch (err) {
         onCallbackError("Data callback failed", err);
       }

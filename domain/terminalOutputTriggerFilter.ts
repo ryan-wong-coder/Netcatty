@@ -1,6 +1,8 @@
 const MAX_PENDING_ECHO = 4096;
 const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
 
+export type TerminalAlternateScreenAction = 'enter' | 'leave';
+
 export type TerminalOutputChunkMeta = {
   rawLen: number;
   dropReason?:
@@ -16,6 +18,7 @@ export type TerminalOutputChunkMeta = {
   afterSubmittedLen: number;
   afterUserEchoLen: number;
   scannableLen: number;
+  alternateScreenAction?: TerminalAlternateScreenAction;
 };
 
 export type TerminalOutputTriggerFilter = {
@@ -26,9 +29,12 @@ export type TerminalOutputTriggerFilter = {
     meta: TerminalOutputChunkMeta;
   };
   reset: () => void;
+  resetInputState: () => void;
+  resetPendingEscape: () => void;
+  markInputEchoUncertain: (lineCount?: number) => void;
 };
 
-function getAlternateScreenAction(sequence: string): 'enter' | 'leave' | null {
+export function getTerminalAlternateScreenAction(sequence: string): TerminalAlternateScreenAction | null {
   if (!sequence.startsWith('\x1b[') || sequence.length < 3) return null;
   const final = sequence.at(-1);
   if (final !== 'h' && final !== 'l') return null;
@@ -166,6 +172,66 @@ function applyInputToLine(line: string, data: string): { line: string; submitted
   return { line: nextLine, submittedLine };
 }
 
+function consumeSuppressedEchoLines(
+  input: string,
+  lineCount: number,
+  pendingLf: boolean,
+  onEscapeSequence?: (sequence: string) => void,
+): {
+  input: string;
+  lineCount: number;
+  pendingLf: boolean;
+  pendingEscape?: string;
+} {
+  let index = 0;
+  let remainingLines = lineCount;
+  let nextPendingLf = false;
+
+  if (pendingLf && input[index] === '\n') {
+    index += 1;
+  }
+
+  while (remainingLines > 0 && index < input.length) {
+    const char = input[index];
+    if (char === '\x1b') {
+      const sequence = readEscapeSequence(input, index);
+      if (sequence) {
+        onEscapeSequence?.(sequence.sequence);
+        index = sequence.end;
+        continue;
+      }
+      return {
+        input: '',
+        lineCount: remainingLines,
+        pendingLf: nextPendingLf,
+        pendingEscape: input.slice(index),
+      };
+    }
+    if (char === '\r') {
+      remainingLines -= 1;
+      index += 1;
+      if (input[index] === '\n') {
+        index += 1;
+      } else if (index === input.length) {
+        nextPendingLf = true;
+      }
+      continue;
+    }
+    if (char === '\n') {
+      remainingLines -= 1;
+      index += 1;
+      continue;
+    }
+    index += 1;
+  }
+
+  return {
+    input: input.slice(index),
+    lineCount: remainingLines,
+    pendingLf: nextPendingLf,
+  };
+}
+
 const BRACKETED_PASTE_START = '\x1b[200~';
 const BRACKETED_PASTE_END = '\x1b[201~';
 
@@ -250,36 +316,122 @@ function stripSubmittedLineEcho(
 export function createTerminalOutputTriggerFilter(): TerminalOutputTriggerFilter {
   let pendingEcho = '';
   let currentInputLine = '';
+  let currentInputLineOverflowed = false;
   let submittedEchoLine: string | null = null;
   let submittedEchoCandidate = '';
   let alternateScreenActive = false;
   let pendingEscape = '';
+  let inputEchoSuppressLines = 0;
+  let inputEchoSuppressPendingLf = false;
 
-  const reset = () => {
+  const resetInputState = () => {
     pendingEcho = '';
     currentInputLine = '';
+    currentInputLineOverflowed = false;
     submittedEchoLine = null;
     submittedEchoCandidate = '';
+  };
+
+  const markInputEchoUncertain = (lineCount = 1) => {
+    resetInputState();
+    inputEchoSuppressPendingLf = false;
+    inputEchoSuppressLines = Math.max(inputEchoSuppressLines, Math.max(1, lineCount));
+  };
+
+  const reset = () => {
+    resetInputState();
     alternateScreenActive = false;
+    pendingEscape = '';
+    inputEchoSuppressLines = 0;
+    inputEchoSuppressPendingLf = false;
+  };
+
+  const resetPendingEscape = () => {
     pendingEscape = '';
   };
 
   const noteUserInput = (data: string) => {
     if (!data) return;
     const inputState = applyInputToLine(currentInputLine, data);
-    currentInputLine = inputState.line;
+    const inputLineOverflowed = currentInputLineOverflowed || inputState.line.length > MAX_PENDING_ECHO;
+    currentInputLine = inputState.line.slice(-MAX_PENDING_ECHO);
     if (inputState.submittedLine !== null) {
-      submittedEchoLine = inputState.submittedLine;
-      submittedEchoCandidate = '';
-      pendingEcho = '';
+      if (inputLineOverflowed || inputState.submittedLine.length > MAX_PENDING_ECHO) {
+        markInputEchoUncertain();
+      } else {
+        submittedEchoLine = inputState.submittedLine;
+        submittedEchoCandidate = '';
+        pendingEcho = '';
+      }
       return;
     }
+    currentInputLineOverflowed = inputLineOverflowed;
     pendingEcho = appendPendingEcho(pendingEcho, data);
   };
 
   const processServerChunk = (chunk: string) => {
-    const input = pendingEscape ? `${pendingEscape}${chunk}` : chunk;
+    let input = pendingEscape ? `${pendingEscape}${chunk}` : chunk;
     pendingEscape = '';
+    let alternateScreenAction: TerminalAlternateScreenAction | undefined;
+
+    const noteAlternateScreenSequence = (sequence: string) => {
+      if (!sequence.startsWith('\x1b[')) return;
+      const action = getTerminalAlternateScreenAction(sequence);
+      if (action === 'enter') {
+        alternateScreenActive = true;
+        pendingEcho = '';
+        alternateScreenAction = action;
+      } else if (action === 'leave') {
+        alternateScreenActive = false;
+        pendingEcho = '';
+        alternateScreenAction = action;
+      }
+    };
+
+    if (inputEchoSuppressLines > 0 || inputEchoSuppressPendingLf) {
+      const suppressed = consumeSuppressedEchoLines(
+        input,
+        inputEchoSuppressLines,
+      inputEchoSuppressPendingLf,
+      noteAlternateScreenSequence,
+      );
+      input = suppressed.input;
+      inputEchoSuppressLines = suppressed.lineCount;
+      inputEchoSuppressPendingLf = suppressed.pendingLf;
+      pendingEscape = suppressed.pendingEscape ?? '';
+      if (!input) {
+        return {
+          scannableText: '',
+          alternateScreenActive,
+          meta: {
+            rawLen: chunk.length,
+            dropReason: 'awaiting-submitted-echo',
+            submittedEchoLine: undefined,
+            submittedEchoCandidateLen: 0,
+            afterSubmittedLen: 0,
+            afterUserEchoLen: 0,
+            scannableLen: 0,
+            alternateScreenAction,
+          },
+        };
+      }
+      if (inputEchoSuppressLines > 0) {
+        return {
+          scannableText: '',
+          alternateScreenActive,
+          meta: {
+            rawLen: chunk.length,
+            dropReason: 'awaiting-submitted-echo',
+            submittedEchoLine: undefined,
+            submittedEchoCandidateLen: 0,
+            afterSubmittedLen: 0,
+            afterUserEchoLen: 0,
+            scannableLen: 0,
+            alternateScreenAction,
+          },
+        };
+      }
+    }
 
     const submitted = stripSubmittedLineEcho(submittedEchoLine, submittedEchoCandidate, input);
     submittedEchoLine = submitted.submittedLine;
@@ -322,16 +474,7 @@ export function createTerminalOutputTriggerFilter(): TerminalOutputTriggerFilter
         break;
       }
 
-      if (sequence.sequence.startsWith('\x1b[')) {
-        const alternateScreenAction = getAlternateScreenAction(sequence.sequence);
-        if (alternateScreenAction === 'enter') {
-          alternateScreenActive = true;
-          pendingEcho = '';
-        } else if (alternateScreenAction === 'leave') {
-          alternateScreenActive = false;
-          pendingEcho = '';
-        }
-      }
+      noteAlternateScreenSequence(sequence.sequence);
 
       index = sequence.end - 1;
     }
@@ -363,6 +506,7 @@ export function createTerminalOutputTriggerFilter(): TerminalOutputTriggerFilter
         afterSubmittedLen: submitted.filtered.length,
         afterUserEchoLen: filtered.length,
         scannableLen: scannableText.length,
+        alternateScreenAction,
       },
     };
   };
@@ -371,5 +515,8 @@ export function createTerminalOutputTriggerFilter(): TerminalOutputTriggerFilter
     noteUserInput,
     processServerChunk,
     reset,
+    resetInputState,
+    resetPendingEscape,
+    markInputEchoUncertain,
   };
 }

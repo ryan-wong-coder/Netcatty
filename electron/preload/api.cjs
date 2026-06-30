@@ -290,10 +290,11 @@ function createPreloadApi(ctx) {
     if (replayBacklog) {
       if (!displayDataListeners.has(sessionId)) displayDataListeners.set(sessionId, new Set());
       displayDataListeners.get(sessionId).add(cb);
-      const pendingData = terminalDataBacklog?.take?.(sessionId);
-      if (pendingData) {
+      const pendingEntry = terminalDataBacklog?.takeEntry?.(sessionId)
+        ?? { data: terminalDataBacklog?.take?.(sessionId) || "", meta: undefined };
+      if (pendingEntry.data) {
         try {
-          cb(pendingData);
+          cb(pendingEntry.data, pendingEntry.meta);
         } catch (err) {
           console.error("Data callback failed", err);
         }

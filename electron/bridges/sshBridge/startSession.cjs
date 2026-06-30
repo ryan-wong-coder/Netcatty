@@ -1,10 +1,14 @@
 /* eslint-disable no-undef */
 const { emitTerminalSessionData } = require("../emitTerminalSessionData.cjs");
 const {
+  setBufferedOutputBytes,
   shouldAcceptSessionOutput,
   shouldProcessSessionOutput,
 } = require("../terminalFlowAck.cjs");
-const { filterTerminalInterruptOutput } = require("../terminalInterruptOutputGate.cjs");
+const {
+  filterTerminalInterruptOutput,
+  takePendingInterruptOutputMeta,
+} = require("../terminalInterruptOutputGate.cjs");
 const {
   logTerminalInterruptDrainDropSample,
   logTerminalOutputDropSample,
@@ -112,18 +116,21 @@ function createStartSessionApi(ctx) {
       // cap still forces an immediate flush for bursts of output.
       const {
         bufferData,
-        flush: flushBuffer,
         flushPaced: flushBufferPaced,
-        takePending: takePendingBuffer,
+        takePendingEntry: takePendingBuffer,
         discard: discardBuffer,
-      } = createPtyOutputBuffer((data) => {
+      } = createPtyOutputBuffer((data, meta) => {
         const contents = event.sender;
         const current = sessions.get(sessionId);
         emitTerminalSessionData(contents, sessionId, data, {
           cols: current?.cols,
           rows: current?.rows,
+          meta,
         });
       }, {
+        onPendingBytesChange: (bytes) => {
+          if (sessions.get(sessionId) === session) setBufferedOutputBytes(session, bytes);
+        },
         shouldAcceptOutput: () => shouldAcceptSessionOutput(sessions.get(sessionId)),
       });
       session.flushPendingData = flushBufferPaced;
@@ -156,8 +163,9 @@ function createStartSessionApi(ctx) {
             });
           }
           if (!output.data) return;
+          const outputMeta = takePendingInterruptOutputMeta(session);
           trackSessionIdlePrompt(session, output.data);
-          bufferData(output.data);
+          bufferData(output.data, outputMeta);
           sessionLogStreamManager.appendData(sessionId, output.data);
         },
         writeToRemote(buf) {
@@ -253,7 +261,8 @@ function createStartSessionApi(ctx) {
           });
         }
         if (!output.data) return;
-        bufferData(output.data);
+        const outputMeta = takePendingInterruptOutputMeta(currentSession);
+        bufferData(output.data, outputMeta);
         sessionLogStreamManager.appendData(sessionId, output.data);
       });
 
@@ -271,6 +280,7 @@ function createStartSessionApi(ctx) {
         streamExited = typeof code === "number" && !signal;
       });
 
+      let closeFinalized = false;
       stream.on("close", () => {
         log("shell stream closed", {
           sessionId,
@@ -280,45 +290,47 @@ function createStartSessionApi(ctx) {
           reused: !!isReused,
           transportError: sessions.get(sessionId)?._transportError,
         });
-        // Always flush buffered data regardless of session state.
-        // flushBuffer() cancels any pending scheduled flush internally.
-        flushBuffer();
-        sessionLogStreamManager.stopStream(sessionId, logStreamToken);
-        if (detachX11Forwarding) {
-          detachX11Forwarding();
-          detachX11Forwarding = null;
-        }
-
-        // Only send exit if session hasn't already been cleaned up by
-        // conn.once("close") — which fires before stream.on("close")
-        // in ssh2 when the transport drops.
-        if (sessions.has(sessionId)) {
-          const contents = event.sender;
-          const liveSession = sessions.get(sessionId);
-          const transportError = liveSession?._transportError;
-          if (transportError) {
-            safeSend(contents, "netcatty:exit", { sessionId, exitCode: 1, error: transportError, reason: "error" });
-          } else {
-            // A shell TMOUT auto-logout is a clean exit (numeric code, no
-            // signal) — identical to a user-typed `exit` by code/signal —
-            // so detect it via the banner the shell prints just before
-            // exiting and report it as a timeout. That keeps the tab open
-            // for reconnect instead of auto-closing it (#1062 / #977).
-            const idleTimedOut = streamExited && looksLikeIdleAutoLogout(liveSession?._promptTrackTail);
-            const reason = idleTimedOut ? "timeout" : (streamExited ? "exited" : "closed");
-            safeSend(contents, "netcatty:exit", { sessionId, exitCode: streamExitCode, reason });
+        const finalizeClose = () => {
+          if (closeFinalized) return;
+          closeFinalized = true;
+          sessionLogStreamManager.stopStream(sessionId, logStreamToken);
+          if (detachX11Forwarding) {
+            detachX11Forwarding();
+            detachX11Forwarding = null;
           }
-          liveSession?.zmodemSentry?.cancel();
-          // Release this channel's hold on the shared connection. The transport
-          // (and any jump-host chain) is only ended once the last channel is
-          // gone, so closing a reused tab — or the original tab while a copy is
-          // still open — leaves the siblings connected.
-          releaseConnectionRef(liveSession);
-          closeTerminalOutputSession?.(sessionId);
-          sessions.delete(sessionId);
-          sessionEncodings.delete(sessionId);
-          sessionDecoders.delete(sessionId);
-        }
+
+          // Only send exit if session hasn't already been cleaned up by
+          // conn.once("close") — which fires before stream.on("close")
+          // in ssh2 when the transport drops.
+          if (sessions.has(sessionId)) {
+            const contents = event.sender;
+            const liveSession = sessions.get(sessionId);
+            const transportError = liveSession?._transportError;
+            if (transportError) {
+              safeSend(contents, "netcatty:exit", { sessionId, exitCode: 1, error: transportError, reason: "error" });
+            } else {
+              // A shell TMOUT auto-logout is a clean exit (numeric code, no
+              // signal) — identical to a user-typed `exit` by code/signal —
+              // so detect it via the banner the shell prints just before
+              // exiting and report it as a timeout. That keeps the tab open
+              // for reconnect instead of auto-closing it (#1062 / #977).
+              const idleTimedOut = streamExited && looksLikeIdleAutoLogout(liveSession?._promptTrackTail);
+              const reason = idleTimedOut ? "timeout" : (streamExited ? "exited" : "closed");
+              safeSend(contents, "netcatty:exit", { sessionId, exitCode: streamExitCode, reason });
+            }
+            liveSession?.zmodemSentry?.cancel();
+            // Release this channel's hold on the shared connection. The transport
+            // (and any jump-host chain) is only ended once the last channel is
+            // gone, so closing a reused tab — or the original tab while a copy is
+            // still open — leaves the siblings connected.
+            releaseConnectionRef(liveSession);
+            closeTerminalOutputSession?.(sessionId);
+            sessions.delete(sessionId);
+            sessionEncodings.delete(sessionId);
+            sessionDecoders.delete(sessionId);
+          }
+        };
+        flushBufferPaced(finalizeClose);
       });
 
       // Pre-seed encoding from host charset if it's a GB variant. Seed BOTH the

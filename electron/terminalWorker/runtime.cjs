@@ -47,11 +47,11 @@ function createOutputPortRegistry(parentPort) {
     }
   }
 
-  function post(sessionId, data) {
+  function post(sessionId, data, meta) {
     const port = outputPorts.get(sessionId);
     if (!port) return false;
     try {
-      port.postMessage({ sessionId, data });
+      port.postMessage(meta ? { sessionId, data, meta } : { sessionId, data });
       return true;
     } catch {
       closeSession(sessionId);
@@ -69,15 +69,19 @@ function createOutputPortRegistry(parentPort) {
       // Some Electron MessagePort implementations do not require start().
     }
     for (const chunk of bufferedOutput || []) {
-      post(sessionId, chunk);
+      const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
+      const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
+      post(sessionId, data, meta);
     }
     parentPort.postMessage({ kind: "output-port-ready", sessionId });
   }
 
   function flush(sessionId, chunks = []) {
     for (const chunk of chunks || []) {
-      if (!post(sessionId, chunk)) {
-        parentPort.postMessage({ kind: "output", sessionId, data: chunk });
+      const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
+      const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
+      if (!post(sessionId, data, meta)) {
+        parentPort.postMessage(meta ? { kind: "output", sessionId, data, meta } : { kind: "output", sessionId, data });
       }
     }
   }
@@ -149,19 +153,23 @@ function createSender(parentPort, webContentsId, outputPorts) {
     },
     send(channel, payload) {
       if (channel === "netcatty:data") {
-        parentPort.postMessage({
+        const tapMessage = {
           kind: "output-tap",
           sessionId: payload?.sessionId,
           data: payload?.data,
-        });
-        if (outputPorts?.post?.(payload?.sessionId, payload?.data)) {
+        };
+        if (payload?.meta) tapMessage.meta = payload.meta;
+        parentPort.postMessage(tapMessage);
+        if (outputPorts?.post?.(payload?.sessionId, payload?.data, payload?.meta)) {
           return;
         }
-        parentPort.postMessage({
+        const outputMessage = {
           kind: "output",
           sessionId: payload?.sessionId,
           data: payload?.data,
-        });
+        };
+        if (payload?.meta) outputMessage.meta = payload.meta;
+        parentPort.postMessage(outputMessage);
         return;
       }
       if (channel === "netcatty:exit" && payload?.sessionId) {

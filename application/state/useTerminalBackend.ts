@@ -124,7 +124,7 @@ export const useTerminalBackend = () => {
 
   const onSessionData = useCallback((
     sessionId: string,
-    cb: (data: string) => void,
+    cb: Parameters<NetcattyBridge["onSessionData"]>[1],
     options?: Parameters<NetcattyBridge["onSessionData"]>[2],
   ) => {
     const bridge = netcattyBridge.get();

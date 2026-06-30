@@ -18,11 +18,13 @@ function createWorkerSender(parentPort, webContentsId) {
     },
     send(channel, payload) {
       if (channel === "netcatty:data") {
-        parentPort.postMessage({
+        const message = {
           kind: "output",
           sessionId: payload?.sessionId,
           data: payload?.data,
-        });
+        };
+        if (payload?.meta) message.meta = payload.meta;
+        parentPort.postMessage(message);
         return;
       }
       parentPort.postMessage({

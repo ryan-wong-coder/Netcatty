@@ -157,6 +157,42 @@ test("abortTerminalWriteQueue cancels remaining merged writes while one is in fl
   assert.deepEqual(dropped, [MAX_WRITE_QUEUE_ITEMS * 10]);
 });
 
+test("aborted yield timers do not clear a replacement write queue", async () => {
+  const term = createFakeTerm();
+  const order: string[] = [];
+  let releaseReplacement: (() => void) | null = null;
+
+  for (let index = 0; index < MAX_WRITE_QUEUE_ITEMS + 1; index += 1) {
+    enqueueTerminalWrite(
+      term,
+      10,
+      (done) => {
+        order.push(`old-${index}`);
+        done();
+      },
+      { deferStart: true, yieldAfter: true },
+    );
+  }
+
+  await waitForQueuedWriteYield();
+  assert.deepEqual(order, ["old-0"]);
+  abortTerminalWriteQueue(term);
+
+  enqueueTerminalWrite(term, 10, (done) => {
+    order.push("replacement-active");
+    releaseReplacement = done;
+  });
+  await waitForQueuedWriteYield();
+  enqueueTerminalWrite(term, 10, (done) => {
+    order.push("replacement-pending");
+    done();
+  });
+
+  assert.deepEqual(order, ["old-0", "replacement-active"]);
+  releaseReplacement?.();
+  assert.deepEqual(order, ["old-0", "replacement-active", "replacement-pending"]);
+});
+
 test("merges passive flood backlog items without dropping output", async () => {
   const term = createFakeTerm();
   const dropped: number[] = [];

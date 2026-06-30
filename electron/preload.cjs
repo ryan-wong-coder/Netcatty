@@ -68,8 +68,27 @@ function cleanupTransferListeners(transferId) {
 // chunk, then filter complete lines that contain the marker.
 
 const _mcpLineBufs = new Map(); // sessionId -> trailing fragment string
+const _mcpLineMetas = new Map(); // sessionId -> trailing fragment metadata
+const _mcpPendingMetas = new Map(); // sessionId -> metadata from filtered-empty chunks
 const _mcpFlushTimers = new Map(); // sessionId -> delayed-flush timer
 const _mcpDroppingWrappedLine = new Set(); // sessionIds with a split marker echo line in progress
+
+function mergeTerminalDataMeta(first, second) {
+  const droppedOutputMayAffectTerminalState = Boolean(
+    first?.droppedOutputMayAffectTerminalState
+    || second?.droppedOutputMayAffectTerminalState
+  );
+  const droppedOutputAlternateScreenAction = second?.droppedOutputMayAffectTerminalState
+    ? second?.droppedOutputAlternateScreenAction
+    : (second?.droppedOutputAlternateScreenAction ?? first?.droppedOutputAlternateScreenAction);
+  if (!droppedOutputMayAffectTerminalState && !droppedOutputAlternateScreenAction) {
+    return undefined;
+  }
+  return {
+    ...(droppedOutputMayAffectTerminalState ? { droppedOutputMayAffectTerminalState: true } : {}),
+    ...(droppedOutputAlternateScreenAction ? { droppedOutputAlternateScreenAction } : {}),
+  };
+}
 
 // Returns true if `s` ends with a non-empty prefix of "__NCMCP_"
 // (i.e. the next chunk might complete it into a marker-containing line).
@@ -81,7 +100,7 @@ function _endsWithMarkerPrefix(s) {
   return false;
 }
 
-function filterMcpChunk(sessionId, chunk) {
+function filterMcpChunk(sessionId, chunk, meta) {
   // Cancel any pending delayed flush — new data arrived
   const pendingTimer = _mcpFlushTimers.get(sessionId);
   if (pendingTimer) {
@@ -91,12 +110,17 @@ function filterMcpChunk(sessionId, chunk) {
 
   // Prepend any buffered fragment from the previous chunk
   const held = _mcpLineBufs.get(sessionId) || "";
+  const heldMeta = _mcpLineMetas.get(sessionId);
+  const pendingMeta = _mcpPendingMetas.get(sessionId);
+  const combinedMeta = mergeTerminalDataMeta(mergeTerminalDataMeta(pendingMeta, heldMeta), meta);
   const data = held + chunk;
   _mcpLineBufs.delete(sessionId);
+  _mcpLineMetas.delete(sessionId);
+  _mcpPendingMetas.delete(sessionId);
 
   // Fast path: nothing suspicious in the combined data
   if (!_mcpDroppingWrappedLine.has(sessionId) && !data.includes("__NCMCP_") && !_endsWithMarkerPrefix(data)) {
-    return data;
+    return { data, meta: combinedMeta };
   }
 
   // Slow path: scan line by line
@@ -114,6 +138,7 @@ function filterMcpChunk(sessionId, chunk) {
       const tail = data.slice(pos);
       if (droppedAny || tail.includes("__NCMCP_") || _endsWithMarkerPrefix(tail)) {
         _mcpLineBufs.set(sessionId, tail);
+        if (combinedMeta) _mcpLineMetas.set(sessionId, combinedMeta);
         if (droppedAny) _mcpDroppingWrappedLine.add(sessionId);
       } else {
         result += tail; // safe to display immediately
@@ -130,7 +155,7 @@ function filterMcpChunk(sessionId, chunk) {
     pos = nlIdx + 1;
   }
 
-  return result;
+  return { data: result, meta: combinedMeta };
 }
 
 /**
@@ -148,13 +173,19 @@ function scheduleMcpBufferedFlush(sessionId) {
   if (!_mcpLineBufs.has(sessionId)) return;
   _mcpFlushTimers.set(sessionId, setTimeout(() => {
     const held = _mcpLineBufs.get(sessionId);
+    const heldMeta = _mcpLineMetas.get(sessionId);
     _mcpLineBufs.delete(sessionId);
+    _mcpLineMetas.delete(sessionId);
     _mcpFlushTimers.delete(sessionId);
     if (_mcpDroppingWrappedLine.has(sessionId)) {
       _mcpDroppingWrappedLine.delete(sessionId);
+      if (heldMeta) _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), heldMeta));
       return;
     }
-    if (held) _deliverToListeners(sessionId, held);
+    if (held) {
+      _deliverToListeners(sessionId, held, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), heldMeta));
+      _mcpPendingMetas.delete(sessionId);
+    }
   }, 80));
 }
 
@@ -162,12 +193,14 @@ function deliverTerminalData(sessionId, data, options = {}) {
   if (!sessionId || !data) return;
   if (closedTerminalDataSessions.has(sessionId)) return;
   if (options.syntheticEcho) {
-    _deliverToListeners(sessionId, data);
+    _deliverToListeners(sessionId, data, options.meta);
     return;
   }
-  const filtered = filterMcpChunk(sessionId, data);
-  if (filtered) {
-    _deliverToListeners(sessionId, filtered);
+  const filtered = filterMcpChunk(sessionId, data, options.meta);
+  if (filtered?.data) {
+    _deliverToListeners(sessionId, filtered.data, filtered.meta);
+  } else if (filtered?.meta) {
+    _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), filtered.meta));
   }
   // If there is buffered content waiting for more data (e.g. a prompt
   // right after a dropped marker line), schedule a delayed flush so it
@@ -180,7 +213,10 @@ const terminalOutputPorts = createTerminalOutputPortRegistry({
   deliverToListeners: _deliverToListeners,
   filterData(sessionId, data, message) {
     if (message?.syntheticEcho) return data;
-    const filtered = filterMcpChunk(sessionId, data);
+    const filtered = filterMcpChunk(sessionId, data, message.meta);
+    if (!filtered?.data && filtered?.meta) {
+      _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), filtered.meta));
+    }
     scheduleMcpBufferedFlush(sessionId);
     return filtered;
   },
@@ -236,6 +272,7 @@ ipcRenderer.on("netcatty:zmodem:overwrite-request", (_event, payload) => {
 ipcRenderer.on("netcatty:data", (_event, payload) => {
   deliverTerminalData(payload?.sessionId, payload?.data, {
     syntheticEcho: payload?.syntheticEcho,
+    meta: payload?.meta,
   });
 });
 
@@ -267,6 +304,8 @@ ipcRenderer.on("netcatty:exit", (_event, payload) => {
     _mcpFlushTimers.delete(sessionId);
   }
   _mcpLineBufs.delete(sessionId); // clean up any held fragment
+  _mcpLineMetas.delete(sessionId);
+  _mcpPendingMetas.delete(sessionId);
   _mcpDroppingWrappedLine.delete(sessionId);
 });
 

@@ -14,8 +14,18 @@ function ensureFlowState(session) {
     session.flowState = {
       rendererPaused: false,
       unackedBytes: 0,
+      bufferedBytes: 0,
       appliedPause: false,
+      outputPaused: false,
     };
+  }
+  const state = session.flowState;
+  state.rendererPaused = Boolean(state.rendererPaused);
+  state.unackedBytes = Number.isFinite(state.unackedBytes) ? Math.max(0, state.unackedBytes) : 0;
+  state.bufferedBytes = Number.isFinite(state.bufferedBytes) ? Math.max(0, state.bufferedBytes) : 0;
+  state.appliedPause = Boolean(state.appliedPause);
+  if (typeof state.outputPaused !== "boolean") {
+    state.outputPaused = state.appliedPause && (state.rendererPaused || state.unackedBytes >= FLOW_HIGH_WATER_MARK);
   }
   return session.flowState;
 }
@@ -46,8 +56,15 @@ function reconcileSessionFlow(session) {
   const target = getFlowTarget(session);
   if (!target) return;
 
-  const shouldPause = state.rendererPaused || state.unackedBytes >= FLOW_HIGH_WATER_MARK;
-  const shouldResume = !state.rendererPaused && state.unackedBytes <= FLOW_LOW_WATER_MARK;
+  if (!state.outputPaused && (state.rendererPaused || state.unackedBytes >= FLOW_HIGH_WATER_MARK)) {
+    state.outputPaused = true;
+  } else if (state.outputPaused && !state.rendererPaused && state.unackedBytes <= FLOW_LOW_WATER_MARK) {
+    state.outputPaused = false;
+  }
+
+  const pendingBytes = state.unackedBytes + state.bufferedBytes;
+  const shouldPause = state.outputPaused || pendingBytes >= FLOW_HIGH_WATER_MARK;
+  const shouldResume = !state.outputPaused && pendingBytes <= FLOW_LOW_WATER_MARK;
 
   if (!state.appliedPause && shouldPause) {
     applyPause(session, target);
@@ -82,10 +99,17 @@ function trackAck(session, bytes) {
   reconcileSessionFlow(session);
 }
 
+function setBufferedOutputBytes(session, bytes) {
+  if (!session) return;
+  const state = ensureFlowState(session);
+  state.bufferedBytes = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
+  reconcileSessionFlow(session);
+}
+
 function shouldAcceptSessionOutput(session) {
   if (!session) return true;
   const state = ensureFlowState(session);
-  return !state.appliedPause;
+  return !state.outputPaused;
 }
 
 function isTransferSentryActive(transferSentry) {
@@ -109,7 +133,9 @@ function clearSessionFlowState(session, options = {}) {
   session.flowState = {
     rendererPaused: false,
     unackedBytes: 0,
+    bufferedBytes: 0,
     appliedPause: false,
+    outputPaused: false,
   };
 }
 
@@ -117,6 +143,7 @@ module.exports = {
   FLOW_HIGH_WATER_MARK,
   FLOW_LOW_WATER_MARK,
   setRendererFlowPaused,
+  setBufferedOutputBytes,
   trackEmitted,
   trackAck,
   shouldAcceptSessionOutput,

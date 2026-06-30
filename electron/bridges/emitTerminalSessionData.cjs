@@ -18,7 +18,7 @@ function addTerminalDataTap(listener) {
   return () => dataTaps.delete(listener);
 }
 
-function emitTerminalSessionData(contents, sessionId, data) {
+function emitTerminalSessionData(contents, sessionId, data, options = {}) {
   if (getSession && sessionId && data) {
     const session = getSession(sessionId);
     if (session) {
@@ -34,8 +34,9 @@ function emitTerminalSessionData(contents, sessionId, data) {
       }
     }
   }
-  if (outputChannel?.send?.(sessionId, data)) return;
-  contents?.send("netcatty:data", { sessionId, data });
+  const meta = options?.meta;
+  if (outputChannel?.send?.(sessionId, data, meta)) return;
+  contents?.send("netcatty:data", meta ? { sessionId, data, meta } : { sessionId, data });
 }
 
 module.exports = {

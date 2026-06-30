@@ -98,7 +98,11 @@ import { createConnectionLogBuffer } from "./terminal/connectionLogBuffer";
 import { createProgrammaticCommandLogRewriter, type ProgrammaticCommandLogRewrite } from "./terminal/programmaticCommandLog";
 import { getSessionLogInitialLine } from "./terminal/sessionLogInitialLine";
 import { useZmodemTransfer } from "./terminal/hooks/useZmodemTransfer";
-import { createTerminalSessionStarters, type PendingAuth } from "./terminal/runtime/createTerminalSessionStarters";
+import {
+  createTerminalSessionStarters,
+  type PendingAuth,
+  type TerminalSessionDataMeta,
+} from "./terminal/runtime/createTerminalSessionStarters";
 import { createXTermRuntime, type XTermRuntime } from "./terminal/runtime/createXTermRuntime";
 import { applyUserCursorPreference } from "./terminal/runtime/cursorPreference";
 import { terminalAltKeyOptions } from "./terminal/runtime/altKeyOptions";
@@ -1370,18 +1374,18 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     },
     onTerminalDataCapture: handleTerminalDataCaptureOnce,
     onTerminalOutput: onTerminalOutput
-      ? (chunk: string) => {
+      ? (chunk: string, meta?: TerminalSessionDataMeta) => {
           if (/password|passphrase|口令/i.test(chunk)) {
             passwordPromptActiveRef.current = true;
           }
-          appendOutputTriggerOutputRef.current(chunk);
+          appendOutputTriggerOutputRef.current(chunk, meta);
           onTerminalOutput(sessionId, chunk);
         }
-      : (chunk: string) => {
+      : (chunk: string, meta?: TerminalSessionDataMeta) => {
           if (/password|passphrase|口令/i.test(chunk)) {
             passwordPromptActiveRef.current = true;
           }
-          appendOutputTriggerOutputRef.current(chunk);
+          appendOutputTriggerOutputRef.current(chunk, meta);
         },
     onTerminalLogData: captureTerminalLogData,
     onProgrammaticCommandLogRewrite: queueProgrammaticCommandLogRewrite,

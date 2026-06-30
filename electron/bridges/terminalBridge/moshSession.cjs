@@ -1,6 +1,7 @@
 /* eslint-disable no-undef */
 const { emitTerminalSessionData } = require("../emitTerminalSessionData.cjs");
 const {
+  setBufferedOutputBytes,
   shouldAcceptSessionOutput,
   shouldProcessSessionOutput,
 } = require("../terminalFlowAck.cjs");
@@ -444,13 +445,15 @@ function createMoshSessionApi(ctx) {
         flush,
         flushPaced,
         discard,
-      } = createPtyOutputBuffer((data) => {
+      } = createPtyOutputBuffer((data, meta) => {
         const contents = electronModule.webContents.fromId(session.webContentsId);
         emitTerminalSessionData(contents, sessionId, data, {
           cols: session.cols,
           rows: session.rows,
+          meta,
         });
       }, {
+        onPendingBytesChange: (bytes) => setBufferedOutputBytes(session, bytes),
         shouldAcceptOutput: () => shouldAcceptSessionOutput(session),
       });
       session.flushPendingData = flushPaced;
@@ -495,19 +498,21 @@ function createMoshSessionApi(ctx) {
               parsed: session.moshHandshakeResult,
               bufferData,
               flush,
+              flushPaced,
               sessionId,
             });
           } catch (err) {
-            flush();
-            sessionLogStreamManager.stopStream(sessionId, logStreamToken);
-            const contents = electronModule.webContents.fromId(session.webContentsId);
-            contents?.send("netcatty:exit", {
-              sessionId,
-              reason: "error",
-              error: `Failed to spawn mosh-client: ${err.message}`,
+            flushPaced(() => {
+              sessionLogStreamManager.stopStream(sessionId, logStreamToken);
+              const contents = electronModule.webContents.fromId(session.webContentsId);
+              contents?.send("netcatty:exit", {
+                sessionId,
+                reason: "error",
+                error: `Failed to spawn mosh-client: ${err.message}`,
+              });
+              closeTerminalOutputSession?.(sessionId);
+              sessions.delete(sessionId);
             });
-            closeTerminalOutputSession?.(sessionId);
-            sessions.delete(sessionId);
           }
           return;
         }
@@ -516,17 +521,18 @@ function createMoshSessionApi(ctx) {
         // The user has already seen the failure output (auth error, host
         // key warning, etc). Just surface a session-exit with the code so
         // the renderer can label the session "disconnected".
-        flush();
-        sessionLogStreamManager.stopStream(sessionId, logStreamToken);
-        const contents = electronModule.webContents.fromId(session.webContentsId);
-        contents?.send("netcatty:exit", {
-          sessionId,
-          exitCode,
-          signal,
-          reason: "error",
+        flushPaced(() => {
+          sessionLogStreamManager.stopStream(sessionId, logStreamToken);
+          const contents = electronModule.webContents.fromId(session.webContentsId);
+          contents?.send("netcatty:exit", {
+            sessionId,
+            exitCode,
+            signal,
+            reason: "error",
+          });
+          closeTerminalOutputSession?.(sessionId);
+          sessions.delete(sessionId);
         });
-        closeTerminalOutputSession?.(sessionId);
-        sessions.delete(sessionId);
       });
     
       return { sessionId };
@@ -539,7 +545,7 @@ function createMoshSessionApi(ctx) {
      * sentry whose writeToRemote closure captured the previous handle.
      */
     function swapToMoshClient(session, options, ctx) {
-      const { bareClient, optionsEnv, lang, parsed, bufferData, flush, sessionId } = ctx;
+      const { bareClient, optionsEnv, lang, parsed, bufferData, flush, flushPaced, sessionId } = ctx;
     
       const env = moshHandshake.buildMoshClientEnv({
         baseEnv: { ...process.env, ...optionsEnv, TERM: "xterm-256color" },
@@ -654,17 +660,18 @@ function createMoshSessionApi(ctx) {
         // #1198) if one was opened — it lives on moshStatsConn and outlives
         // the mosh-client PTY otherwise.
         try { session.moshStatsConn?.end(); } catch { /* ignore */ }
-        flush();
-        sessionLogStreamManager.stopStream(sessionId, session.logStreamToken);
-        const contents = electronModule.webContents.fromId(session.webContentsId);
-        contents?.send("netcatty:exit", {
-          sessionId,
-          exitCode,
-          signal,
-          reason: exitCode !== 0 ? "error" : "exited",
+        flushPaced(() => {
+          sessionLogStreamManager.stopStream(sessionId, session.logStreamToken);
+          const contents = electronModule.webContents.fromId(session.webContentsId);
+          contents?.send("netcatty:exit", {
+            sessionId,
+            exitCode,
+            signal,
+            reason: exitCode !== 0 ? "error" : "exited",
+          });
+          closeTerminalOutputSession?.(sessionId);
+          sessions.delete(sessionId);
         });
-        closeTerminalOutputSession?.(sessionId);
-        sessions.delete(sessionId);
       });
     }
     

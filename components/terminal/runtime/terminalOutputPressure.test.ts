@@ -30,6 +30,21 @@ test("tracks long unbroken terminal output pressure until a line break arrives",
   resetTerminalOutputPressure(term);
 });
 
+test("reports newline-terminated long terminal lines as long-line pressure", () => {
+  const term = createFakeTerm();
+
+  noteTerminalOutputPressureData(term, `${"x".repeat(TERMINAL_LONG_LINE_PRESSURE_BYTES)}\n`);
+  assert.equal(getTerminalOutputPressure(term).longLine, true);
+  assert.equal(getTerminalOutputPressure(term).mode, "long-line");
+  assert.equal(getTerminalOutputPressure(term).consecutiveUnbrokenBytes, 0);
+
+  noteTerminalOutputPressureData(term, "short\n");
+  assert.equal(getTerminalOutputPressure(term).longLine, false);
+  assert.equal(getTerminalOutputPressure(term).mode, "normal");
+
+  resetTerminalOutputPressure(term);
+});
+
 test("reports background pressure separately from output volume", () => {
   const term = createFakeTerm();
 

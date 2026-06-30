@@ -47,7 +47,7 @@ export type TerminalBackendApi = {
   }>;
   onSessionData: (
     sessionId: string,
-    cb: (data: string) => void,
+    cb: (data: string, meta?: TerminalSessionDataMeta) => void,
     options?: { replayBacklog?: boolean },
   ) => () => void;
   onSessionExit: (
@@ -165,7 +165,7 @@ export type TerminalSessionStartersContext = {
   onTerminalDataCapture?: (sessionId: string, data: string) => void;
   onTerminalLogData?: (data: string) => void;
   onProgrammaticCommandLogRewrite?: (rewrite: ProgrammaticCommandLogRewrite) => void;
-  onTerminalOutput?: (chunk: string) => void;
+  onTerminalOutput?: (chunk: string, meta?: TerminalSessionDataMeta) => void;
   onOsDetected?: (hostId: string, distro: string) => void;
   onCommandExecuted?: (
     command: string,
@@ -179,4 +179,9 @@ export type TerminalSessionStartersContext = {
     hostLabel: string,
     sessionId: string,
   ) => void;
+};
+
+export type TerminalSessionDataMeta = {
+  droppedOutputMayAffectTerminalState?: boolean;
+  droppedOutputAlternateScreenAction?: 'enter' | 'leave';
 };

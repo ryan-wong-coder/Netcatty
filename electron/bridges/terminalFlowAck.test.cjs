@@ -6,6 +6,7 @@ const {
   FLOW_HIGH_WATER_MARK,
   FLOW_LOW_WATER_MARK,
   clearSessionFlowState,
+  setBufferedOutputBytes,
   setRendererFlowPaused,
   shouldAcceptSessionOutput,
   shouldProcessSessionOutput,
@@ -78,11 +79,26 @@ test("renderer pause flag keeps the stream paused until cleared", () => {
   assert.deepEqual(session._calls, ["pause", "resume"]);
 });
 
+test("buffered output pressure pauses the source while still allowing paced drain", () => {
+  const session = makeSession();
+  setBufferedOutputBytes(session, FLOW_HIGH_WATER_MARK);
+
+  assert.deepEqual(session._calls, ["pause"]);
+  assert.equal(shouldAcceptSessionOutput(session), true);
+
+  setBufferedOutputBytes(session, FLOW_LOW_WATER_MARK + 1);
+  assert.deepEqual(session._calls, ["pause"]);
+
+  setBufferedOutputBytes(session, FLOW_LOW_WATER_MARK);
+  assert.deepEqual(session._calls, ["pause", "resume"]);
+});
+
 test("clearSessionFlowState resumes and resets counters", () => {
   const session = makeSession();
   trackEmitted(session, FLOW_HIGH_WATER_MARK);
   clearSessionFlowState(session);
   assert.deepEqual(session._calls, ["pause", "resume"]);
   assert.equal(session.flowState.unackedBytes, 0);
+  assert.equal(session.flowState.bufferedBytes, 0);
   assert.equal(session.flowState.rendererPaused, false);
 });

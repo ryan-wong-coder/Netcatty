@@ -79,7 +79,9 @@ const scheduleNextTerminalWrite = (term: XTerm, queue: TerminalWriteQueue) => {
     queue.writing = false;
     queue.drainBytes = 0;
     queue.floodMode = false;
-    terminalWriteQueues.delete(term);
+    if (terminalWriteQueues.get(term) === queue) {
+      terminalWriteQueues.delete(term);
+    }
     return;
   }
   if (
@@ -97,6 +99,9 @@ const scheduleNextTerminalWrite = (term: XTerm, queue: TerminalWriteQueue) => {
   queue.writing = true;
   queue.active = next;
   runQueuedWrite(next, () => {
+    if (queue.active !== next) {
+      return;
+    }
     queue.drainBytes += next.bytes;
     if (queue.active === next) {
       queue.active = undefined;

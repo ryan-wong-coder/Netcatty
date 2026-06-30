@@ -205,6 +205,44 @@ function disarmTerminalInterruptOutputGate(session) {
   }
 }
 
+function mergeInterruptOutputMeta(first, second) {
+  const droppedOutputMayAffectTerminalState = Boolean(
+    first?.droppedOutputMayAffectTerminalState
+    || second?.droppedOutputMayAffectTerminalState
+  );
+  const droppedOutputAlternateScreenAction = second?.droppedOutputMayAffectTerminalState
+    ? second?.droppedOutputAlternateScreenAction
+    : (second?.droppedOutputAlternateScreenAction ?? first?.droppedOutputAlternateScreenAction);
+  if (!droppedOutputMayAffectTerminalState && !droppedOutputAlternateScreenAction) {
+    return undefined;
+  }
+  return {
+    ...(droppedOutputMayAffectTerminalState ? { droppedOutputMayAffectTerminalState: true } : {}),
+    ...(droppedOutputAlternateScreenAction ? { droppedOutputAlternateScreenAction } : {}),
+  };
+}
+
+function stashPendingInterruptOutputMeta(session, meta) {
+  if (!session || !meta) return;
+  session._pendingInterruptOutputMeta = mergeInterruptOutputMeta(
+    session._pendingInterruptOutputMeta,
+    meta,
+  );
+}
+
+function takePendingInterruptOutputMeta(session, meta) {
+  if (!session) return meta;
+  const pending = session._pendingInterruptOutputMeta;
+  delete session._pendingInterruptOutputMeta;
+  return mergeInterruptOutputMeta(pending, meta);
+}
+
+function clearPendingInterruptOutputMeta(session) {
+  if (session) {
+    delete session._pendingInterruptOutputMeta;
+  }
+}
+
 function filterTerminalInterruptOutput(session, data, options = {}) {
   const gate = session?._interruptOutputGate;
   const text = String(data || "");
@@ -329,7 +367,10 @@ function filterTerminalInterruptOutput(session, data, options = {}) {
 
 module.exports = {
   armTerminalInterruptOutputGate,
+  clearPendingInterruptOutputMeta,
   disarmTerminalInterruptOutputGate,
   filterTerminalInterruptOutput,
   shouldArmTerminalInterruptOutputGate,
+  stashPendingInterruptOutputMeta,
+  takePendingInterruptOutputMeta,
 };

@@ -392,7 +392,7 @@ export const attachSessionToTerminal = (
 
   ctx.disposeDataRef.current = ctx.terminalBackend.onSessionData(
     id,
-    (chunk) => {
+    (chunk, meta) => {
       const filtered = filterTerminalInterruptDisplayOutput(term, chunk);
       acknowledgeDroppedTerminalDisplayBytes(ctx, filtered.droppedBytes);
       if (!filtered.accepted) return;
@@ -404,7 +404,7 @@ export const attachSessionToTerminal = (
       }
       data = sudoAutofill?.handleOutput(data) ?? data;
       writeSessionData(ctx, term, data, ingressBytes);
-      ctx.onTerminalOutput?.(data);
+      ctx.onTerminalOutput?.(data, meta);
       if (!ctx.hasConnectedRef.current) {
         ctx.updateStatus("connected");
         opts?.onConnected?.();

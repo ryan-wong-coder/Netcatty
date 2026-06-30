@@ -63,16 +63,28 @@ const splitIngressBytes = (
 const isPlainTerminalOutput = (data: string): boolean =>
   !data.includes("\x1b") && !data.includes("\x9b");
 
-const hasLineBreak = (data: string): boolean =>
-  data.includes("\n") || data.includes("\r");
+const hasLongUnbrokenRun = (data: string, maxRunBytes: number): boolean => {
+  let runBytes = 0;
+  for (let index = 0; index < data.length; index += 1) {
+    const char = data[index];
+    if (char === "\n" || char === "\r") {
+      runBytes = 0;
+      continue;
+    }
+    runBytes += 1;
+    if (runBytes > maxRunBytes) {
+      return true;
+    }
+  }
+  return false;
+};
 
 const resolveTerminalWriteBatchBytes = (
   data: string,
   maxPendingBytes: number,
 ): number => (
-  data.length > MAX_TERMINAL_UNBROKEN_WRITE_CHUNK_BYTES
-    && isPlainTerminalOutput(data)
-    && !hasLineBreak(data)
+  isPlainTerminalOutput(data)
+    && hasLongUnbrokenRun(data, MAX_TERMINAL_UNBROKEN_WRITE_CHUNK_BYTES)
     ? MAX_TERMINAL_UNBROKEN_WRITE_CHUNK_BYTES
     : data.length > MAX_TERMINAL_PLAIN_WRITE_CHUNK_BYTES && isPlainTerminalOutput(data)
       ? MAX_TERMINAL_PLAIN_WRITE_CHUNK_BYTES

@@ -54,3 +54,37 @@ test("emitTerminalSessionData falls back to netcatty:data without an output port
   ]);
   configureTerminalSessionDataEmitter({});
 });
+
+test("emitTerminalSessionData forwards terminal output metadata", () => {
+  const sent = [];
+  const outputChannel = {
+    send() {
+      return false;
+    },
+  };
+  const contents = {
+    send(channel, payload) {
+      sent.push({ channel, payload });
+    },
+  };
+  configureTerminalSessionDataEmitter({
+    outputChannel,
+    getSession: () => null,
+  });
+
+  emitTerminalSessionData(contents, "session-1", "hello", {
+    meta: { droppedOutputMayAffectTerminalState: true },
+  });
+
+  assert.deepEqual(sent, [
+    {
+      channel: "netcatty:data",
+      payload: {
+        sessionId: "session-1",
+        data: "hello",
+        meta: { droppedOutputMayAffectTerminalState: true },
+      },
+    },
+  ]);
+  configureTerminalSessionDataEmitter({});
+});

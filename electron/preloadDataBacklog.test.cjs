@@ -9,6 +9,8 @@ const {
   createTerminalDataDispatcher,
 } = require("./preload/terminalDataBacklog.cjs");
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function loadPreloadWithFakeElectron() {
   const handlers = new Map();
   let exposedApi = null;
@@ -104,6 +106,74 @@ test("trims old data when the per-session limit is exceeded", () => {
   assert.equal(backlog.take("session-1"), "world");
 });
 
+test("keeps terminal output metadata while trimming backlog data", () => {
+  const backlog = createTerminalDataBacklog({ maxBytesPerSession: 5 });
+
+  backlog.append("session-1", "hello", { droppedOutputMayAffectTerminalState: true });
+  backlog.append("session-1", " world");
+
+  assert.deepEqual(backlog.takeEntry("session-1"), {
+    data: "world",
+    meta: { droppedOutputMayAffectTerminalState: true },
+  });
+});
+
+test("keeps latest alternate-screen metadata while trimming backlog data", () => {
+  const backlog = createTerminalDataBacklog({ maxBytesPerSession: 5 });
+
+  backlog.append("session-1", "hello", {
+    droppedOutputMayAffectTerminalState: true,
+    droppedOutputAlternateScreenAction: "enter",
+  });
+  backlog.append("session-1", " world", {
+    droppedOutputMayAffectTerminalState: true,
+    droppedOutputAlternateScreenAction: "leave",
+  });
+
+  assert.deepEqual(backlog.takeEntry("session-1"), {
+    data: "world",
+    meta: {
+      droppedOutputMayAffectTerminalState: true,
+      droppedOutputAlternateScreenAction: "leave",
+    },
+  });
+});
+
+test("new unknown terminal-state metadata clears stale alternate-screen action in backlog", () => {
+  const backlog = createTerminalDataBacklog({ maxBytesPerSession: 64 });
+
+  backlog.append("session-1", "first", {
+    droppedOutputMayAffectTerminalState: true,
+    droppedOutputAlternateScreenAction: "leave",
+  });
+  backlog.append("session-1", "second", {
+    droppedOutputMayAffectTerminalState: true,
+  });
+
+  assert.deepEqual(backlog.takeEntry("session-1"), {
+    data: "firstsecond",
+    meta: { droppedOutputMayAffectTerminalState: true },
+  });
+});
+
+test("dispatcher writes terminal output metadata into backlog", () => {
+  const dataListeners = new Map();
+  const displayDataListeners = new Map();
+  const terminalDataBacklog = createTerminalDataBacklog();
+  const deliver = createTerminalDataDispatcher({
+    dataListeners,
+    displayDataListeners,
+    terminalDataBacklog,
+  });
+
+  deliver("session-1", "early output", { droppedOutputMayAffectTerminalState: true });
+
+  assert.deepEqual(terminalDataBacklog.takeEntry("session-1"), {
+    data: "early output",
+    meta: { droppedOutputMayAffectTerminalState: true },
+  });
+});
+
 test("clear drops pending data for a closed session", () => {
   const backlog = createTerminalDataBacklog();
 
@@ -147,6 +217,156 @@ test("onSessionData flushes pending terminal data on subscribe", () => {
   unsubscribe();
   assert.equal(dataListeners.has("session-1"), false);
   assert.equal(displayDataListeners.has("session-1"), false);
+});
+
+test("onSessionData replays pending terminal data metadata on subscribe", () => {
+  const dataListeners = new Map();
+  const displayDataListeners = new Map();
+  const terminalDataBacklog = createTerminalDataBacklog();
+  terminalDataBacklog.append("session-1", "early output", {
+    droppedOutputMayAffectTerminalState: true,
+  });
+
+  const api = createPreloadApi({
+    ipcRenderer: {
+      invoke() {},
+      send() {},
+      on() {},
+      removeListener() {},
+    },
+    os: {
+      release: () => "10.0.19045",
+    },
+    dataListeners,
+    displayDataListeners,
+    terminalDataBacklog,
+  });
+
+  const received = [];
+  api.onSessionData("session-1", (chunk, meta) => {
+    received.push({ chunk, meta });
+  }, { replayBacklog: true });
+
+  assert.deepEqual(received, [{
+    chunk: "early output",
+    meta: { droppedOutputMayAffectTerminalState: true },
+  }]);
+});
+
+test("delayed MCP terminal data flush preserves metadata", async () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    preload.api.onSessionData("session-1", (chunk, meta) => {
+      received.push({ chunk, meta });
+    });
+
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "prompt __NCM",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    });
+
+    assert.deepEqual(received, []);
+    await sleep(100);
+
+    assert.deepEqual(received, [{
+      chunk: "prompt __NCM",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    }]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
+test("MCP-filtered empty terminal data carries metadata to next visible output", () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    preload.api.onSessionData("session-1", (chunk, meta) => {
+      received.push({ chunk, meta });
+    });
+
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "__NCMCP_TEST\n",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    });
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "READY\n",
+    });
+
+    assert.deepEqual(received, [{
+      chunk: "READY\n",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    }]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
+test("MCP metadata merge clears stale alternate-screen action on later unknown risk", () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    preload.api.onSessionData("session-1", (chunk, meta) => {
+      received.push({ chunk, meta });
+    });
+
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "__NCMCP_TEST\n",
+      meta: {
+        droppedOutputMayAffectTerminalState: true,
+        droppedOutputAlternateScreenAction: "leave",
+      },
+    });
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "READY\n",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    });
+
+    assert.deepEqual(received, [{
+      chunk: "READY\n",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    }]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
+test("MCP-filtered empty terminal metadata is cleared on session exit", async () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    preload.api.onSessionData("session-1", (chunk, meta) => {
+      received.push({ chunk, meta });
+    }, { replayBacklog: true });
+
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "__NCMCP_TEST\n",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    });
+    preload.handlers.get("netcatty:exit")?.({}, {
+      sessionId: "session-1",
+      reason: "closed",
+    });
+    await preload.api.startLocalSession({ sessionId: "session-1" });
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "READY\n",
+    });
+
+    assert.deepEqual(received, [{
+      chunk: "READY\n",
+      meta: undefined,
+    }]);
+  } finally {
+    preload.cleanup();
+  }
 });
 
 test("non-display listeners do not drain pending terminal data", () => {

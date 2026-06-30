@@ -371,6 +371,119 @@ test("output-port-ready flushes output that arrived during port transfer", async
   });
 });
 
+test("worker buffered output byte cap preserves split alternate-screen metadata", async () => {
+  const child = new FakeChild();
+  const outputPort = { label: "worker-output-port" };
+  const manager = createTerminalWorkerManager({
+    utilityProcess: {
+      fork() {
+        return child;
+      },
+    },
+    terminalOutputChannel: {
+      openSession() {
+        return outputPort;
+      },
+    },
+    electronModule: {
+      webContents: {
+        fromId(id) {
+          return { id };
+        },
+      },
+    },
+    maxPendingOutputBytes: "hREADY".length,
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await promise;
+  child.emit("message", {
+    kind: "output",
+    sessionId: "local-1",
+    data: "\x1b[?1049hREADY",
+  });
+  child.emit("message", {
+    kind: "output-port-ready",
+    sessionId: "local-1",
+  });
+
+  assert.deepEqual(child.messages[2], {
+    kind: "output-flush",
+    sessionId: "local-1",
+    chunks: [{
+      data: "hREADY",
+      meta: {
+        droppedOutputMayAffectTerminalState: true,
+        droppedOutputAlternateScreenAction: "enter",
+      },
+    }],
+  });
+});
+
+test("worker buffered output chunk cap carries dropped metadata to retained output", async () => {
+  const child = new FakeChild();
+  const outputPort = { label: "worker-output-port" };
+  const manager = createTerminalWorkerManager({
+    utilityProcess: {
+      fork() {
+        return child;
+      },
+    },
+    terminalOutputChannel: {
+      openSession() {
+        return outputPort;
+      },
+    },
+    electronModule: {
+      webContents: {
+        fromId(id) {
+          return { id };
+        },
+      },
+    },
+    maxPendingOutputChunks: 1,
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await promise;
+  child.emit("message", {
+    kind: "output",
+    sessionId: "local-1",
+    data: "old",
+    meta: { droppedOutputMayAffectTerminalState: true },
+  });
+  child.emit("message", {
+    kind: "output",
+    sessionId: "local-1",
+    data: "READY",
+  });
+  child.emit("message", {
+    kind: "output-port-ready",
+    sessionId: "local-1",
+  });
+
+  assert.deepEqual(child.messages[2], {
+    kind: "output-flush",
+    sessionId: "local-1",
+    chunks: [{
+      data: "READY",
+      meta: { droppedOutputMayAffectTerminalState: true },
+    }],
+  });
+});
+
 test("worker fallback output after a ready output port is delivered over legacy IPC", async () => {
   const child = new FakeChild();
   const sent = [];
@@ -857,6 +970,67 @@ test("worker exit rejects pending requests and closes output routes", async () =
 
   await assert.rejects(promise, /Terminal worker exited/);
   assert.deepEqual(closed, ["all"]);
+});
+
+test("worker stop clears buffered output byte accounting before session id reuse", async () => {
+  const children = [];
+  const routed = [];
+  let opened = false;
+  const manager = createTerminalWorkerManager({
+    utilityProcess: {
+      fork() {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+    },
+    terminalOutputChannel: {
+      openSession() {
+        opened = true;
+      },
+      send(sessionId, data) {
+        if (!opened) return false;
+        routed.push({ sessionId, data });
+        return true;
+      },
+      closeAll() {
+        opened = false;
+      },
+    },
+    electronModule: {
+      webContents: {
+        fromId(id) {
+          return { id };
+        },
+      },
+    },
+    maxPendingOutputBytes: "READY".length,
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const firstChild = manager.ensureStarted();
+  firstChild.emit("message", {
+    kind: "output",
+    sessionId: "session-1",
+    data: "oldold",
+  });
+  manager.stop();
+
+  const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  const secondChild = children[1];
+  secondChild.emit("message", {
+    kind: "output",
+    sessionId: "session-1",
+    data: "READY",
+  });
+  secondChild.emit("message", {
+    kind: "response",
+    requestId: secondChild.messages[0].requestId,
+    result: { sessionId: "session-1" },
+  });
+  await promise;
+
+  assert.deepEqual(routed, [{ sessionId: "session-1", data: "READY" }]);
 });
 
 test("worker exit notifies renderers for active worker sessions", async () => {

@@ -2,7 +2,12 @@ import type { Terminal as XTerm } from "@xterm/xterm";
 import { logger } from "../../../lib/logger";
 import type { Host, SSHKey } from "../../../types";
 import type { TerminalSessionStartersContext } from "./createTerminalSessionStarters.types";
-export type { PendingAuth, SessionLogConfig, TerminalSessionStartersContext } from "./createTerminalSessionStarters.types";
+export type {
+  PendingAuth,
+  SessionLogConfig,
+  TerminalSessionDataMeta,
+  TerminalSessionStartersContext,
+} from "./createTerminalSessionStarters.types";
 export { normalizeStartupCommandDelay, splitStartupCommandLines } from "./terminalStartupCommands";
 import {
   attachSessionToTerminal,
@@ -1292,9 +1297,9 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
       resetTerminalLineTimestampState(term);
       ctx.disposeDataRef.current = ctx.terminalBackend.onSessionData(
         id,
-        (chunk) => {
+        (chunk, meta) => {
           writeSessionData(ctx, term, chunk);
-          ctx.onTerminalOutput?.(chunk);
+          ctx.onTerminalOutput?.(chunk, meta);
           if (!ctx.hasConnectedRef.current) {
             ctx.updateStatus("connected");
             setTimeout(() => {
