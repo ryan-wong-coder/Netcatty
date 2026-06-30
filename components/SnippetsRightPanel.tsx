@@ -14,6 +14,7 @@ import { ScriptEditorModal } from './scripts/ScriptEditorModal';
 import { isScriptSnippet } from '../domain/snippetScript.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Combobox } from './ui/combobox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { HistoryItem } from './SnippetsHistoryItem';
 import type { Snippet } from '@/domain/models';
 import { getRunnableHostsForSnippet } from '@/domain/snippetTargets.ts';
@@ -285,6 +286,28 @@ export const SnippetsRightPanel: React.FC<SnippetsRightPanelProps> = ({
               />
               <span className="text-xs text-muted-foreground">{t('snippets.field.noAutoRun')}</span>
             </label>
+
+            <Card className="p-3 space-y-2 bg-card border-border/80">
+              <p className="text-xs font-semibold text-muted-foreground">{t('snippets.field.multiLineRunMode')}</p>
+              <Select
+                value={editingSnippet.multiLineRunMode ?? 'paste'}
+                onValueChange={(value) => setEditingSnippet({
+                  ...editingSnippet,
+                  multiLineRunMode: value === 'lineDelay' ? 'lineDelay' : undefined,
+                })}
+              >
+                <SelectTrigger className="h-10">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paste">{t('snippets.field.multiLineRunMode.paste')}</SelectItem>
+                  <SelectItem value="lineDelay">{t('snippets.field.multiLineRunMode.lineDelay')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                {t('snippets.field.multiLineRunModeHint')}
+              </p>
+            </Card>
 
             {/* Shortkey */}
             <Card className="p-3 space-y-2 bg-card border-border/80">

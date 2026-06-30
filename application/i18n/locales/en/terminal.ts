@@ -673,6 +673,10 @@ export const enTerminalMessages: Messages = {
   'snippets.renameDialog.error.invalidChars': 'Script package name can only contain letters, numbers, hyphens, and underscores',
 
   'snippets.field.noAutoRun': 'Paste only (do not auto-execute)',
+  'snippets.field.multiLineRunMode': 'Multi-line run',
+  'snippets.field.multiLineRunMode.paste': 'Send all at once',
+  'snippets.field.multiLineRunMode.lineDelay': 'Send line by line',
+  'snippets.field.multiLineRunModeHint': 'Use line by line for prompt-based logins or device macros.',
   // Snippet Shortkey
   'snippets.field.shortkey': 'Keyboard Shortcut',
   'snippets.shortkey.placeholder': 'Click to set shortcut',

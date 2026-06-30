@@ -205,6 +205,7 @@ function snippetDraftFromParams(params: Record<string, unknown>) {
     package: params.package,
     shortkey: params.shortkey,
     noAutoRun: params.noAutoRun,
+    multiLineRunMode: params.multiLineRunMode,
     language: params.language,
     description: params.description,
     trigger: params.trigger,

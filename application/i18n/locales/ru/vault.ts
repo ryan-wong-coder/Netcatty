@@ -747,6 +747,10 @@ export const ruVaultMessages: Messages = {
   'hostDetails.startupCommand.placeholder': 'Команда для запуска при подключении (например, cd /app && ls)',
   'hostDetails.startupCommand.help':
     'This command will be executed automatically after SSH connection is established.',
+  'hostDetails.startupCommand.runMode': 'Многострочный запуск',
+  'hostDetails.startupCommand.runMode.help': 'Выберите, как отправлять многострочные команды запуска после подключения.',
+  'hostDetails.startupCommand.runMode.lineDelay': 'Отправлять построчно',
+  'hostDetails.startupCommand.runMode.paste': 'Отправить сразу',
   'hostDetails.otherProtocols': 'Другие протоколы',
   'hostDetails.telnetOn': 'Telnet на',
   'hostDetails.port': 'порт',

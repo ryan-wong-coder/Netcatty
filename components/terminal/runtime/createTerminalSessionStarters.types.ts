@@ -115,6 +115,7 @@ export type TerminalSessionStartersContext = {
   reuseConnectionFromSessionId?: string;
   startupCommand?: string;
   noAutoRun?: boolean;
+  multiLineRunMode?: TerminalSession["multiLineRunMode"];
   shellType?: TerminalSession["shellType"];
   suppressHostStartupCommandRef?: RefObject<boolean>;
   terminalSettings?: TerminalSettings;

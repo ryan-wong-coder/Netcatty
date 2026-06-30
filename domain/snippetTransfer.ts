@@ -14,6 +14,7 @@ export type SnippetExportItem = {
   package?: string;
   shortkey?: string;
   noAutoRun?: boolean;
+  multiLineRunMode?: Snippet["multiLineRunMode"];
   kind?: "snippet" | "script";
   language?: "javascript" | "python";
   description?: string;
@@ -102,6 +103,7 @@ const toExportItem = (snippet: Snippet): SnippetExportItem => ({
   package: snippet.package || "",
   ...(snippet.shortkey ? { shortkey: snippet.shortkey } : {}),
   ...(snippet.noAutoRun ? { noAutoRun: snippet.noAutoRun } : {}),
+  ...(snippet.multiLineRunMode ? { multiLineRunMode: snippet.multiLineRunMode } : {}),
   ...(snippet.kind ? { kind: snippet.kind } : {}),
   ...(snippet.language ? { language: snippet.language } : {}),
   ...(snippet.description ? { description: snippet.description } : {}),
@@ -150,6 +152,9 @@ const sanitizeImportItem = (value: unknown): SnippetExportItem | null => {
       ? value.shortkey.trim()
       : undefined,
     noAutoRun: value.noAutoRun === true ? true : undefined,
+    multiLineRunMode: value.multiLineRunMode === "lineDelay" || value.multiLineRunMode === "paste"
+      ? value.multiLineRunMode
+      : undefined,
     kind: value.kind === "script" ? "script" : undefined,
     language: value.language === "javascript" || value.language === "python"
       ? value.language
@@ -244,6 +249,7 @@ const toImportedSnippet = (item: SnippetExportItem, id: string, order?: number):
   targets: [],
   ...(item.shortkey ? { shortkey: item.shortkey } : {}),
   ...(item.noAutoRun ? { noAutoRun: item.noAutoRun } : {}),
+  ...(item.multiLineRunMode ? { multiLineRunMode: item.multiLineRunMode } : {}),
   ...(item.kind ? { kind: item.kind } : {}),
   ...(item.language ? { language: item.language } : {}),
   ...(item.description ? { description: item.description } : {}),

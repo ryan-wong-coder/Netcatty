@@ -325,6 +325,51 @@ describe('handleVaultAgentOp snippets and scripts', () => {
     assert.equal(updated[0]?.[0]?.label, 'Deploy');
   });
 
+  it('snippets.create persists multi-line run mode', async () => {
+    const updated: Snippet[][] = [];
+    const deps = createDeps({
+      snippets: [],
+      updateSnippets: (nextSnippets) => {
+        updated.push(nextSnippets);
+      },
+    });
+
+    const result = await handleVaultAgentOp(
+      'snippets.create',
+      {
+        label: 'Login',
+        content: 'admin\npassword',
+        multiLineRunMode: 'lineDelay',
+      },
+      deps,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(updated[0]?.[0]?.multiLineRunMode, 'lineDelay');
+  });
+
+  it('snippets.update persists multi-line run mode', async () => {
+    const updated: Snippet[][] = [];
+    const deps = createDeps({
+      snippets: [{ id: 'snippet-1', label: 'Login', command: 'admin\npassword', kind: 'snippet' }],
+      updateSnippets: (nextSnippets) => {
+        updated.push(nextSnippets);
+      },
+    });
+
+    const result = await handleVaultAgentOp(
+      'snippets.update',
+      {
+        snippetId: 'snippet-1',
+        multiLineRunMode: 'lineDelay',
+      },
+      deps,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(updated[0]?.[0]?.multiLineRunMode, 'lineDelay');
+  });
+
   it('snippets.list returns kind and trigger fields', async () => {
     const deps = createDeps({
       snippets: [{

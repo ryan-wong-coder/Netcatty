@@ -170,7 +170,7 @@ export type CreateXTermRuntimeContext = {
   >;
 
   // Snippets for shortkey support
-  snippetsRef?: RefObject<{ id: string; command: string; shortkey?: string; noAutoRun?: boolean }[]>;
+  snippetsRef?: RefObject<Snippet[]>;
   onSnippetShortkeyRef?: RefObject<((snippet: Snippet) => void) | undefined>;
 
   sessionId: string;
@@ -875,7 +875,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
             e.stopPropagation();
             const runSnippet = ctx.onSnippetShortkeyRef?.current;
             if (runSnippet) {
-              void runSnippet(snippet as Snippet);
+              void runSnippet(snippet);
             }
             return false;
           }

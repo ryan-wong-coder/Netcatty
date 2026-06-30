@@ -45,10 +45,11 @@ export const HostDetailsAdvancedSections: React.FC<HostDetailsAdvancedSectionsPr
   proxySummaryLabel,
   proxySummaryTooltip,
   clearProxyConfig,
-  groupDefaults,
 }) => {
   const inheritedDeviceType = effectiveGroupDefaults?.deviceType;
   const effectiveDeviceType = form.deviceType ?? inheritedDeviceType;
+  const inheritedStartupCommandRunMode = effectiveGroupDefaults?.startupCommandRunMode ?? "paste";
+  const effectiveStartupCommandRunMode = form.startupCommandRunMode ?? inheritedStartupCommandRunMode;
 
   return (
   <>
@@ -621,12 +622,32 @@ export const HostDetailsAdvancedSections: React.FC<HostDetailsAdvancedSectionsPr
           hint={t("hostDetails.startupCommand.help")}
         >
           <Textarea
-            placeholder={groupDefaults?.startupCommand || t("hostDetails.startupCommand.placeholder")}
+            placeholder={effectiveGroupDefaults?.startupCommand || t("hostDetails.startupCommand.placeholder")}
             value={form.startupCommand || ""}
             onChange={(e) => update("startupCommand", e.target.value)}
             className="min-h-[80px] font-mono text-sm"
             rows={3}
           />
+          <HostDetailsSettingRow
+            label={t("hostDetails.startupCommand.runMode")}
+            hint={t("hostDetails.startupCommand.runMode.help")}
+          >
+            <Select
+              value={effectiveStartupCommandRunMode}
+              onValueChange={(value) => update(
+                "startupCommandRunMode",
+                value === inheritedStartupCommandRunMode ? undefined : value,
+              )}
+            >
+              <SelectTrigger className="h-9 w-[180px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="lineDelay">{t("hostDetails.startupCommand.runMode.lineDelay")}</SelectItem>
+                <SelectItem value="paste">{t("hostDetails.startupCommand.runMode.paste")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </HostDetailsSettingRow>
         </HostDetailsSection>
   </>
   );

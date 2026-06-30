@@ -1085,7 +1085,7 @@ test("startTelnet ignores stale replacement failures", async () => {
   assert.deepEqual(statuses, []);
 });
 
-test("startTelnet runs a multi-line startup command in sequence", async () => {
+test("startTelnet runs a multi-line startup command in sequence when requested", async () => {
   const writtenCommands: string[] = [];
   const executedCommands: string[] = [];
   let capturedOptions: Record<string, unknown> | null = null;
@@ -1135,11 +1135,13 @@ test("startTelnet runs a multi-line startup command in sequence", async () => {
       telnetPassword: "",
       telnetPort: 2323,
       startupCommand: "first cmd\nsecond cmd",
+      startupCommandRunMode: "lineDelay",
     },
     keys: [],
     resolvedChainHosts: [],
     sessionId: "session-1",
     terminalSettings: { startupCommandDelayMs: 20 },
+    multiLineRunMode: "lineDelay",
     terminalBackend,
     sessionRef: { current: null },
     hasConnectedRef: { current: false },

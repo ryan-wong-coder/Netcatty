@@ -716,6 +716,10 @@ export const enVaultMessages: Messages = {
   'hostDetails.startupCommand.placeholder': 'Command to run on connect (e.g., cd /app && ls)',
   'hostDetails.startupCommand.help':
     'This command will be executed automatically after SSH connection is established.',
+  'hostDetails.startupCommand.runMode': 'Multi-line run',
+  'hostDetails.startupCommand.runMode.help': 'Choose how multi-line startup commands are sent after connection.',
+  'hostDetails.startupCommand.runMode.lineDelay': 'Send line by line',
+  'hostDetails.startupCommand.runMode.paste': 'Send all at once',
   'hostDetails.otherProtocols': 'Other Protocols',
   'hostDetails.telnetOn': 'Telnet on',
   'hostDetails.port': 'port',

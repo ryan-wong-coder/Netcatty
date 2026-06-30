@@ -26,6 +26,7 @@ export function serializeSnippetForAgentList(snippet: Snippet) {
     package: snippet.package,
     shortkey: snippet.shortkey,
     noAutoRun: snippet.noAutoRun,
+    multiLineRunMode: snippet.multiLineRunMode,
     language: snippet.language,
     description: snippet.description,
     trigger: snippet.trigger,
@@ -58,6 +59,7 @@ export type SnippetAgentDraft = {
   package?: unknown;
   shortkey?: unknown;
   noAutoRun?: unknown;
+  multiLineRunMode?: unknown;
   language?: unknown;
   description?: unknown;
   trigger?: unknown;
@@ -69,6 +71,7 @@ export type SnippetAgentPatch = SnippetAgentDraft;
 const VALID_KINDS = new Set<SnippetKind>(['snippet', 'script']);
 const VALID_TRIGGERS = new Set<ScriptTrigger>(['manual', 'onConnect', 'onOutput']);
 const VALID_LANGUAGES = new Set<ScriptLanguage>(['javascript', 'python']);
+const VALID_MULTI_LINE_RUN_MODES = new Set<NonNullable<Snippet['multiLineRunMode']>>(['paste', 'lineDelay']);
 
 function parseKind(raw: unknown, fallback: SnippetKind = 'snippet'): SnippetKind | { error: string } {
   if (raw === undefined || raw === null || raw === '') return fallback;
@@ -89,6 +92,15 @@ function parseLanguage(raw: unknown): ScriptLanguage | undefined | { error: stri
   const value = String(raw).trim();
   if (VALID_LANGUAGES.has(value as ScriptLanguage)) return value as ScriptLanguage;
   return { error: `language must be javascript or python, got "${value}".` };
+}
+
+function parseMultiLineRunMode(raw: unknown): Snippet['multiLineRunMode'] | { error: string } {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = String(raw).trim();
+  if (VALID_MULTI_LINE_RUN_MODES.has(value as NonNullable<Snippet['multiLineRunMode']>)) {
+    return value as NonNullable<Snippet['multiLineRunMode']>;
+  }
+  return { error: `multiLineRunMode must be paste or lineDelay, got "${value}".` };
 }
 
 function parseOptionalBoolean(raw: unknown): boolean | undefined {
@@ -192,6 +204,10 @@ export function buildSnippetFromAgentDraft(
   if (triggerPattern && typeof triggerPattern === 'object' && 'error' in triggerPattern) {
     return { ok: false, error: triggerPattern.error };
   }
+  const multiLineRunMode = parseMultiLineRunMode(draft.multiLineRunMode);
+  if (multiLineRunMode && typeof multiLineRunMode === 'object' && 'error' in multiLineRunMode) {
+    return { ok: false, error: multiLineRunMode.error };
+  }
 
   const snippet: Snippet = {
     id: generateSnippetId(),
@@ -204,6 +220,7 @@ export function buildSnippetFromAgentDraft(
     package: typeof draft.package === 'string' && draft.package.trim() ? draft.package.trim() : undefined,
     shortkey: typeof draft.shortkey === 'string' && draft.shortkey.trim() ? draft.shortkey.trim() : undefined,
     noAutoRun: parseOptionalBoolean(draft.noAutoRun),
+    multiLineRunMode,
     language: languageResult ?? (kind === 'script' ? 'javascript' : undefined),
     description: typeof draft.description === 'string' && draft.description.trim()
       ? draft.description.trim()
@@ -290,6 +307,12 @@ export function applySnippetAgentPatch(
   if (triggerPattern && typeof triggerPattern === 'object' && 'error' in triggerPattern) {
     return { ok: false, error: triggerPattern.error };
   }
+  const multiLineRunMode = patch.multiLineRunMode !== undefined
+    ? parseMultiLineRunMode(patch.multiLineRunMode)
+    : existing.multiLineRunMode;
+  if (multiLineRunMode && typeof multiLineRunMode === 'object' && 'error' in multiLineRunMode) {
+    return { ok: false, error: multiLineRunMode.error };
+  }
 
   const snippet: Snippet = {
     ...existing,
@@ -308,6 +331,7 @@ export function applySnippetAgentPatch(
     noAutoRun: patch.noAutoRun !== undefined
       ? parseOptionalBoolean(patch.noAutoRun)
       : existing.noAutoRun,
+    multiLineRunMode,
     language: language ?? (kind === 'script' ? 'javascript' : undefined),
     description: patch.description !== undefined
       ? (typeof patch.description === 'string' && patch.description.trim() ? patch.description.trim() : undefined)

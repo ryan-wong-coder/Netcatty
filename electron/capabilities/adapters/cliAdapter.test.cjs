@@ -53,6 +53,15 @@ test("buildCatalogCliParams parses snippet variables JSON", () => {
   assert.deepEqual(params.variables, { name: "prod" });
 });
 
+test("buildCatalogCliParams maps snippet multi-line run mode", () => {
+  const params = buildCatalogCliParams("vault.snippets.create", {
+    label: "login",
+    content: "user\npass",
+    multiLineRunMode: "lineDelay",
+  }, fakeCreateError);
+  assert.equal(params.multiLineRunMode, "lineDelay");
+});
+
 test("buildCatalogCliParams throws for missing required fields", () => {
   assert.throws(
     () => buildCatalogCliParams("vault.host.get", {}, fakeCreateError),

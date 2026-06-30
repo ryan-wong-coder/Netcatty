@@ -20,12 +20,13 @@ const armSudoPrompt = (
   return "[sudo] password for alice: ";
 };
 
-const createTermStub = () => ({
+const createTermStub = (overrides: Record<string, unknown> = {}) => ({
   cols: 120,
   rows: 32,
   write: (_data: string, callback?: () => void) => callback?.(),
   writeln: noop,
   scrollToBottom: noop,
+  ...overrides,
 });
 
 const createStarterContext = (overrides: Record<string, unknown> = {}) => ({
@@ -1487,6 +1488,248 @@ test("local session runs startup command after attaching", async () => {
     data: "docker logs -f --tail 200 abc123\r",
     automated: true,
   }]);
+});
+
+test("local session sends multi-line startup snippets in one write by default", async () => {
+  const attached: string[] = [];
+  const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: (id: string, data: string, options?: { automated?: boolean }) => {
+      sessionWrites.push({ id, data, automated: options?.automated });
+    },
+    resizeSession: noop,
+  };
+
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+    },
+    terminalSettings: { startupCommandDelayMs: 0 },
+    terminalBackend,
+    startupCommand: 'sudo apt install gconf2-common -y\necho "123456"',
+    promptLineBreakStateRef: undefined,
+    onSessionAttached: (id: string) => attached.push(id),
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub() as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(attached, ["local-session"]);
+  assert.deepEqual(sessionWrites, [{
+    id: "local-session",
+    data: 'sudo apt install gconf2-common -y\necho "123456"\r',
+    automated: true,
+  }]);
+});
+
+test("local session wraps multi-line startup paste when bracketed paste is active", async () => {
+  const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: (id: string, data: string, options?: { automated?: boolean }) => {
+      sessionWrites.push({ id, data, automated: options?.automated });
+    },
+    resizeSession: noop,
+  };
+
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+    },
+    terminalSettings: { startupCommandDelayMs: 0 },
+    terminalBackend,
+    startupCommand: "sudo apt install gconf2-common -y\necho done",
+    promptLineBreakStateRef: undefined,
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub({
+    modes: { bracketedPasteMode: true },
+  }) as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(sessionWrites, [{
+    id: "local-session",
+    data: "\x1b[200~sudo apt install gconf2-common -y\necho done\x1b[201~\r",
+    automated: true,
+  }]);
+});
+
+test("local session respects disabled bracketed paste for startup paste", async () => {
+  const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: (id: string, data: string, options?: { automated?: boolean }) => {
+      sessionWrites.push({ id, data, automated: options?.automated });
+    },
+    resizeSession: noop,
+  };
+
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+    },
+    terminalSettings: { startupCommandDelayMs: 0 },
+    terminalBackend,
+    startupCommand: "first\nsecond",
+    promptLineBreakStateRef: undefined,
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub({
+    modes: { bracketedPasteMode: true },
+    options: { ignoreBracketedPasteMode: true },
+  }) as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(sessionWrites, [{
+    id: "local-session",
+    data: "first\nsecond\r",
+    automated: true,
+  }]);
+});
+
+test("local session can send multi-line startup snippets line by line", async () => {
+  const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: (id: string, data: string, options?: { automated?: boolean }) => {
+      sessionWrites.push({ id, data, automated: options?.automated });
+    },
+    resizeSession: noop,
+  };
+
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+    },
+    terminalSettings: { startupCommandDelayMs: 0 },
+    terminalBackend,
+    startupCommand: "first cmd\nsecond cmd",
+    multiLineRunMode: "lineDelay",
+    promptLineBreakStateRef: undefined,
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub() as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sessionWrites, [{ id: "local-session", data: "first cmd\r", automated: true }]);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sessionWrites, [
+    { id: "local-session", data: "first cmd\r", automated: true },
+    { id: "local-session", data: "second cmd\r", automated: true },
+  ]);
+});
+
+test("local session sends host startup commands in one write by default", async () => {
+  const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: (id: string, data: string, options?: { automated?: boolean }) => {
+      sessionWrites.push({ id, data, automated: options?.automated });
+    },
+    resizeSession: noop,
+  };
+
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+      startupCommand: "enter prompt\nrun command",
+    },
+    terminalSettings: { startupCommandDelayMs: 0 },
+    terminalBackend,
+    startupCommand: undefined,
+    promptLineBreakStateRef: undefined,
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub() as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sessionWrites, [{
+    id: "local-session",
+    data: "enter prompt\nrun command\r",
+    automated: true,
+  }]);
+});
+
+test("local session can send host startup commands line by line", async () => {
+  const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: (id: string, data: string, options?: { automated?: boolean }) => {
+      sessionWrites.push({ id, data, automated: options?.automated });
+    },
+    resizeSession: noop,
+  };
+
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+      startupCommand: "first host cmd\nsecond host cmd",
+      startupCommandRunMode: "lineDelay",
+    },
+    terminalSettings: { startupCommandDelayMs: 0 },
+    terminalBackend,
+    startupCommand: undefined,
+    promptLineBreakStateRef: undefined,
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub() as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sessionWrites, [{ id: "local-session", data: "first host cmd\r", automated: true }]);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(sessionWrites, [
+    { id: "local-session", data: "first host cmd\r", automated: true },
+    { id: "local-session", data: "second host cmd\r", automated: true },
+  ]);
 });
 
 test("startup command suppression is consumed only when scheduling", () => {

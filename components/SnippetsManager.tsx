@@ -758,6 +758,7 @@ const SnippetsManager: React.FC<SnippetsManagerProps> = ({
       targetsAllHosts: editingSnippet.targetsAllHosts || undefined,
       shortkey: editingSnippet.shortkey,
       noAutoRun: editingSnippet.noAutoRun,
+      multiLineRunMode: editingSnippet.multiLineRunMode,
       order: editingSnippet.order,
       kind: editingSnippet.kind,
       language: editingSnippet.language,

@@ -135,7 +135,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelPropsWithResize> = ({
     c.port !== undefined || !!c.username || !!c.password || !!c.identityFileId ||
     c.deviceType !== undefined ||
     c.agentForwarding !== undefined || c.authMethod !== undefined || !!c.identityId ||
-    !!c.proxyProfileId || !!c.proxyConfig || !!c.hostChain || !!c.startupCommand || c.legacyAlgorithms !== undefined || c.skipEcdsaHostKey !== undefined || c.algorithms !== undefined || c.backspaceBehavior !== undefined ||
+    !!c.proxyProfileId || !!c.proxyConfig || !!c.hostChain || !!c.startupCommand || c.startupCommandRunMode !== undefined || c.legacyAlgorithms !== undefined || c.skipEcdsaHostKey !== undefined || c.algorithms !== undefined || c.backspaceBehavior !== undefined ||
     (c.environmentVariables && c.environmentVariables.length > 0) ||
     c.moshEnabled !== undefined || !!c.moshServerPath ||
     c.etEnabled !== undefined || c.etPort !== undefined ||
@@ -195,6 +195,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelPropsWithResize> = ({
       delete next.deviceType;
       delete next.agentForwarding;
       delete next.startupCommand;
+      delete next.startupCommandRunMode;
       delete next.legacyAlgorithms;
       delete next.skipEcdsaHostKey;
       delete next.algorithms;
@@ -365,6 +366,10 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelPropsWithResize> = ({
     if (!parentGroup || groupConfigs.length === 0) return false;
     return !!resolveGroupDefaults(parentGroup, groupConfigs).skipEcdsaHostKey;
   }, [groupConfigs, parentGroup]);
+  const inheritedStartupCommandRunMode = useMemo(() => {
+    if (!parentGroup || groupConfigs.length === 0) return "paste";
+    return resolveGroupDefaults(parentGroup, groupConfigs).startupCommandRunMode ?? "paste";
+  }, [groupConfigs, parentGroup]);
   const inheritedDeviceType = useMemo(() => {
     if (!parentGroup || groupConfigs.length === 0) return undefined;
     return resolveGroupDefaults(parentGroup, groupConfigs).deviceType;
@@ -430,6 +435,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelPropsWithResize> = ({
         ...(form.deviceType !== undefined && { deviceType: form.deviceType }),
         ...(form.agentForwarding !== undefined && { agentForwarding: form.agentForwarding }),
         ...(form.startupCommand !== undefined && { startupCommand: form.startupCommand }),
+        ...(form.startupCommandRunMode !== undefined && { startupCommandRunMode: form.startupCommandRunMode }),
         ...(form.legacyAlgorithms !== undefined && { legacyAlgorithms: form.legacyAlgorithms }),
         ...(form.skipEcdsaHostKey !== undefined && { skipEcdsaHostKey: form.skipEcdsaHostKey }),
         ...(form.algorithms !== undefined && { algorithms: form.algorithms }),
@@ -633,6 +639,7 @@ const GroupDetailsPanel: React.FC<GroupDetailsPanelPropsWithResize> = ({
           setNewKeyFilePath={setNewKeyFilePath}
           inheritedLegacyAlgorithms={inheritedLegacyAlgorithms}
           inheritedSkipEcdsaHostKey={inheritedSkipEcdsaHostKey}
+          inheritedStartupCommandRunMode={inheritedStartupCommandRunMode}
           showAlgorithmOverrides={showAlgorithmOverrides}
           setShowAlgorithmOverrides={setShowAlgorithmOverrides}
           inheritedAlgorithmOverrides={inheritedAlgorithmOverrides}

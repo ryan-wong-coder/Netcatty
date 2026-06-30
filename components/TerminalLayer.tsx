@@ -1341,13 +1341,13 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
   const handleSnippetClickForFocusedSession = useCallback((
     command: string,
     noAutoRun?: boolean,
-    
+    options?: { multiLineRunMode?: Snippet["multiLineRunMode"] },
   ) => {
     const sessionId = activeWorkspaceRef.current?.focusedSessionId ?? activeSessionRef.current?.id;
     if (!sessionId) return;
     const executor = snippetExecutorsRef.current.get(sessionId);
     if (executor) {
-      executor(command, noAutoRun);
+      executor(command, noAutoRun, options);
       return;
     }
 
@@ -1356,7 +1356,10 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
 
     let data = normalizeLineEndings(command);
     if (!noAutoRun) data = `${data}\r`;
-    const lineDelayMs = shouldDelayAutoRunSnippetInput(data, { noAutoRun })
+    const lineDelayMs = shouldDelayAutoRunSnippetInput(data, {
+      noAutoRun,
+      multiLineRunMode: options?.multiLineRunMode,
+    })
       ? AUTO_RUN_SNIPPET_LINE_DELAY_MS
       : undefined;
     terminalBackend.writeToSession(sessionId, data, {
@@ -1397,7 +1400,9 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
     }
     const command = await resolveSnippetCommand(snippet);
     if (command === null) return;
-    handleSnippetClickForFocusedSession(command, snippet.noAutoRun);
+    handleSnippetClickForFocusedSession(command, snippet.noAutoRun, {
+      multiLineRunMode: snippet.multiLineRunMode,
+    });
   }, [getActiveTerminalSessionId, handleSnippetClickForFocusedSession, hosts, t]);
 
   const handleRunScriptFromPanel = useCallback(async (snippet: Snippet) => {

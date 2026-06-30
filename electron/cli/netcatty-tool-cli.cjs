@@ -76,6 +76,7 @@ function parseArgs(argv) {
     ruleId: null,
     notes: null,
     variables: null,
+    multiLineRunMode: null,
     command: [],
   };
 
@@ -174,6 +175,11 @@ function parseArgs(argv) {
     }
     if (arg === "--variables") {
       opts.variables = readFlagValue(args, i + 1);
+      i += 1;
+      continue;
+    }
+    if (arg === "--multi-line-run-mode") {
+      opts.multiLineRunMode = readFlagValue(args, i + 1);
       i += 1;
       continue;
     }
@@ -751,4 +757,10 @@ async function run() {
   }
 }
 
-run();
+if (require.main === module) {
+  run();
+}
+
+module.exports = {
+  parseArgs,
+};

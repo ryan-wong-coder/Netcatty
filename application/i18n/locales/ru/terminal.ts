@@ -691,6 +691,10 @@ export const ruTerminalMessages: Messages = {
   'snippets.renameDialog.error.invalidChars': 'Имя пакета может содержать только буквы, цифры, дефисы и подчёркивания',
 
   'snippets.field.noAutoRun': 'Только вставить (не выполнять автоматически)',
+  'snippets.field.multiLineRunMode': 'Многострочный запуск',
+  'snippets.field.multiLineRunMode.paste': 'Отправить сразу',
+  'snippets.field.multiLineRunMode.lineDelay': 'Отправлять построчно',
+  'snippets.field.multiLineRunModeHint': 'Построчный режим подходит для логинов с подсказками и макросов устройств.',
   // Snippet Shortkey
   'snippets.field.shortkey': 'Сочетание клавиш',
   'snippets.shortkey.placeholder': 'Нажмите, чтобы задать сочетание',

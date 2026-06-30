@@ -973,6 +973,7 @@ export const useSessionState = ({
         : {
           startupCommand: resolvedCommand,
           noAutoRun: snippet.noAutoRun,
+          multiLineRunMode: snippet.multiLineRunMode ?? 'paste',
         }),
     }));
 

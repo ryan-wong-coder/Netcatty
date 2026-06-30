@@ -6,6 +6,7 @@ import { getSessionConnectionLabel, resolveSessionTabTitle } from "../../domain/
 import { logger } from "../../lib/logger";
 import { getPathForFile, type DropEntry } from "../../lib/sftpFileUtils";
 import { normalizeLineEndings } from "../../lib/utils";
+import { resolveSnippetMultiLineRunMode } from "../../domain/snippetRunMode";
 import type {
   Host,
   Identity,
@@ -137,6 +138,7 @@ export interface TerminalProps {
   restoreTerminalCwd?: boolean;
   startupCommand?: string;
   noAutoRun?: boolean;
+  multiLineRunMode?: Snippet["multiLineRunMode"];
   pendingScriptId?: string;
   pendingScript?: Snippet;
   // When this tab was created from a connected SSH session, the id of the
@@ -200,7 +202,7 @@ export interface TerminalProps {
     executor: ((
       command: string,
       noAutoRun?: boolean,
-      options?: { broadcast?: boolean },
+      options?: { broadcast?: boolean; multiLineRunMode?: Snippet["multiLineRunMode"] },
     ) => void) | null,
   ) => void;
   onBroadcastInterruptPriorityChange?: (
@@ -262,9 +264,10 @@ export function shouldShowTerminalConnectionDialog({
 
 export function shouldDelayAutoRunSnippetInput(
   data: string,
-  opts: { noAutoRun?: boolean },
+  opts: { noAutoRun?: boolean; multiLineRunMode?: Snippet["multiLineRunMode"] },
 ): boolean {
   if (opts.noAutoRun) return false;
+  if (resolveSnippetMultiLineRunMode(opts.multiLineRunMode) === "paste") return false;
   const normalized = normalizeLineEndings(String(data ?? "")).replace(/\r/g, "\n");
   const withoutSubmitEnter = normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized;
   return withoutSubmitEnter.includes("\n");

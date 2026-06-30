@@ -700,6 +700,10 @@ export const zhTWTerminalMessages: Messages = {
   'snippets.renameDialog.error.invalidChars': '程式碼包名稱只能包含字母、數字、連字元和下劃線',
 
   'snippets.field.noAutoRun': '僅貼上（不自動執行）',
+  'snippets.field.multiLineRunMode': '多行執行方式',
+  'snippets.field.multiLineRunMode.paste': '一次性傳送',
+  'snippets.field.multiLineRunMode.lineDelay': '逐行傳送',
+  'snippets.field.multiLineRunModeHint': '登入提示、網路設備巨集等情境可用逐行傳送。',
   // Snippet Shortkey
   'snippets.field.shortkey': '快捷鍵',
   'snippets.shortkey.placeholder': '點選設定快捷鍵',

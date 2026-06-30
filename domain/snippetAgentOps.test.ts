@@ -72,6 +72,16 @@ test('buildSnippetFromAgentDraft validates onOutput triggerPattern', () => {
   assert.equal(good.ok, true);
 });
 
+test('buildSnippetFromAgentDraft accepts multi-line run mode', () => {
+  const result = buildSnippetFromAgentDraft(
+    { label: 'login', command: 'user\npass', multiLineRunMode: 'lineDelay' },
+    [],
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.snippet.multiLineRunMode, 'lineDelay');
+});
+
 test('deleteSnippetFromVault removes snippet and host connect references', () => {
   const snippets: Snippet[] = [
     {
@@ -159,6 +169,19 @@ test('applySnippetAgentPatch clears targetsAllHosts when explicit targets are se
   if (!patched.ok) return;
   assert.equal(patched.snippet.targetsAllHosts, undefined);
   assert.deepEqual(patched.snippet.targets, ['host-a']);
+});
+
+test('applySnippetAgentPatch updates multi-line run mode', () => {
+  const existing: Snippet = {
+    id: 'login',
+    label: 'Login',
+    command: 'user\npass',
+    multiLineRunMode: 'lineDelay',
+  };
+  const patched = applySnippetAgentPatch(existing, { multiLineRunMode: 'paste' });
+  assert.equal(patched.ok, true);
+  if (!patched.ok) return;
+  assert.equal(patched.snippet.multiLineRunMode, 'paste');
 });
 
 test('setHostConnectScriptIds rejects non-onConnect scripts', () => {

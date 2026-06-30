@@ -69,7 +69,7 @@ export type PendingSftpUpload = {
 export type SnippetExecutor = (
   command: string,
   noAutoRun?: boolean,
-  options?: { broadcast?: boolean },
+  options?: { broadcast?: boolean; multiLineRunMode?: Snippet["multiLineRunMode"] },
 ) => void;
 
 export type PendingTerminalSelectionForAI = {
@@ -1327,6 +1327,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = memo(({
         restoreTerminalCwd={restoreTerminalCwd && sessionHostResolved}
         startupCommand={session.startupCommand}
         noAutoRun={session.noAutoRun}
+        multiLineRunMode={session.multiLineRunMode}
         pendingScriptId={session.pendingScriptId}
         pendingScript={session.pendingScript}
         reuseConnectionFromSessionId={session.reuseConnectionFromSessionId}

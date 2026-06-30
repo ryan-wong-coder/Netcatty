@@ -423,6 +423,7 @@ export interface TerminalSession {
   pendingScript?: Snippet;
   startupCommand?: string; // Command to run after connection (for snippet runner)
   noAutoRun?: boolean;     // If true, paste command without auto-executing
+  multiLineRunMode?: Snippet['multiLineRunMode'];
   // Connection-time protocol overrides (used instead of looking up from hosts)
   protocol?: 'ssh' | 'telnet' | 'local' | 'serial';
   port?: number;

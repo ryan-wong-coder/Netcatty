@@ -30,6 +30,7 @@ const CLI_FIELD_BINDINGS = Object.freeze({
   package: { flag: "--package", optKey: "package" },
   shortkey: { flag: "--shortkey", optKey: "shortkey" },
   noAutoRun: { flag: "--no-auto-run", optKey: "noAutoRun" },
+  multiLineRunMode: { flag: "--multi-line-run-mode", optKey: "multiLineRunMode" },
   path: { flag: "--remote-path", optKey: "remotePath" },
   remotePath: { flag: "--remote-path", optKey: "remotePath" },
   localPath: { flag: "--local-path", optKey: "localPath" },

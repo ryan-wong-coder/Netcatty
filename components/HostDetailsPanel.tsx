@@ -988,7 +988,6 @@ const HostDetailsPanel: React.FC<HostDetailsPanelPropsWithResize> = ({
           proxySummaryLabel={proxySummaryLabel}
           proxySummaryTooltip={proxySummaryTooltip}
           clearProxyConfig={clearProxyConfig}
-          groupDefaults={groupDefaults}
         />
 
         <div className="flex items-center gap-3 py-2">

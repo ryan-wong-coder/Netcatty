@@ -700,6 +700,10 @@ export const zhCNTerminalMessages: Messages = {
   'snippets.renameDialog.error.invalidChars': '脚本包名称只能包含字母、数字、连字符和下划线',
 
   'snippets.field.noAutoRun': '仅粘贴（不自动执行）',
+  'snippets.field.multiLineRunMode': '多行运行方式',
+  'snippets.field.multiLineRunMode.paste': '一次性发送',
+  'snippets.field.multiLineRunMode.lineDelay': '逐行发送',
+  'snippets.field.multiLineRunModeHint': '登录提示、网络设备宏等场景可用逐行发送。',
   // Snippet Shortkey
   'snippets.field.shortkey': '快捷键',
   'snippets.shortkey.placeholder': '点击设置快捷键',

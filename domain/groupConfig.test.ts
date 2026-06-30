@@ -49,6 +49,12 @@ test("applyGroupDefaults lets host device type override group device type", () =
   assert.equal(result.deviceType, "general");
 });
 
+test("applyGroupDefaults inherits startup command run mode", () => {
+  const result = applyGroupDefaults(host(), { startupCommandRunMode: "paste" });
+
+  assert.equal(result.startupCommandRunMode, "paste");
+});
+
 test("resolveGroupDefaults lets child group device type override parent device type", () => {
   const resolved = resolveGroupDefaults("prod/access", [
     {

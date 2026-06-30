@@ -157,7 +157,11 @@ export async function runConnectScriptsSequential(params: {
 export async function runSnippetOrScript(params: {
   snippet: Snippet;
   sessionId: string;
-  runSnippetText: (command: string, noAutoRun?: boolean) => void;
+  runSnippetText: (
+    command: string,
+    noAutoRun?: boolean,
+    options?: { multiLineRunMode?: Snippet["multiLineRunMode"] },
+  ) => void;
   command: string;
 }) {
   if (isScriptSnippet(params.snippet)) {
@@ -167,7 +171,9 @@ export async function runSnippetOrScript(params: {
     });
     return;
   }
-  params.runSnippetText(params.command, params.snippet.noAutoRun);
+  params.runSnippetText(params.command, params.snippet.noAutoRun, {
+    multiLineRunMode: params.snippet.multiLineRunMode,
+  });
 }
 
 export async function stopScriptRun(runId: string): Promise<{ ok: boolean }> {
