@@ -523,11 +523,12 @@ function filterTerminalInterruptOutput(session, data, options = {}) {
     }
   }
 
-  // Only bypass the quiet gap when a held password-prefix chunk completes on
-  // the same line. Fresh password-looking lines in the flood must wait like
-  // shell prompts, otherwise a canceled "Password:" from the interrupted
-  // program resumes drain too early and lets more stale output through.
-  if (heldPasswordPrefixContinued && bytes <= gate.promptCandidateBytes) {
+  // Complete password prompts resume immediately — including one-chunk prompts
+  // before promptQuietMs, and held-prefix completions on the same line. Unlike
+  // shell prompts, password prompts often emit nothing further until the user
+  // types; dropping them leaves a blank terminal while the remote waits (#2010).
+  // heldPasswordPrefixContinued is retained for clarity/tests around split holds.
+  if (bytes <= gate.promptCandidateBytes) {
     const promptCandidate = getPromptCandidateSuffix(combinedText);
     if (promptCandidate && isCompletePasswordPrompt(stripAnsi(promptCandidate))) {
       const droppedPrefix = combinedText.slice(0, combinedText.length - promptCandidate.length);
@@ -540,7 +541,7 @@ function filterTerminalInterruptOutput(session, data, options = {}) {
         accepted: true,
         data: `${restoreControls.preserved}${promptCandidate}`,
         droppedBytes: withPrefixDrop(droppedBytes),
-        reason: "prompt-gap",
+        reason: heldPasswordPrefixContinued ? "prompt-gap" : "password-prompt",
       };
     }
   }

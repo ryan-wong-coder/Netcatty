@@ -880,12 +880,12 @@ test("interrupt display drain accepts a sudo password prompt (#2010)", () => {
     false,
   );
   assert.deepEqual(
-    filterTerminalInterruptDisplayOutput(term, "[sudo] password for alice: ", { now: 8100 }),
+    filterTerminalInterruptDisplayOutput(term, "[sudo] password for alice: ", { now: 8010 }),
     {
       accepted: true,
       data: "[sudo] password for alice: ",
       droppedBytes: 0,
-      reason: "prompt-gap",
+      reason: "password-prompt",
     },
   );
 });
@@ -904,12 +904,12 @@ test("interrupt display drain accepts localized password prompts (#2010)", () =>
       false,
     );
     assert.deepEqual(
-      filterTerminalInterruptDisplayOutput(term, prompt, { now: 8200 }),
+      filterTerminalInterruptDisplayOutput(term, prompt, { now: 8110 }),
       {
         accepted: true,
         data: prompt,
         droppedBytes: 0,
-        reason: "prompt-gap",
+        reason: "password-prompt",
       },
       `expected password prompt to resume drain: ${JSON.stringify(prompt)}`,
     );
@@ -1063,7 +1063,7 @@ test("interrupt display drain holds split password prompts with leading text", (
   );
 });
 
-test("interrupt display drain keeps quiet-gap for fresh password-looking lines", () => {
+test("interrupt display drain accepts a fresh one-chunk password prompt before the quiet gap", () => {
   const term = createFakeTerm();
   armTerminalInterruptDisplayGate(term, {
     now: 9100,
@@ -1079,19 +1079,10 @@ test("interrupt display drain keeps quiet-gap for fresh password-looking lines",
   assert.deepEqual(
     filterTerminalInterruptDisplayOutput(term, "Password: ", { now: 9110 }),
     {
-      accepted: false,
-      data: "",
-      droppedBytes: "Password: ".length,
-      reason: "draining",
-    },
-  );
-  assert.deepEqual(
-    filterTerminalInterruptDisplayOutput(term, "$ ", { now: 9300 }),
-    {
       accepted: true,
-      data: "$ ",
+      data: "Password: ",
       droppedBytes: 0,
-      reason: "prompt-gap",
+      reason: "password-prompt",
     },
   );
 });
@@ -1157,24 +1148,15 @@ test("interrupt display drain rejects held password-prefix completion across a l
     filterTerminalInterruptDisplayOutput(term, "Pass", { now: 9202 }),
     { accepted: false, data: "", droppedBytes: 0, reason: "draining" },
   );
-  // A newline before Password: means a fresh flood line, not a same-line
-  // completion of the held "Pass" prefix — keep quiet-gap.
+  // A newline before Password: discards the held "Pass" prefix (not a same-line
+  // completion), but the fresh complete password line is still preserved.
   assert.deepEqual(
     filterTerminalInterruptDisplayOutput(term, "\nPassword: ", { now: 9210 }),
     {
-      accepted: false,
-      data: "",
-      droppedBytes: 4 + "\nPassword: ".length,
-      reason: "draining",
-    },
-  );
-  assert.deepEqual(
-    filterTerminalInterruptDisplayOutput(term, "$ ", { now: 9400 }),
-    {
       accepted: true,
-      data: "$ ",
-      droppedBytes: 0,
-      reason: "prompt-gap",
+      data: "Password: ",
+      droppedBytes: 4 + 1,
+      reason: "password-prompt",
     },
   );
 });

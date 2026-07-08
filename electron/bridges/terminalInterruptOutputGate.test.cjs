@@ -297,13 +297,15 @@ test("accepts a sudo password prompt while draining after Ctrl+C (#2010)", () =>
     filterTerminalInterruptOutput(session, "Reading package lists...\n", { now: 6001 }).accepted,
     false,
   );
+  // One-chunk password prompts must resume before promptQuietMs — they often
+  // emit nothing further until the user types (#2010 / Codex P1).
   assert.deepEqual(
-    filterTerminalInterruptOutput(session, "[sudo] password for alice: ", { now: 6100 }),
+    filterTerminalInterruptOutput(session, "[sudo] password for alice: ", { now: 6010 }),
     {
       accepted: true,
       data: "[sudo] password for alice: ",
       droppedBytes: 0,
-      reason: "prompt-gap",
+      reason: "password-prompt",
     },
   );
 });
@@ -326,12 +328,12 @@ test("accepts bare and localized password prompts while draining (#2010)", () =>
     });
     assert.equal(filterTerminalInterruptOutput(session, "stale\n", { now: 7001 }).accepted, false);
     assert.deepEqual(
-      filterTerminalInterruptOutput(session, prompt, { now: 7100 }),
+      filterTerminalInterruptOutput(session, prompt, { now: 7010 }),
       {
         accepted: true,
         data: prompt,
         droppedBytes: 0,
-        reason: "prompt-gap",
+        reason: "password-prompt",
       },
       `expected password prompt to resume drain: ${JSON.stringify(prompt)}`,
     );
@@ -538,7 +540,7 @@ test("holds split password prompts that have leading text before the keyword", (
   );
 });
 
-test("keeps the quiet-gap guard for fresh password-looking lines in the flood", () => {
+test("accepts a fresh one-chunk password prompt before the quiet gap", () => {
   const session = {};
 
   armTerminalInterruptOutputGate(session, {
@@ -552,19 +554,10 @@ test("keeps the quiet-gap guard for fresh password-looking lines in the flood", 
   assert.deepEqual(
     filterTerminalInterruptOutput(session, "Password: ", { now: 9810 }),
     {
-      accepted: false,
-      data: "",
-      droppedBytes: "Password: ".length,
-      reason: "draining",
-    },
-  );
-  assert.deepEqual(
-    filterTerminalInterruptOutput(session, "$ ", { now: 10000 }),
-    {
       accepted: true,
-      data: "$ ",
+      data: "Password: ",
       droppedBytes: 0,
-      reason: "prompt-gap",
+      reason: "password-prompt",
     },
   );
 });
@@ -626,24 +619,15 @@ test("rejects held password-prefix completion across a line break", () => {
     filterTerminalInterruptOutput(session, "Pass", { now: 9902 }),
     { accepted: false, data: "", droppedBytes: 0, reason: "draining" },
   );
-  // A newline before Password: means a fresh flood line, not a same-line
-  // completion of the held "Pass" prefix — keep quiet-gap.
+  // A newline before Password: discards the held "Pass" prefix (not a same-line
+  // completion), but the fresh complete password line is still preserved.
   assert.deepEqual(
     filterTerminalInterruptOutput(session, "\nPassword: ", { now: 9910 }),
     {
-      accepted: false,
-      data: "",
-      droppedBytes: 4 + "\nPassword: ".length,
-      reason: "draining",
-    },
-  );
-  assert.deepEqual(
-    filterTerminalInterruptOutput(session, "$ ", { now: 10100 }),
-    {
       accepted: true,
-      data: "$ ",
-      droppedBytes: 0,
-      reason: "prompt-gap",
+      data: "Password: ",
+      droppedBytes: 4 + 1,
+      reason: "password-prompt",
     },
   );
 });
