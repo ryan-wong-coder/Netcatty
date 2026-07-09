@@ -123,6 +123,22 @@ test("terminal layer side panel stable ctx ignores linked terminal cwd changes",
   );
 });
 
+test("terminal layer side panel stable ctx re-renders when sessions change", () => {
+  const baseCtx = {
+    mountedSftpTabIds: ["workspace-1"],
+    sidePanelOpenTabs: new Map([["workspace-1", "sftp"]]),
+    sessions: [{ id: "s1", status: "connecting" }],
+  };
+
+  assert.equal(
+    terminalLayerSidePanelStableCtxEqual(
+      baseCtx,
+      { ...baseCtx, sessions: [{ id: "s1", status: "connected" }] },
+    ),
+    false,
+  );
+});
+
 test("terminal layer side panel re-renders when linked terminal cwd changes", () => {
   const baseCtx = {
     mountedSftpTabIds: ["workspace-1"],
