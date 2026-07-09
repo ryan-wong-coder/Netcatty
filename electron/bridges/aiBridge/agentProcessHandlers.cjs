@@ -8,15 +8,19 @@ function registerAgentProcessHandlers(ctx) {
     if (!validateSenderOrSettings(event)) return { ok: false, error: "Unauthorized IPC sender" };
     mcpServerBridge.updateSessionMetadata(sessionList || [], chatSessionId);
     // Keep the reserved external MCP scope in sync whenever the renderer pushes
-    // an update and external mode is enabled. In terminal-worker mode the main
-    // process sessions map is empty, so mirror the renderer payload directly.
+    // an update and external mode is enabled. Merge (do not replace) so a
+    // single Catty sidebar scope cannot shrink the app-wide external host set.
+    // In terminal-worker mode the main-process sessions map is empty, so this
+    // renderer payload is the primary seed source.
     try {
       const external = typeof getExternalMcpController === "function"
         ? getExternalMcpController()
         : null;
       if (external?.isEnabled?.()) {
         const externalChatSessionId = external.getChatSessionId?.();
-        if (externalChatSessionId) {
+        if (externalChatSessionId && typeof mcpServerBridge.mergeSessionMetadata === "function") {
+          mcpServerBridge.mergeSessionMetadata(sessionList || [], externalChatSessionId);
+        } else if (externalChatSessionId) {
           mcpServerBridge.updateSessionMetadata(sessionList || [], externalChatSessionId);
         }
         mcpServerBridge.syncLiveSessionsToExternalScope(externalChatSessionId);

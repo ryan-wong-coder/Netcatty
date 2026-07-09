@@ -586,6 +586,46 @@ function updateSessionMetadata(sessionList, chatSessionId) {
   }
 }
 
+/**
+ * Merge session metadata into an existing chat scope without dropping
+ * previously known sessions. Used for the app-wide External MCP scope so a
+ * single Catty sidebar push cannot shrink the exposed host set.
+ */
+function mergeSessionMetadata(sessionList, chatSessionId) {
+  if (!chatSessionId || !Array.isArray(sessionList)) return { ok: false, count: 0 };
+  const existing = scopedMetadata.get(chatSessionId);
+  const byId = new Map();
+  if (existing?.metadata) {
+    for (const [sessionId, meta] of existing.metadata.entries()) {
+      byId.set(sessionId, { sessionId, ...meta });
+    }
+  }
+  for (const entry of sessionList) {
+    if (!entry || typeof entry !== "object" || !entry.sessionId) continue;
+    const previous = byId.get(entry.sessionId) || {};
+    byId.set(entry.sessionId, {
+      sessionId: entry.sessionId,
+      hostname: entry.hostname || previous.hostname || "",
+      label: entry.label || previous.label || "",
+      os: entry.os || previous.os || "",
+      username: entry.username || previous.username || "",
+      protocol: entry.protocol || previous.protocol || "",
+      shellType: entry.shellType || previous.shellType || "",
+      deviceType: entry.deviceType || previous.deviceType || "",
+      connected: entry.connected !== undefined ? entry.connected !== false : previous.connected !== false,
+      hostId: entry.hostId || previous.hostId || "",
+      hostChain: Array.isArray(entry.hostChain)
+        ? entry.hostChain
+        : (Array.isArray(previous.hostChain) ? previous.hostChain : []),
+      activePortForwards: Array.isArray(entry.activePortForwards)
+        ? entry.activePortForwards
+        : (Array.isArray(previous.activePortForwards) ? previous.activePortForwards : []),
+    });
+  }
+  updateSessionMetadata(Array.from(byId.values()), chatSessionId);
+  return { ok: true, count: byId.size };
+}
+
 function normalizeAttachmentEntry(attachment) {
   if (!attachment || typeof attachment !== "object") return null;
   const filename = String(attachment.filename || "attachment").trim() || "attachment";
@@ -1601,6 +1641,7 @@ module.exports = {
   applyChatSessionCancelled,
   checkCommandSafety,
   updateSessionMetadata,
+  mergeSessionMetadata,
   updateAttachmentMetadata,
   handleListAttachments,
   handleReadAttachment,
