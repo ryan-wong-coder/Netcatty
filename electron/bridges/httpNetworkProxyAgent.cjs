@@ -42,21 +42,18 @@ function createAgentFromProxyUrl(proxyUrl, targetIsHttps, options = {}) {
     return undefined;
   }
 
-  // Options for the connection to the proxy itself (e.g. HTTPS proxy).
-  const proxyConnectOptions = {};
-  if (options.rejectUnauthorized === false) {
-    proxyConnectOptions.rejectUnauthorized = false;
-  }
-
+  // Do not pass rejectUnauthorized into the proxy-agent constructor: that option
+  // weakens TLS to the *proxy hop*. allowInsecure / skipTLS only applies to the
+  // tunneled target via applyInsecureTargetTls below.
   const protocol = parsed.protocol.toLowerCase();
   let agent;
   if (protocol === "socks:" || protocol === "socks5:" || protocol === "socks4:") {
     if (!SocksProxyAgent) return undefined;
-    agent = new SocksProxyAgent(trimmed, proxyConnectOptions);
+    agent = new SocksProxyAgent(trimmed);
   } else if (targetIsHttps) {
-    agent = new HttpsProxyAgent(trimmed, proxyConnectOptions);
+    agent = new HttpsProxyAgent(trimmed);
   } else {
-    agent = new HttpProxyAgent(trimmed, proxyConnectOptions);
+    agent = new HttpProxyAgent(trimmed);
   }
 
   // https-proxy-agent / socks-proxy-agent apply constructor rejectUnauthorized to

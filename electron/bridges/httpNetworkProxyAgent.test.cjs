@@ -35,7 +35,18 @@ test("createAgentFromProxyUrl can disable TLS verification for insecure endpoint
     rejectUnauthorized: false,
   });
   assert.ok(agent);
-  assert.equal(agent.connectOpts.rejectUnauthorized, false);
+  // allowInsecure must NOT weaken TLS to the proxy hop itself.
+  assert.notEqual(agent.connectOpts?.rejectUnauthorized, false);
+  // Wrapper must be installed so target TLS upgrades get rejectUnauthorized:false.
+  assert.equal(typeof agent.connect, "function");
+  assert.notEqual(agent.connect, Object.getPrototypeOf(agent).connect);
+
+  const httpsProxyAgent = createAgentFromProxyUrl("https://proxy.example:8443", true, {
+    rejectUnauthorized: false,
+  });
+  assert.ok(httpsProxyAgent);
+  assert.notEqual(httpsProxyAgent.connectOpts?.rejectUnauthorized, false);
+  assert.notEqual(httpsProxyAgent.connect, Object.getPrototypeOf(httpsProxyAgent).connect);
 });
 
 test("applyInsecureTargetTls forces rejectUnauthorized on tunneled target connect", () => {

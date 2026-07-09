@@ -80,10 +80,14 @@ function createProxyCommandSocket(proxy, targetHost, targetPort, options = {}) {
     const command = substituteProxyCommand(proxy.command, targetHost, targetPort, { platform: process.platform }).trim();
     if (!command) return Promise.reject(new Error("ProxyCommand is required"));
 
+    // Keep SSH ProxyCommand on the launch-time proxy env. App-level Direct/Custom
+    // rewrites process.env for Node HTTP clients only and must not change SSH.
+    const { buildTerminalProcessEnv } = require("./httpNetworkProxyBridge.cjs");
     const child = spawn(command, {
         shell: true,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        env: buildTerminalProcessEnv(process.env),
     });
     const socket = createProcessSocket(child);
     let settled = false;

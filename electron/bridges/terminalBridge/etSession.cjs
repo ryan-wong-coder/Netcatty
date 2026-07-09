@@ -660,8 +660,9 @@ main();
       args.push(session.sshUserHost, command);
 
       return new Promise((resolve) => {
+        const { buildTerminalProcessEnv } = require("../httpNetworkProxyBridge.cjs");
         const execFileOptions = {
-          env: { ...process.env, ...session.sshEnv },
+          env: { ...buildTerminalProcessEnv(process.env), ...session.sshEnv },
           timeout: timeoutMs,
           encoding: "utf8",
           windowsHide: true,
@@ -741,8 +742,9 @@ main();
 
       args.push(sshEnvironment.userHost);
 
+      const { buildTerminalProcessEnv } = require("../httpNetworkProxyBridge.cjs");
       const env = {
-        ...process.env,
+        ...buildTerminalProcessEnv(process.env),
         ...(options.env || {}),
         ...(sshEnvironment?.env || {}),
         TERM: "xterm-256color",

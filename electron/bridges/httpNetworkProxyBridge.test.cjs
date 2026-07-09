@@ -83,6 +83,44 @@ test("applyNodeProxyEnv restores prior env when returning to system after custom
   assert.equal(env.NO_PROXY, "localhost");
 });
 
+test("normalizeProxySettingsPayload strips scheme-less proxy credentials", () => {
+  assert.equal(
+    normalizeProxySettingsPayload({
+      mode: "custom",
+      url: "user:secret@proxy.example:8080",
+      bypass: "<local>",
+    }).url,
+    "proxy.example:8080",
+  );
+});
+
+test("buildTerminalProcessEnv restores launch-time proxy env under direct/custom", () => {
+  const {
+    applyNodeProxyEnv,
+    buildTerminalProcessEnv,
+    resetProxyEnvOwnershipForTests,
+  } = require("./httpNetworkProxyBridge.cjs");
+  resetProxyEnvOwnershipForTests();
+
+  const env = {
+    HTTP_PROXY: "launch-proxy",
+    HTTPS_PROXY: "launch-proxy",
+    NO_PROXY: "localhost",
+    PATH: "/usr/bin",
+  };
+
+  applyNodeProxyEnv({ mode: "direct", url: "", bypass: "<local>" }, env);
+  assert.equal(env.HTTP_PROXY, undefined);
+
+  const terminalEnv = buildTerminalProcessEnv(env);
+  assert.equal(terminalEnv.HTTP_PROXY, "launch-proxy");
+  assert.equal(terminalEnv.HTTPS_PROXY, "launch-proxy");
+  assert.equal(terminalEnv.NO_PROXY, "localhost");
+  assert.equal(terminalEnv.PATH, "/usr/bin");
+  // App-level process.env remains direct (cleared) for Node HTTP clients.
+  assert.equal(env.HTTP_PROXY, undefined);
+});
+
 test("empty custom mode applies as system for Electron/env", () => {
   assert.deepEqual(
     buildElectronProxyConfigFromPayload({ mode: "custom", url: "", bypass: "<local>" }),

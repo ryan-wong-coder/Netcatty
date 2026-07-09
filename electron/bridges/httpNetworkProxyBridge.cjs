@@ -37,7 +37,8 @@ function asTrimmedString(value) {
 function sanitizeProxyUrl(proxyUrl) {
   const trimmed = asTrimmedString(proxyUrl);
   if (!trimmed) return "";
-  return trimmed.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)/i, "$1");
+  // Strip userinfo for both scheme URLs and scheme-less drafts.
+  return trimmed.replace(/^([a-z][a-z0-9+.-]*:\/\/)?([^/?#]*@)/i, "$1");
 }
 
 function normalizeProxySettingsPayload(raw) {
@@ -163,6 +164,23 @@ function resetProxyEnvOwnershipForTests() {
   applyChain = Promise.resolve();
 }
 
+/**
+ * Clone `baseEnv` for local terminal / PTY children, restoring the proxy env
+ * values that existed before this feature mutated process.env.
+ *
+ * App-level Direct/Custom modes intentionally rewrite process.env for Node
+ * HTTP clients (AI, updater). Terminals should keep the user's launch-time
+ * HTTP(S)_PROXY / NO_PROXY instead of inheriting those app-only overrides.
+ */
+function buildTerminalProcessEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  const snapshot = ownedEnvSnapshots.get(baseEnv) || ownedEnvSnapshots.get(process.env);
+  if (snapshot) {
+    restoreEnvSnapshot(env, snapshot);
+  }
+  return env;
+}
+
 let currentSettings = { ...DEFAULT_SETTINGS };
 
 function getCurrentProxySettings() {
@@ -229,6 +247,7 @@ module.exports = {
   buildElectronProxyConfigFromPayload,
   applyNodeProxyEnv,
   applyHttpNetworkProxy,
+  buildTerminalProcessEnv,
   getCurrentProxySettings,
   resetProxyEnvOwnershipForTests,
   sanitizeProxyUrlForEnv,

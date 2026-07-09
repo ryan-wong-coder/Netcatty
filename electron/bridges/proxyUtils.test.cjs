@@ -68,6 +68,53 @@ test("createProxySocket exposes ProxyCommand stdout as socket data", async () =>
   }
 });
 
+test("ProxyCommand spawn restores launch-time proxy env under Direct mode", async () => {
+  const {
+    applyNodeProxyEnv,
+    resetProxyEnvOwnershipForTests,
+  } = require("./httpNetworkProxyBridge.cjs");
+  resetProxyEnvOwnershipForTests();
+
+  const previous = {
+    HTTP_PROXY: process.env.HTTP_PROXY,
+    HTTPS_PROXY: process.env.HTTPS_PROXY,
+    NO_PROXY: process.env.NO_PROXY,
+  };
+  process.env.HTTP_PROXY = "launch-proxy";
+  process.env.HTTPS_PROXY = "launch-proxy";
+  process.env.NO_PROXY = "localhost";
+  applyNodeProxyEnv({ mode: "direct", url: "", bypass: "<local>" }, process.env);
+  assert.equal(process.env.HTTP_PROXY, undefined);
+
+  const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+    "process.stdout.write(process.env.HTTP_PROXY || '')",
+  )}`;
+  const socket = await createProxySocket(
+    { type: "command", host: "", port: 0, command },
+    "server.example.com",
+    22,
+  );
+
+  try {
+    const data = await Promise.race([
+      once(socket, "data").then(([chunk]) => chunk.toString()),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Timed out waiting for ProxyCommand env")), 1000).unref();
+      }),
+    ]);
+    assert.equal(data, "launch-proxy");
+  } finally {
+    socket.destroy();
+    // Restore process.env ownership and prior values for later tests.
+    applyNodeProxyEnv({ mode: "system", url: "", bypass: "<local>" }, process.env);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetProxyEnvOwnershipForTests();
+  }
+});
+
 test("createProxySocket times out stalled HTTP proxy handshakes", async (t) => {
   const originalConnect = net.connect;
   let socketDestroyed = false;

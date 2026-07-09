@@ -81,6 +81,14 @@ test('normalizeHttpNetworkProxySettings strips credentials from incomplete draft
     }).url,
     'socks4://',
   );
+  assert.equal(
+    normalizeHttpNetworkProxySettings({
+      mode: 'custom',
+      url: 'user:secret@proxy.example:8080',
+      bypass: '<local>',
+    }).url,
+    'proxy.example:8080',
+  );
 });
 
 test('normalizeHttpNetworkProxySettings preserves trailing colon while typing a port', () => {

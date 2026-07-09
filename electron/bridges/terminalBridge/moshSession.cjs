@@ -374,7 +374,8 @@ function createMoshSessionApi(ctx) {
         sshArgs: moshAuth.sshArgs,
       });
     
-      const sshEnv = { ...process.env, ...optionsEnv, TERM: "xterm-256color" };
+      const { buildTerminalProcessEnv } = require("../httpNetworkProxyBridge.cjs");
+      const sshEnv = { ...buildTerminalProcessEnv(process.env), ...optionsEnv, TERM: "xterm-256color" };
       // macOS Terminal/iTerm export LC_CTYPE=UTF-8 (a bare value, not a real
       // locale name). System ssh_config has `SendEnv LC_*`, so without scrubbing
       // these the remote shell tries to setlocale("UTF-8") and prints a warning
@@ -547,8 +548,9 @@ function createMoshSessionApi(ctx) {
     function swapToMoshClient(session, options, ctx) {
       const { bareClient, optionsEnv, lang, parsed, bufferData, flush, flushPaced, sessionId } = ctx;
     
+      const { buildTerminalProcessEnv } = require("../httpNetworkProxyBridge.cjs");
       const env = moshHandshake.buildMoshClientEnv({
-        baseEnv: { ...process.env, ...optionsEnv, TERM: "xterm-256color" },
+        baseEnv: { ...buildTerminalProcessEnv(process.env), ...optionsEnv, TERM: "xterm-256color" },
         key: parsed.key,
         lang,
       });

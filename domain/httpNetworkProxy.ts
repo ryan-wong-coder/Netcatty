@@ -38,7 +38,10 @@ function asTrimmedString(value: unknown): string {
 export function sanitizeProxyUrl(proxyUrl: string): string {
   const trimmed = asTrimmedString(proxyUrl);
   if (!trimmed) return '';
-  return trimmed.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)/i, '$1');
+  // Strip userinfo for both scheme URLs (`http://user:pass@host`) and
+  // scheme-less drafts (`user:pass@host:8080`). Electron proxyRules does not
+  // support credentials and we must not persist proxy passwords.
+  return trimmed.replace(/^([a-z][a-z0-9+.-]*:\/\/)?([^/?#]*@)/i, '$1');
 }
 
 export function normalizeHttpNetworkProxySettings(

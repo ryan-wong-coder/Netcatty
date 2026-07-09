@@ -38,7 +38,7 @@ interface BridgeAPI {
     headers: Record<string, string>,
     body: string,
     providerId?: string,
-  ): Promise<{ ok: boolean; statusCode?: number; statusText?: string; error?: string }>;
+  ): Promise<{ ok: boolean; statusCode?: number; statusText?: string; error?: string; aborted?: boolean }>;
   onAiStreamData(requestId: string, cb: (data: string) => void): () => void;
   onAiStreamEnd(requestId: string, cb: () => void): () => void;
   onAiStreamError(requestId: string, cb: (error: string) => void): () => void;
@@ -515,6 +515,11 @@ export function createBridgeFetchForSDK(
 
       if (!result.ok) {
         cleanup();
+        // Cancel during proxy lookup / request start must stay an AbortError,
+        // not a synthetic 502 that the AI SDK treats as a provider failure.
+        if (result.aborted || resolvedInit?.signal?.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
         const errorMessage = result.error || 'Stream request failed';
         const jsonBody = JSON.stringify({ error: { message: errorMessage } });
         return new Response(jsonBody, {

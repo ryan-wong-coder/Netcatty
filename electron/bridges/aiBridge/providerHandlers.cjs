@@ -349,6 +349,9 @@ function registerProviderHandlers(ctx) {
       const { statusCode, statusText } = await streamRequest(resolvedUrl, { method: "POST", headers: resolvedHeaders, body }, event, requestId, skipTLS);
       return { ok: true, statusCode, statusText };
     } catch (err) {
+      if (err?.name === "AbortError") {
+        return { ok: false, aborted: true, error: "Aborted" };
+      }
       return { ok: false, error: err?.message || String(err) };
     }
   });
@@ -398,11 +401,14 @@ function registerProviderHandlers(ctx) {
     const MAX_REDIRECTS = followRedirects ? 5 : 0;
 
     async function doFetch(fetchUrl, redirectsLeft) {
-      const { resolveOutboundHttpAgent } = require("../httpNetworkProxyAgent.cjs");
+      // ctx.require is bound from aiBridge.cjs, so this path is relative to that file.
+      const { resolveOutboundHttpAgent } = require("./httpNetworkProxyAgent.cjs");
+      const skipTLS = Boolean(skipTLSVerify || shouldSkipTLSVerify(providerId));
       let proxyAgent;
       try {
         proxyAgent = await resolveOutboundHttpAgent(fetchUrl, {
           session: electronModule?.session?.defaultSession,
+          rejectUnauthorized: skipTLS ? false : undefined,
         });
       } catch {
         proxyAgent = undefined;
@@ -414,7 +420,7 @@ function registerProviderHandlers(ctx) {
         const lib = isHttps ? https : http;
 
         const fetchOpts = { method: method || "GET", headers: resolvedHeaders || {}, timeout: 30000 };
-        if ((skipTLSVerify || shouldSkipTLSVerify(providerId)) && isHttps) fetchOpts.rejectUnauthorized = false;
+        if (skipTLS && isHttps) fetchOpts.rejectUnauthorized = false;
         if (proxyAgent) fetchOpts.agent = proxyAgent;
         const req = lib.request(parsedUrl, fetchOpts,
           (res) => {
