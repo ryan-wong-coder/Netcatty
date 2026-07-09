@@ -227,7 +227,7 @@ export const enAiMessages: Messages = {
   'ai.externalMcp.conflict.description': 'A netcatty-external entry already exists and points elsewhere. Remove or edit it manually.',
   'ai.externalMcp.enableForLauncher': 'Enable External MCP to get a usable launcher path.',
   'ai.externalMcp.cursor.title': 'Cursor / other clients',
-  'ai.externalMcp.cursor.description': 'Paste this into your MCP config (for example ~/.cursor/mcp.json).',
+  'ai.externalMcp.cursor.description': 'Merge this into your MCP config (for example ~/.cursor/mcp.json). Do not replace the whole file if you already have other servers.',
   'ai.externalMcp.status.unavailable': 'Unavailable',
   'ai.externalMcp.status.disabled': 'Disabled',
   'ai.externalMcp.status.running': 'Running',

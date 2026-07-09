@@ -1,6 +1,9 @@
 "use strict";
 
 const EXTERNAL_MCP_CODEX_NAME = "netcatty-external";
+const {
+  formatDiscoveryEnvCliFlags,
+} = require("../../cli/externalMcpDiscoveryPath.cjs");
 
 function loadShellUtils() {
   return require("../ai/shellUtils.cjs");
@@ -19,6 +22,7 @@ function parseCodexMcpList(rawOutput) {
       transport: entry.transport && typeof entry.transport === "object"
         ? { ...entry.transport }
         : null,
+      env: entry.env && typeof entry.env === "object" ? entry.env : null,
     }));
 }
 
@@ -47,8 +51,32 @@ function formatExistingCommand(transport) {
   return null;
 }
 
+function normalizePathForCompare(value) {
+  if (typeof value !== "string") return "";
+  let normalized = value.trim().replace(/^["']|["']$/gu, "");
+  if (process.platform === "win32") {
+    normalized = normalized.replace(/\.cmd$/iu, "");
+  }
+  return normalized;
+}
+
+function pathsMatch(left, right) {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
+function buildCodexAddArgs(launcherPath, discoveryEnv) {
+  return [
+    "mcp",
+    "add",
+    EXTERNAL_MCP_CODEX_NAME,
+    ...formatDiscoveryEnvCliFlags(discoveryEnv, "codex"),
+    "--",
+    launcherPath,
+  ];
+}
+
 function classifyCodexExternalMcpStatus({ entries, launcherPath, codexPath }) {
-  const commandArgs = ["mcp", "add", EXTERNAL_MCP_CODEX_NAME, "--", launcherPath];
+  const commandArgs = buildCodexAddArgs(launcherPath, {});
   const base = {
     ok: true,
     codexPath: codexPath || null,
@@ -73,7 +101,7 @@ function classifyCodexExternalMcpStatus({ entries, launcherPath, codexPath }) {
   const existingCommand = formatExistingCommand(transport);
   if (
     transport?.type === "stdio"
-    && String(transport.command || "").trim() === launcherPath
+    && pathsMatch(transport.command, launcherPath)
     && (!Array.isArray(transport.args) || transport.args.length === 0)
   ) {
     return {
@@ -93,6 +121,9 @@ function classifyCodexExternalMcpStatus({ entries, launcherPath, codexPath }) {
 function createExternalMcpCodexSetup(options = {}) {
   const deps = {
     launcherPath: options.launcherPath || null,
+    discoveryEnv: options.discoveryEnv && typeof options.discoveryEnv === "object"
+      ? options.discoveryEnv
+      : {},
     getShellEnv: options.getShellEnv || loadShellUtils().getShellEnv,
     resolveCliFromPath: options.resolveCliFromPath || loadShellUtils().resolveCliFromPath,
     prepareCommandForSpawn: options.prepareCommandForSpawn || loadShellUtils().prepareCommandForSpawn,
@@ -101,7 +132,7 @@ function createExternalMcpCodexSetup(options = {}) {
   };
 
   function getManualCommand() {
-    return formatCodexCommandText(["mcp", "add", EXTERNAL_MCP_CODEX_NAME, "--", deps.launcherPath]);
+    return formatCodexCommandText(buildCodexAddArgs(deps.launcherPath, deps.discoveryEnv));
   }
 
   async function resolveCodex() {
@@ -174,11 +205,15 @@ function createExternalMcpCodexSetup(options = {}) {
           error: summarizeFailure(result, `Codex exited with code ${result.exitCode ?? "unknown"}`),
         };
       }
-      return classifyCodexExternalMcpStatus({
+      const status = classifyCodexExternalMcpStatus({
         entries: parseCodexMcpList(result.stdout),
         launcherPath: deps.launcherPath,
         codexPath,
       });
+      return {
+        ...status,
+        command: getManualCommand(),
+      };
     } catch (error) {
       return {
         ok: true,
@@ -211,13 +246,11 @@ function createExternalMcpCodexSetup(options = {}) {
     }
 
     try {
-      const addResult = await runCodex(codexPath, shellEnv, [
-        "mcp",
-        "add",
-        EXTERNAL_MCP_CODEX_NAME,
-        "--",
-        deps.launcherPath,
-      ]);
+      const addResult = await runCodex(
+        codexPath,
+        shellEnv,
+        buildCodexAddArgs(deps.launcherPath, deps.discoveryEnv),
+      );
       if (addResult.exitCode !== 0) {
         return {
           ok: true,

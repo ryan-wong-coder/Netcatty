@@ -182,9 +182,12 @@ function App({ settings }: { settings: SettingsState }) {
   // External MCP: only persistent+enabled restores at app startup.
   // Keep this on the App mount path (not Settings) so temporary mode is not
   // accidentally disabled when the AI settings page remounts.
+  // Skip peer session windows — they also mount App and must not clear a
+  // temporary-mode runtime that the main window already started.
   useEffect(() => {
+    if (isPeerSessionWindow) return;
     syncExternalMcpStartupState(netcattyBridge.get());
-  }, []);
+  }, [isPeerSessionWindow]);
 
   const {
     isInitialized: isVaultInitialized,

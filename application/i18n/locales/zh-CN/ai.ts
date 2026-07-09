@@ -227,7 +227,7 @@ export const zhCNAiMessages: Messages = {
   'ai.externalMcp.conflict.description': '已存在指向其他位置的 netcatty-external 条目，请手动删除或修改。',
   'ai.externalMcp.enableForLauncher': '请先启用对外 MCP，以获取可用的 launcher 路径。',
   'ai.externalMcp.cursor.title': 'Cursor / 其他客户端',
-  'ai.externalMcp.cursor.description': '粘贴到 MCP 配置文件（例如 ~/.cursor/mcp.json）。',
+  'ai.externalMcp.cursor.description': '合并到 MCP 配置文件（例如 ~/.cursor/mcp.json）。若已有其他服务器，请勿整文件覆盖。',
   'ai.externalMcp.status.unavailable': '不可用',
   'ai.externalMcp.status.disabled': '已关闭',
   'ai.externalMcp.status.running': '运行中',

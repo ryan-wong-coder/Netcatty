@@ -1,6 +1,9 @@
 "use strict";
 
 const EXTERNAL_MCP_CLAUDE_NAME = "netcatty-external";
+const {
+  formatDiscoveryEnvCliFlags,
+} = require("../../cli/externalMcpDiscoveryPath.cjs");
 
 function loadShellUtils() {
   return require("../ai/shellUtils.cjs");
@@ -24,9 +27,31 @@ function isMissingClaudeServer(result) {
   return /No MCP server found with name:\s*["']?netcatty-external["']?/i.test(getCombinedOutput(result));
 }
 
+function normalizePathForCompare(value) {
+  if (typeof value !== "string") return "";
+  let normalized = value.trim().replace(/^["']|["']$/gu, "");
+  if (process.platform === "win32") {
+    normalized = normalized.replace(/\.cmd$/iu, "");
+  }
+  return normalized;
+}
+
+function pathsMatch(left, right) {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
 function extractExistingCommand(result) {
   const output = getCombinedOutput(result);
   if (!output) return null;
+
+  const commandLine = output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => /^Command:\s*/iu.test(line));
+  if (commandLine) {
+    return commandLine.replace(/^Command:\s*/iu, "").trim() || null;
+  }
+
   const matchingLine = output
     .split(/\r?\n/u)
     .map((line) => line.trim())
@@ -42,8 +67,19 @@ function extractExistingCommand(result) {
   return afterName || output;
 }
 
+function buildClaudeAddArgs(launcherPath, discoveryEnv) {
+  return [
+    "mcp",
+    "add",
+    EXTERNAL_MCP_CLAUDE_NAME,
+    ...formatDiscoveryEnvCliFlags(discoveryEnv, "claude"),
+    "--",
+    launcherPath,
+  ];
+}
+
 function classifyClaudeExternalMcpStatus({ getResult, launcherPath, claudePath }) {
-  const commandArgs = ["mcp", "add", EXTERNAL_MCP_CLAUDE_NAME, "--", launcherPath];
+  const commandArgs = buildClaudeAddArgs(launcherPath, {});
   const base = {
     ok: true,
     claudePath: claudePath || null,
@@ -68,7 +104,7 @@ function classifyClaudeExternalMcpStatus({ getResult, launcherPath, claudePath }
   }
 
   const existingCommand = extractExistingCommand(getResult);
-  if (existingCommand === launcherPath) {
+  if (pathsMatch(existingCommand, launcherPath)) {
     return {
       ...base,
       state: "configured",
@@ -90,6 +126,9 @@ function summarizeFailure(result, fallback) {
 function createExternalMcpClaudeSetup(options = {}) {
   const deps = {
     launcherPath: options.launcherPath || null,
+    discoveryEnv: options.discoveryEnv && typeof options.discoveryEnv === "object"
+      ? options.discoveryEnv
+      : {},
     getShellEnv: options.getShellEnv || loadShellUtils().getShellEnv,
     resolveCliFromPath: options.resolveCliFromPath || loadShellUtils().resolveCliFromPath,
     prepareCommandForSpawn: options.prepareCommandForSpawn || loadShellUtils().prepareCommandForSpawn,
@@ -98,7 +137,7 @@ function createExternalMcpClaudeSetup(options = {}) {
   };
 
   function getManualCommand() {
-    return formatClaudeCommandText(["mcp", "add", EXTERNAL_MCP_CLAUDE_NAME, "--", deps.launcherPath]);
+    return formatClaudeCommandText(buildClaudeAddArgs(deps.launcherPath, deps.discoveryEnv));
   }
 
   async function resolveClaude() {
@@ -156,11 +195,15 @@ function createExternalMcpClaudeSetup(options = {}) {
 
     try {
       const result = await runClaude(claudePath, shellEnv, ["mcp", "get", EXTERNAL_MCP_CLAUDE_NAME]);
-      return classifyClaudeExternalMcpStatus({
+      const status = classifyClaudeExternalMcpStatus({
         getResult: result,
         launcherPath: deps.launcherPath,
         claudePath,
       });
+      return {
+        ...status,
+        command: getManualCommand(),
+      };
     } catch (error) {
       return {
         ok: true,
@@ -193,13 +236,11 @@ function createExternalMcpClaudeSetup(options = {}) {
     }
 
     try {
-      const addResult = await runClaude(claudePath, shellEnv, [
-        "mcp",
-        "add",
-        EXTERNAL_MCP_CLAUDE_NAME,
-        "--",
-        deps.launcherPath,
-      ]);
+      const addResult = await runClaude(
+        claudePath,
+        shellEnv,
+        buildClaudeAddArgs(deps.launcherPath, deps.discoveryEnv),
+      );
       if (addResult.exitCode !== 0) {
         return {
           ok: true,

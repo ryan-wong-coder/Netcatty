@@ -9,8 +9,11 @@ const path = require("node:path");
 const {
   getExternalMcpDiscoveryFilePath,
   getExternalMcpLauncherPath,
+  resolveExistingExternalMcpDiscoveryFilePath,
   EXTERNAL_MCP_CHAT_SESSION_ID,
   EXTERNAL_MCP_DISCOVERY_ENV_VAR,
+  buildDiscoveryEnv,
+  formatDiscoveryEnvCliFlags,
 } = require("./externalMcpDiscoveryPath.cjs");
 const {
   buildExternalDiscoveryPayload,
@@ -38,6 +41,30 @@ describe("externalMcpDiscoveryPath", () => {
       if (previous == null) delete process.env[EXTERNAL_MCP_DISCOVERY_ENV_VAR];
       else process.env[EXTERNAL_MCP_DISCOVERY_ENV_VAR] = previous;
     }
+  });
+
+  it("resolves an existing discovery under candidate userData dirs", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-ext-mcp-"));
+    const discoveryPath = path.join(tmp, "external-mcp", "discovery.json");
+    writeExternalDiscovery(discoveryPath, {
+      port: 1,
+      token: "t",
+      pid: 1,
+    });
+    const resolved = resolveExistingExternalMcpDiscoveryFilePath({ userDataDir: tmp });
+    assert.equal(resolved, discoveryPath);
+  });
+
+  it("builds discovery env CLI flags for clients", () => {
+    const env = buildDiscoveryEnv("/tmp/discovery.json");
+    assert.deepEqual(
+      formatDiscoveryEnvCliFlags(env, "codex"),
+      ["--env", `${EXTERNAL_MCP_DISCOVERY_ENV_VAR}=/tmp/discovery.json`],
+    );
+    assert.deepEqual(
+      formatDiscoveryEnvCliFlags(env, "claude"),
+      ["-e", `${EXTERNAL_MCP_DISCOVERY_ENV_VAR}=/tmp/discovery.json`],
+    );
   });
 });
 

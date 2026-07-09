@@ -843,6 +843,16 @@ async function handleMessage(socket, line) {
 
   try {
     const callParams = params || {};
+    // External MCP clients keep an authenticated TCP socket after disable unless
+    // we reject reserved-scope RPCs once the controller reports disabled.
+    if (
+      callParams?.chatSessionId === EXTERNAL_MCP_CHAT_SESSION_ID
+      && !externalMcpActivityHook?.isEnabled?.()
+    ) {
+      throw new Error(
+        "External MCP is disabled. Re-enable it in Netcatty Settings → AI.",
+      );
+    }
     notifyExternalMcpActivity(method, callParams);
     const result = await dispatch(method, callParams);
     const response = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
@@ -1275,7 +1285,18 @@ async function handleGetContext(params) {
   const chatSessionId = params?.chatSessionId || null;
   // External MCP clients use the reserved app-wide scope; refresh from the live
   // session map so newly opened terminals appear without waiting for a renderer push.
+  // Only sync while External MCP is enabled — otherwise a stale client could
+  // rebuild the cleared scope after disable/idle timeout.
   if (chatSessionId === EXTERNAL_MCP_CHAT_SESSION_ID) {
+    if (!externalMcpActivityHook?.isEnabled?.()) {
+      return {
+        environment: "netcatty-terminal",
+        description: "External MCP is disabled.",
+        hosts: [],
+        hostCount: 0,
+        tools: toolHints,
+      };
+    }
     syncLiveSessionsToExternalScope(chatSessionId);
   }
   const explicitScopedIds = Array.isArray(params?.scopedSessionIds)

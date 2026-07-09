@@ -131,48 +131,73 @@ function quoteShellArg(value: string) {
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }
 
-export function formatCodexAddCommand(launcherPath: string) {
-  return `codex mcp add netcatty-external -- ${quoteShellArg(launcherPath)}`;
+const EXTERNAL_MCP_DISCOVERY_ENV_VAR = "NETCATTY_EXTERNAL_MCP_DISCOVERY_FILE";
+
+export function formatCodexAddCommand(launcherPath: string, discoveryPath?: string | null) {
+  const envFlags = discoveryPath
+    ? ` --env ${EXTERNAL_MCP_DISCOVERY_ENV_VAR}=${quoteShellArg(discoveryPath)}`
+    : "";
+  return `codex mcp add netcatty-external${envFlags} -- ${quoteShellArg(launcherPath)}`;
 }
 
-export function formatClaudeAddCommand(launcherPath: string) {
-  return `claude mcp add netcatty-external -- ${quoteShellArg(launcherPath)}`;
+export function formatClaudeAddCommand(launcherPath: string, discoveryPath?: string | null) {
+  const envFlags = discoveryPath
+    ? ` -e ${EXTERNAL_MCP_DISCOVERY_ENV_VAR}=${quoteShellArg(discoveryPath)}`
+    : "";
+  return `claude mcp add netcatty-external${envFlags} -- ${quoteShellArg(launcherPath)}`;
 }
 
-export function formatGrokAddCommand(launcherPath: string) {
-  return `grok mcp add netcatty-external -- ${quoteShellArg(launcherPath)}`;
+export function formatGrokAddCommand(launcherPath: string, discoveryPath?: string | null) {
+  const envFlags = discoveryPath
+    ? ` -e ${EXTERNAL_MCP_DISCOVERY_ENV_VAR}=${quoteShellArg(discoveryPath)}`
+    : "";
+  return `grok mcp add netcatty-external${envFlags} -- ${quoteShellArg(launcherPath)}`;
 }
 
-export function buildCodexTomlSnippet(launcherPath: string) {
+function buildTomlEnvBlock(discoveryPath?: string | null) {
+  if (!discoveryPath) return "";
+  return `\nenv = { ${EXTERNAL_MCP_DISCOVERY_ENV_VAR} = "${escapeTomlBasicString(discoveryPath)}" }`;
+}
+
+export function buildCodexTomlSnippet(launcherPath: string, discoveryPath?: string | null) {
   return `[mcp_servers.netcatty-external]
 command = "${escapeTomlBasicString(launcherPath)}"
-args = []`;
+args = []${buildTomlEnvBlock(discoveryPath)}`;
 }
 
-export function buildGrokTomlSnippet(launcherPath: string) {
+export function buildGrokTomlSnippet(launcherPath: string, discoveryPath?: string | null) {
   return `[mcp_servers.netcatty-external]
 command = "${escapeTomlBasicString(launcherPath)}"
-args = []`;
+args = []${buildTomlEnvBlock(discoveryPath)}`;
 }
 
-export function buildClaudeSnippet(launcherPath: string) {
+function buildJsonServerEntry(launcherPath: string, discoveryPath?: string | null) {
+  const entry: {
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+  } = {
+    command: launcherPath,
+    args: [],
+  };
+  if (discoveryPath) {
+    entry.env = { [EXTERNAL_MCP_DISCOVERY_ENV_VAR]: discoveryPath };
+  }
+  return entry;
+}
+
+export function buildClaudeSnippet(launcherPath: string, discoveryPath?: string | null) {
   return JSON.stringify({
     mcpServers: {
-      "netcatty-external": {
-        command: launcherPath,
-        args: [],
-      },
+      "netcatty-external": buildJsonServerEntry(launcherPath, discoveryPath),
     },
   }, null, 2);
 }
 
-export function buildCursorSnippet(launcherPath: string) {
+export function buildCursorSnippet(launcherPath: string, discoveryPath?: string | null) {
   return JSON.stringify({
     mcpServers: {
-      "netcatty-external": {
-        command: launcherPath,
-        args: [],
-      },
+      "netcatty-external": buildJsonServerEntry(launcherPath, discoveryPath),
     },
   }, null, 2);
 }
@@ -296,13 +321,20 @@ export const ExternalMcpCard: React.FC = () => {
     || claudeStatus?.launcherPath
     || grokStatus?.launcherPath
     || null;
-  const codexCommand = launcherPath ? formatCodexAddCommand(launcherPath) : (codexStatus?.command || "");
-  const claudeCommand = launcherPath ? formatClaudeAddCommand(launcherPath) : (claudeStatus?.command || "");
-  const grokCommand = launcherPath ? formatGrokAddCommand(launcherPath) : (grokStatus?.command || "");
-  const codexTomlSnippet = launcherPath ? buildCodexTomlSnippet(launcherPath) : "";
-  const grokTomlSnippet = launcherPath ? buildGrokTomlSnippet(launcherPath) : "";
-  const claudeSnippet = launcherPath ? buildClaudeSnippet(launcherPath) : "";
-  const cursorSnippet = launcherPath ? buildCursorSnippet(launcherPath) : "";
+  const discoveryPath = status?.discoveryPath || null;
+  const codexCommand = launcherPath
+    ? formatCodexAddCommand(launcherPath, discoveryPath)
+    : (codexStatus?.command || "");
+  const claudeCommand = launcherPath
+    ? formatClaudeAddCommand(launcherPath, discoveryPath)
+    : (claudeStatus?.command || "");
+  const grokCommand = launcherPath
+    ? formatGrokAddCommand(launcherPath, discoveryPath)
+    : (grokStatus?.command || "");
+  const codexTomlSnippet = launcherPath ? buildCodexTomlSnippet(launcherPath, discoveryPath) : "";
+  const grokTomlSnippet = launcherPath ? buildGrokTomlSnippet(launcherPath, discoveryPath) : "";
+  const claudeSnippet = launcherPath ? buildClaudeSnippet(launcherPath, discoveryPath) : "";
+  const cursorSnippet = launcherPath ? buildCursorSnippet(launcherPath, discoveryPath) : "";
   const canAddToCodex = codexStatus?.state === "not_configured";
   const canAddToClaude = claudeStatus?.state === "not_configured";
   const canAddToGrok = grokStatus?.state === "not_configured";

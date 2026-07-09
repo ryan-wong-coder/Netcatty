@@ -1,6 +1,9 @@
 "use strict";
 
 const EXTERNAL_MCP_GROK_NAME = "netcatty-external";
+const {
+  formatDiscoveryEnvCliFlags,
+} = require("../../cli/externalMcpDiscoveryPath.cjs");
 
 function loadShellUtils() {
   return require("../ai/shellUtils.cjs");
@@ -123,8 +126,32 @@ function getEntryCommand(entry) {
   return formatExistingCommand(entry);
 }
 
+function normalizePathForCompare(value) {
+  if (typeof value !== "string") return "";
+  let normalized = value.trim().replace(/^["']|["']$/gu, "");
+  if (process.platform === "win32") {
+    normalized = normalized.replace(/\.cmd$/iu, "");
+  }
+  return normalized;
+}
+
+function pathsMatch(left, right) {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
+function buildGrokAddArgs(launcherPath, discoveryEnv) {
+  return [
+    "mcp",
+    "add",
+    EXTERNAL_MCP_GROK_NAME,
+    ...formatDiscoveryEnvCliFlags(discoveryEnv, "grok"),
+    "--",
+    launcherPath,
+  ];
+}
+
 function classifyGrokExternalMcpStatus({ entries, launcherPath, grokPath }) {
-  const commandArgs = ["mcp", "add", EXTERNAL_MCP_GROK_NAME, "--", launcherPath];
+  const commandArgs = buildGrokAddArgs(launcherPath, {});
   const base = {
     ok: true,
     grokPath: grokPath || null,
@@ -146,7 +173,7 @@ function classifyGrokExternalMcpStatus({ entries, launcherPath, grokPath }) {
   }
 
   const existingCommand = getEntryCommand(entry);
-  if (existingCommand === launcherPath) {
+  if (pathsMatch(existingCommand, launcherPath)) {
     return {
       ...base,
       state: "configured",
@@ -164,6 +191,9 @@ function classifyGrokExternalMcpStatus({ entries, launcherPath, grokPath }) {
 function createExternalMcpGrokSetup(options = {}) {
   const deps = {
     launcherPath: options.launcherPath || null,
+    discoveryEnv: options.discoveryEnv && typeof options.discoveryEnv === "object"
+      ? options.discoveryEnv
+      : {},
     getShellEnv: options.getShellEnv || loadShellUtils().getShellEnv,
     resolveCliFromPath: options.resolveCliFromPath || loadShellUtils().resolveCliFromPath,
     prepareCommandForSpawn: options.prepareCommandForSpawn || loadShellUtils().prepareCommandForSpawn,
@@ -172,7 +202,7 @@ function createExternalMcpGrokSetup(options = {}) {
   };
 
   function getManualCommand() {
-    return formatGrokCommandText(["mcp", "add", EXTERNAL_MCP_GROK_NAME, "--", deps.launcherPath]);
+    return formatGrokCommandText(buildGrokAddArgs(deps.launcherPath, deps.discoveryEnv));
   }
 
   async function resolveGrok() {
@@ -248,17 +278,25 @@ function createExternalMcpGrokSetup(options = {}) {
             error: summarizeFailure(fallback, `Grok exited with code ${fallback.exitCode ?? "unknown"}`),
           };
         }
-        return classifyGrokExternalMcpStatus({
+        const status = classifyGrokExternalMcpStatus({
           entries: parseGrokMcpList(fallback.stdout),
           launcherPath: deps.launcherPath,
           grokPath,
         });
+        return {
+          ...status,
+          command: getManualCommand(),
+        };
       }
-      return classifyGrokExternalMcpStatus({
+      const status = classifyGrokExternalMcpStatus({
         entries: parseGrokMcpList(result.stdout),
         launcherPath: deps.launcherPath,
         grokPath,
       });
+      return {
+        ...status,
+        command: getManualCommand(),
+      };
     } catch (error) {
       return {
         ok: true,
@@ -291,13 +329,11 @@ function createExternalMcpGrokSetup(options = {}) {
     }
 
     try {
-      const addResult = await runGrok(grokPath, shellEnv, [
-        "mcp",
-        "add",
-        EXTERNAL_MCP_GROK_NAME,
-        "--",
-        deps.launcherPath,
-      ]);
+      const addResult = await runGrok(
+        grokPath,
+        shellEnv,
+        buildGrokAddArgs(deps.launcherPath, deps.discoveryEnv),
+      );
       if (addResult.exitCode !== 0) {
         return {
           ok: true,

@@ -55,6 +55,17 @@ describe("external MCP client setup classifiers", () => {
     });
     assert.equal(configured.state, "configured");
 
+    const quoted = classifyClaudeExternalMcpStatus({
+      getResult: {
+        exitCode: 0,
+        stdout: `Command: "/path/to/netcatty-external-mcp"\nStatus: connected`,
+        stderr: "",
+      },
+      launcherPath: "/path/to/netcatty-external-mcp",
+      claudePath: "/usr/bin/claude",
+    });
+    assert.equal(quoted.state, "configured");
+
     const missing = classifyClaudeExternalMcpStatus({
       getResult: {
         exitCode: 1,

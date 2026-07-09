@@ -6,6 +6,7 @@ const {
   getExternalMcpDiscoveryFilePath,
   getExternalMcpLauncherPath,
   EXTERNAL_MCP_CHAT_SESSION_ID,
+  buildDiscoveryEnv,
 } = require("../cli/externalMcpDiscoveryPath.cjs");
 const {
   writeExternalDiscovery,
@@ -105,14 +106,15 @@ function createExternalMcpController(options = {}) {
 
   function ensureClientSetup() {
     const launcherPath = deps.getLauncherPath() || null;
+    const discoveryEnv = buildDiscoveryEnv(discoveryFilePath);
     if (!codexSetup) {
-      codexSetup = deps.createCodexSetup({ launcherPath });
+      codexSetup = deps.createCodexSetup({ launcherPath, discoveryEnv });
     }
     if (!claudeSetup) {
-      claudeSetup = deps.createClaudeSetup({ launcherPath });
+      claudeSetup = deps.createClaudeSetup({ launcherPath, discoveryEnv });
     }
     if (!grokSetup) {
-      grokSetup = deps.createGrokSetup({ launcherPath });
+      grokSetup = deps.createGrokSetup({ launcherPath, discoveryEnv });
     }
   }
 
@@ -223,14 +225,17 @@ function createExternalMcpController(options = {}) {
       }
       if (stopPromise) {
         await stopPromise;
-        return buildStatus();
       }
-      state = "disabled";
-      error = null;
-      stopPromise = stopActiveRuntime().finally(() => {
-        stopPromise = null;
-      });
-      await stopPromise;
+      // Always run cleanup for this disable request, even if another stop was
+      // already in flight (enable→disable races / idle timer overlap).
+      if (!enabled) {
+        state = "disabled";
+        error = null;
+        stopPromise = stopActiveRuntime().finally(() => {
+          stopPromise = null;
+        });
+        await stopPromise;
+      }
       return buildStatus();
     }
 
@@ -335,6 +340,10 @@ function createExternalMcpController(options = {}) {
     if (discoveryFilePath) {
       deps.removeDiscovery(discoveryFilePath);
     }
+    // Recreate client setup helpers so they pick up the resolved discovery path.
+    codexSetup = null;
+    claudeSetup = null;
+    grokSetup = null;
     ensureClientSetup();
   }
 

@@ -10,17 +10,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
-  getExternalMcpDiscoveryFilePath,
+  resolveExistingExternalMcpDiscoveryFilePath,
   EXTERNAL_MCP_CHAT_SESSION_ID,
 } = require("../cli/externalMcpDiscoveryPath.cjs");
 const { readExternalDiscovery } = require("../cli/externalMcpDiscovery.cjs");
 
 function resolveDiscoveryPath() {
-  const configured = process.env.NETCATTY_EXTERNAL_MCP_DISCOVERY_FILE;
-  if (configured && fs.existsSync(configured)) {
-    return configured;
-  }
-  return getExternalMcpDiscoveryFilePath();
+  return resolveExistingExternalMcpDiscoveryFilePath();
 }
 
 function main() {

@@ -134,7 +134,9 @@ export function syncExternalMcpStartupState(
 }
 
 export function useExternalMcpToggleState() {
-  const [enabled, setEnabledRaw] = useState<boolean>(() => readExternalMcpStartupEnabled());
+  // UI mirrors the stored switch. Startup reconcile (App mount, main window only)
+  // decides whether temporary mode should clear/persist and start the runtime.
+  const [enabled, setEnabledRaw] = useState<boolean>(() => readExternalMcpStoredEnabled());
 
   const persistEnabled = useCallback((nextEnabled: boolean) => {
     setEnabledRaw(nextEnabled);
