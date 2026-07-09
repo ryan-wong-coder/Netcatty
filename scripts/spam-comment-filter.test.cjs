@@ -5,6 +5,7 @@ const test = require("node:test");
 const {
   detectSpamComment,
   extractDangerousFiles,
+  extractZipFiles,
   isGitHubUserAttachment,
 } = require("./spam-comment-filter.cjs");
 
@@ -29,31 +30,65 @@ test("flags fake patch spam when the filename ends a sentence", () => {
   assert.deepEqual(result.dangerousFiles, ["patch.zip"]);
 });
 
-test("flags suspicious GitHub attachment spam without bait wording", () => {
+test("flags any zip from an outside user, including hash-named soft bait", () => {
   const result = detectSpamComment({
     authorAssociation: "NONE",
     userType: "User",
-    body: "[netcatty_fix.zip](https://github.com/user-attachments/files/29784176/netcatty_fix.zip)\nI attached the fix I used.",
+    body: "[63bf1862b52422e38b8cb170.zip](https://github.com/user-attachments/files/29784176/63bf1862b52422e38b8cb170.zip)\nI'd start with the docs inside",
   });
 
   assert.equal(result.spam, true);
+  assert.ok(
+    result.dangerousFiles.some((file) => file.includes("63bf1862b52422e38b8cb170.zip"))
+  );
 });
 
-test("does not flag ordinary log attachments from outside users", () => {
+test("flags ordinary zip log attachments from outside users", () => {
   const result = detectSpamComment({
     authorAssociation: "FIRST_TIME_CONTRIBUTOR",
     userType: "User",
     body: "[debug-logs.zip](https://github.com/user-attachments/files/29784176/debug-logs.zip)\nI attached logs from a failed connection. The app hangs after I click connect, and the logs show the SSH handshake timing out.",
   });
 
-  assert.equal(result.spam, false);
+  assert.equal(result.spam, true);
 });
 
-test("does not flag trusted maintainers even when sharing patch archives", () => {
+test("flags other dangerous archives from outside users", () => {
+  const result = detectSpamComment({
+    authorAssociation: "NONE",
+    userType: "User",
+    body: "See hotfix.dmg for the workaround.",
+  });
+
+  assert.equal(result.spam, true);
+  assert.deepEqual(result.dangerousFiles, ["hotfix.dmg"]);
+});
+
+test("does not flag trusted maintainers even when sharing zip archives", () => {
   const result = detectSpamComment({
     authorAssociation: "OWNER",
     userType: "User",
     body: "Try this temporary netcatty_patch.zip while I prepare the signed release. It fixes the rendering issue.",
+  });
+
+  assert.equal(result.spam, false);
+});
+
+test("does not flag bot comments that mention zip files", () => {
+  const result = detectSpamComment({
+    authorAssociation: "NONE",
+    userType: "Bot",
+    body: "Uploaded build-artifacts.zip for CI.",
+  });
+
+  assert.equal(result.spam, false);
+});
+
+test("does not flag comments without downloadable archives", () => {
+  const result = detectSpamComment({
+    authorAssociation: "NONE",
+    userType: "User",
+    body: "I attached screenshots of the hang after connect. The SSH handshake times out.",
   });
 
   assert.equal(result.spam, false);
@@ -64,6 +99,10 @@ test("extracts risky file names from markdown links and plain text", () => {
     extractDangerousFiles("[fix.zip](https://example.com/fix.zip) also hotfix.dmg."),
     ["fix.zip", "https://example.com/fix.zip", "hotfix.dmg"]
   );
+  assert.deepEqual(extractZipFiles("[fix.zip](https://example.com/fix.zip) also hotfix.dmg."), [
+    "fix.zip",
+    "https://example.com/fix.zip",
+  ]);
 });
 
 test("identifies GitHub user attachment URLs", () => {

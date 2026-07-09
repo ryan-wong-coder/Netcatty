@@ -35,7 +35,7 @@ jobs:
             core.info(JSON.stringify(result, null, 2));
 
             if (!result.spam) {
-              core.info('Comment did not match the high-confidence spam filter.');
+              core.info('Comment did not match the zip/dangerous-file spam filter.');
               return;
             }
 
@@ -46,5 +46,5 @@ jobs:
             });
 
             core.notice(
-              `Deleted suspected malware spam comment by @${comment.user.login} on #${context.payload.issue.number}: ${result.reasons.join('; ')}`
+              `Deleted comment with zip/dangerous attachment by @${comment.user.login} on #${context.payload.issue.number}: ${result.reasons.join('; ')}`
             );

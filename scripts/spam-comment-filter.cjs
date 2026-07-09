@@ -14,18 +14,10 @@ const dangerousFilePattern = new RegExp(
   "gi"
 );
 
-const suspiciousFileNamePattern = new RegExp(
-  `\\b(?:patch|hotfix|fix|update|repair|solution|workaround|netcatty)[\\w.-]*\\.${DANGEROUS_FILE_EXTENSION}\\b`,
-  "i"
+const zipFilePattern = new RegExp(
+  `(?:^|[\\s([<"'=])([^\\s()[\\]<>\"']+\\.zip)(?=$|[\\s)\\]>\"']|[.,!?;:](?:$|\\s))`,
+  "gi"
 );
-
-const baitPatterns = [
-  /\bquick\s+(?:patch|fix|hotfix)\b/i,
-  /\bi\s+found\s+(?:a\s+)?(?:quick\s+)?(?:patch|fix|hotfix|solution)\b/i,
-  /\b(?:download|use|try|install|apply)\s+(?:this|the)\s+(?:patch|fix|hotfix|update|zip|file)\b/i,
-  /\b(?:fixes|fixed|patches|repairs)\s+(?:the|this|that|those)\b/i,
-  /\b(?:backend|encoding|character mapping|black boxes|terminal rendering|sftp module)\b/i,
-];
 
 const githubUserAttachmentPattern =
   /^https:\/\/github\.com\/user-attachments\/files\/\d+\//i;
@@ -38,18 +30,20 @@ function isTrustedAuthor(authorAssociation) {
   return TRUSTED_AUTHOR_ASSOCIATIONS.has(normalizeAssociation(authorAssociation));
 }
 
-function extractDangerousFiles(body) {
+function extractMatches(body, pattern) {
   const files = [];
-  for (const match of body.matchAll(dangerousFilePattern)) {
+  for (const match of body.matchAll(pattern)) {
     files.push(match[1]);
   }
   return [...new Set(files)];
 }
 
-function matchingBaitPatterns(body) {
-  return baitPatterns
-    .filter((pattern) => pattern.test(body))
-    .map((pattern) => pattern.source);
+function extractDangerousFiles(body) {
+  return extractMatches(body, dangerousFilePattern);
+}
+
+function extractZipFiles(body) {
+  return extractMatches(body, zipFilePattern);
 }
 
 function isGitHubUserAttachment(file) {
@@ -59,57 +53,33 @@ function isGitHubUserAttachment(file) {
 function detectSpamComment({ body, authorAssociation, userType } = {}) {
   const normalizedBody = String(body || "").replace(/\s+/g, " ").trim();
   const dangerousFiles = extractDangerousFiles(normalizedBody);
-  const baitMatches = matchingBaitPatterns(normalizedBody);
-  const hasSuspiciousFileName = dangerousFiles.some((file) =>
-    suspiciousFileNamePattern.test(file)
-  );
-  const hasSuspiciousGitHubAttachment =
-    hasSuspiciousFileName && dangerousFiles.some(isGitHubUserAttachment);
+  const zipFiles = extractZipFiles(normalizedBody);
   const trustedAuthor = isTrustedAuthor(authorAssociation);
   const botAuthor = String(userType || "").toLowerCase() === "bot";
 
   const reasons = [];
   let score = 0;
 
-  if (dangerousFiles.length > 0) {
-    score += 3;
+  if (zipFiles.length > 0) {
+    score += 10;
+    reasons.push(`zip attachment or link: ${zipFiles.join(", ")}`);
+  } else if (dangerousFiles.length > 0) {
+    score += 10;
     reasons.push(`dangerous downloadable file: ${dangerousFiles.join(", ")}`);
   }
 
-  if (hasSuspiciousFileName) {
-    score += 2;
-    reasons.push("download name looks like a patch or hotfix");
-  }
-
-  if (hasSuspiciousGitHubAttachment) {
-    score += 1;
-    reasons.push("GitHub attachment uses a patch/fix-style archive name");
-  }
-
-  if (baitMatches.length > 0) {
-    score += Math.min(3, baitMatches.length);
-    reasons.push("comment uses patch/fix bait language");
-  }
-
-  if (normalizedBody.length > 0 && normalizedBody.length < 700) {
-    score += 1;
-    reasons.push("short drive-by comment");
-  }
-
+  // Hard rule: any zip (or other dangerous downloadable) from an untrusted
+  // human is deleted. Maintainers and bots are exempt.
   const spam =
     !trustedAuthor &&
     !botAuthor &&
-    dangerousFiles.length > 0 &&
-    score >= 6 &&
-    (baitMatches.length >= 2 ||
-      (hasSuspiciousFileName && baitMatches.length >= 1) ||
-      hasSuspiciousGitHubAttachment);
+    (zipFiles.length > 0 || dangerousFiles.length > 0);
 
   return {
     spam,
-    score,
+    score: spam ? score : 0,
     reasons: spam ? reasons : [],
-    dangerousFiles,
+    dangerousFiles: zipFiles.length > 0 ? zipFiles : dangerousFiles,
     trustedAuthor,
     botAuthor,
   };
@@ -118,6 +88,7 @@ function detectSpamComment({ body, authorAssociation, userType } = {}) {
 module.exports = {
   detectSpamComment,
   extractDangerousFiles,
+  extractZipFiles,
   isGitHubUserAttachment,
   isTrustedAuthor,
 };
