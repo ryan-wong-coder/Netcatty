@@ -19,3 +19,23 @@ test("hibernate effect keeps isVisibleRef current even when hibernate is disable
     /if \(hibernateEnabled\) \{\s*scheduleHibernate\(\);\s*\}/,
   );
 });
+
+test("disabling hibernate wakes already soft-hidden or hibernated panes", () => {
+  const source = readFileSync(
+    new URL("./useTerminalHibernateEffect.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /if \(!hibernateEnabled\) \{[\s\S]*?clearHibernateTimer\(\);[\s\S]*?if \(hibernatedRef\.current \|\| softHiddenRef\.current\) \{\s*tryWake\(\);\s*\}/,
+  );
+  // Must not early-return before visibility sync after the disable wake path.
+  const disableWakeIndex = source.indexOf("Turning hibernate off must wake");
+  const applyVisibilityCallIndex = source.indexOf(
+    "applyVisibility(resolveVisible());",
+    disableWakeIndex,
+  );
+  assert.ok(disableWakeIndex !== -1);
+  assert.ok(applyVisibilityCallIndex !== -1);
+  assert.ok(applyVisibilityCallIndex > disableWakeIndex);
+});

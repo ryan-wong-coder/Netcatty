@@ -166,6 +166,16 @@ export function useTerminalHibernateEffect({
       }
     };
 
+    if (!hibernateEnabled) {
+      // Turning hibernate off must wake already soft-hidden / hibernated panes
+      // immediately; waiting for the next tab select would leave the setting
+      // ineffective for currently hidden sessions.
+      clearHibernateTimer();
+      if (hibernatedRef.current || softHiddenRef.current) {
+        tryWake();
+      }
+    }
+
     applyVisibility(resolveVisible());
 
     const unsubscribe = subscribePaneVisible(sessionId, () => {
