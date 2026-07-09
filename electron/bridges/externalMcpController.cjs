@@ -267,6 +267,15 @@ function createExternalMcpController(options = {}) {
     if (bridge?.cleanupScopedMetadata) {
       await bridge.cleanupScopedMetadata(deps.chatSessionId);
     }
+    // cleanupScopedMetadata clears cancelledChatSessions; re-assert cancel so
+    // soft-revoke still blocks in-flight external work after metadata wipe.
+    if (typeof bridge?.setChatSessionCancelled === "function") {
+      try {
+        bridge.setChatSessionCancelled(deps.chatSessionId, true);
+      } catch {
+        // Best-effort cancel flag.
+      }
+    }
   }
 
   async function setEnabledUnlocked(nextEnabled) {
@@ -402,10 +411,20 @@ function createExternalMcpController(options = {}) {
     sessionSyncHandler = typeof handler === "function" ? handler : null;
   }
 
-  function onBridgeHostReady({ port, token }) {
+  function onBridgeHostReady({ port }) {
     if (!isEnabled()) return;
+    // Host-ready reports the shared Catty/CLI TCP token — never write that into
+    // External discovery. Keep/refresh the dedicated externalAuthToken only.
     if (port) lastKnownPort = port;
-    if (token) lastKnownToken = token;
+    const bridge = getBridge();
+    const externalToken = typeof bridge?.getExternalMcpAuthToken === "function"
+      ? bridge.getExternalMcpAuthToken()
+      : null;
+    if (externalToken) {
+      lastKnownToken = externalToken;
+    } else if (typeof bridge?.issueExternalMcpAuthToken === "function") {
+      lastKnownToken = bridge.issueExternalMcpAuthToken();
+    }
     if (discoveryFilePath && lastKnownPort && lastKnownToken) {
       writeDiscoveryFromBridge();
     }
