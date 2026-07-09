@@ -9,12 +9,21 @@ export interface LocalTerminalOptions {
   localStartDir?: string;
 }
 
+/**
+ * Stable hostId for all Local Terminal sessions.
+ *
+ * Autocomplete command history is keyed by hostId. Using `local-${sessionId}`
+ * made every new Local Terminal look like a brand-new host, so history
+ * suggestions never accumulated across opens (issue #2037).
+ */
+export const LOCAL_TERMINAL_HOST_ID = "local-terminal";
+
 export const createLocalTerminalSession = (
   sessionId: string,
   options?: LocalTerminalOptions,
 ): TerminalSession => ({
   id: sessionId,
-  hostId: `local-${sessionId}`,
+  hostId: LOCAL_TERMINAL_HOST_ID,
   hostLabel: options?.shellName || "Local Terminal",
   hostname: "localhost",
   username: "local",

@@ -84,7 +84,7 @@ declare global {
 
     // Local filesystem operations
     listLocalDir?(path: string): Promise<RemoteFile[]>;
-    readLocalFile?(path: string): Promise<ArrayBuffer>;
+    readLocalFile?(path: string, options?: { maxBytes?: number }): Promise<ArrayBuffer>;
     writeLocalFile?(path: string, content: ArrayBuffer): Promise<void>;
     deleteLocalFile?(path: string): Promise<void>;
     renameLocalFile?(oldPath: string, newPath: string): Promise<void>;

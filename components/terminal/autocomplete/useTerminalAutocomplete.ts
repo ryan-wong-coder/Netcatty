@@ -18,6 +18,7 @@ import {
 import { getCompletions, parseCommandLine, type CompletionSuggestion } from "./completionEngine";
 import type { Snippet } from "../../../domain/models";
 import { recordCommand } from "./commandHistoryStore";
+import { seedLocalShellHistoryFromHistfiles } from "./localShellHistorySeed";
 import { shellEscape } from "./completionEngine";
 import { preloadCommonSpecs } from "./figSpecLoader";
 import {
@@ -244,6 +245,16 @@ export function useTerminalAutocomplete(
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Local Terminal: seed autocomplete history from ~/.zsh_history (etc.) once
+  // per stable hostId so prefix suggestions match Ghostty-style histfile recall
+  // (#2037). Remote sessions keep reading history via the side panel instead.
+  useEffect(() => {
+    if (!settings.enabled) return;
+    if (protocol !== "local") return;
+    if (!hostId) return;
+    void seedLocalShellHistoryFromHistfiles(hostId, hostOs);
+  }, [settings.enabled, protocol, hostId, hostOs]);
 
   // Initialize ghost text addon — poll for termRef since it's set after xterm runtime creation
   // Also clears popup/ghost when autocomplete is disabled at runtime

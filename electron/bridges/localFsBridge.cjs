@@ -180,11 +180,35 @@ async function listLocalDir(event, payload) {
 }
 
 /**
- * Read a local file
+ * Read a local file.
+ *
+ * Optional `maxBytes` returns only the trailing bytes of the file (used by
+ * Local Terminal histfile seeding so multi-MB shell histories do not stall
+ * the renderer IPC path).
  */
 async function readLocalFile(event, payload) {
-  const buffer = await fs.promises.readFile(payload.path);
-  return buffer;
+  const maxBytes =
+    Number.isFinite(payload?.maxBytes) && payload.maxBytes > 0
+      ? Math.floor(payload.maxBytes)
+      : null;
+  if (!maxBytes) {
+    return fs.promises.readFile(payload.path);
+  }
+
+  const handle = await fs.promises.open(payload.path, "r");
+  try {
+    const { size } = await handle.stat();
+    if (size <= maxBytes) {
+      const buffer = Buffer.alloc(size);
+      await handle.read(buffer, 0, size, 0);
+      return buffer;
+    }
+    const buffer = Buffer.alloc(maxBytes);
+    await handle.read(buffer, 0, maxBytes, size - maxBytes);
+    return buffer;
+  } finally {
+    await handle.close();
+  }
 }
 
 /**

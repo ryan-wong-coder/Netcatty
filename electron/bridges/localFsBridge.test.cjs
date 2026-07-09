@@ -170,3 +170,21 @@ test("collectLocalTreeEntries preserves empty directories in selected folders", 
     await fs.promises.rm(root, { recursive: true, force: true });
   }
 });
+
+test("readLocalFile returns only the trailing maxBytes when requested", async () => {
+  const { readLocalFile } = require("./localFsBridge.cjs");
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-local-read-"));
+  const filePath = path.join(root, "hist.txt");
+  const body = "AAAA\nBBBB\nCCCC\nDDDD\n";
+  await fs.promises.writeFile(filePath, body);
+
+  try {
+    const full = await readLocalFile(null, { path: filePath });
+    assert.equal(Buffer.from(full).toString("utf8"), body);
+
+    const tailed = await readLocalFile(null, { path: filePath, maxBytes: 10 });
+    assert.equal(Buffer.from(tailed).toString("utf8"), body.slice(-10));
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+});

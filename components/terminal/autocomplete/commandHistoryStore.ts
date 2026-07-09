@@ -47,21 +47,39 @@ function loadStore(): HistoryStore {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+function persistStoreNow(store: HistoryStore): boolean {
+  const ok = localStorageAdapter.write(STORAGE_KEY, store);
+  if (ok) return true;
+  // Storage full — evict lowest scored entries (not just oldest by insertion)
+  const now = Date.now();
+  store.entries.sort((a, b) => scoreEntryAt(b, now) - scoreEntryAt(a, now));
+  store.entries = store.entries.slice(0, Math.floor(MAX_ENTRIES / 2));
+  return localStorageAdapter.write(STORAGE_KEY, store);
+}
+
 function saveStore(store: HistoryStore): void {
   cachedStore = store;
   // Debounce saves to avoid excessive writes
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const ok = localStorageAdapter.write(STORAGE_KEY, store);
-    if (!ok) {
-      // Storage full — evict lowest scored entries (not just oldest by insertion)
-      const now = Date.now();
-      store.entries.sort((a, b) => scoreEntryAt(b, now) - scoreEntryAt(a, now));
-      store.entries = store.entries.slice(0, Math.floor(MAX_ENTRIES / 2));
-      localStorageAdapter.write(STORAGE_KEY, store);
-    }
+    persistStoreNow(store);
     saveTimer = null;
   }, 500);
+}
+
+/**
+ * Flush any pending debounced history write immediately.
+ * Used after bulk imports (e.g. local histfile seeding) so a seed-complete
+ * flag is not persisted before the imported commands land in storage.
+ * Returns false when the write could not be persisted.
+ */
+export function flushCommandHistoryStore(): boolean {
+  if (!cachedStore) return true;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  return persistStoreNow(cachedStore);
 }
 
 /**

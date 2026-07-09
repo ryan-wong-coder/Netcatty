@@ -630,20 +630,13 @@ export const useSessionState = ({
     const newSessions: TerminalSession[] = targets.map((target) => {
       if (target.kind === 'local') {
         const sessionId = crypto.randomUUID();
-        return {
-          id: sessionId,
-          hostId: `local-${sessionId}`,
-          hostLabel: target.shellName || 'Local Terminal',
-          hostname: 'localhost',
-          username: 'local',
-          status: 'connecting',
-          protocol: 'local',
+        return createLocalTerminalSession(sessionId, {
           shellType: target.shellType,
-          localShell: target.shell,
-          localShellArgs: target.shellArgs,
-          localShellName: target.shellName,
-          localShellIcon: target.shellIcon,
-        };
+          shell: target.shell,
+          shellArgs: target.shellArgs,
+          shellName: target.shellName,
+          shellIcon: target.shellIcon,
+        });
       }
       const host = target.host;
       if (host.protocol === 'serial') {
@@ -821,20 +814,14 @@ export const useSessionState = ({
     if (!workspacesRef.current.some(w => w.id === workspaceId)) return null;
 
     const newSessionId = crypto.randomUUID();
-    const localHostId = `local-${newSessionId}`;
     const newSession: TerminalSession = {
-      id: newSessionId,
-      hostId: localHostId,
-      hostLabel: options?.shellName || 'Local Terminal',
-      hostname: 'localhost',
-      username: 'local',
-      status: 'connecting',
-      protocol: 'local',
-      shellType: options?.shellType,
-      localShell: options?.shell,
-      localShellArgs: options?.shellArgs,
-      localShellName: options?.shellName,
-      localShellIcon: options?.shellIcon,
+      ...createLocalTerminalSession(newSessionId, {
+        shellType: options?.shellType,
+        shell: options?.shell,
+        shellArgs: options?.shellArgs,
+        shellName: options?.shellName,
+        shellIcon: options?.shellIcon,
+      }),
       workspaceId,
     };
 

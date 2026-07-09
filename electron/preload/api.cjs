@@ -481,8 +481,11 @@ function createPreloadApi(ctx) {
   listLocalDir: async (path) => {
     return ipcRenderer.invoke("netcatty:local:list", { path });
   },
-  readLocalFile: async (path) => {
-    return ipcRenderer.invoke("netcatty:local:read", { path });
+  readLocalFile: async (path, options) => {
+    return ipcRenderer.invoke("netcatty:local:read", {
+      path,
+      maxBytes: options?.maxBytes,
+    });
   },
   writeLocalFile: async (path, content) => {
     return ipcRenderer.invoke("netcatty:local:write", { path, content });
