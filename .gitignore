@@ -42,6 +42,9 @@ coverage
 # Codex
 /.codex/
 
+# OMO / local agent run-continuation state
+/.omo/
+
 # Qoder
 .qoder
 

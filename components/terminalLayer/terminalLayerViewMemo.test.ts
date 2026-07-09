@@ -123,19 +123,53 @@ test("terminal layer side panel stable ctx ignores linked terminal cwd changes",
   );
 });
 
-test("terminal layer side panel stable ctx re-renders when sessions change", () => {
+test("terminal layer side panel stable ctx re-renders when SFTP-relevant session fields change", () => {
   const baseCtx = {
     mountedSftpTabIds: ["workspace-1"],
     sidePanelOpenTabs: new Map([["workspace-1", "sftp"]]),
-    sessions: [{ id: "s1", status: "connecting" }],
+    sessions: [{ id: "s1", hostId: "h1", protocol: "ssh", status: "connecting" }],
   };
 
   assert.equal(
     terminalLayerSidePanelStableCtxEqual(
       baseCtx,
-      { ...baseCtx, sessions: [{ id: "s1", status: "connected" }] },
+      {
+        ...baseCtx,
+        sessions: [{ id: "s1", hostId: "h1", protocol: "ssh", status: "connected" }],
+      },
     ),
     false,
+  );
+});
+
+test("terminal layer side panel stable ctx ignores session title-only updates", () => {
+  const baseCtx = {
+    mountedSftpTabIds: ["workspace-1"],
+    sidePanelOpenTabs: new Map([["workspace-1", "sftp"]]),
+    sessions: [{
+      id: "s1",
+      hostId: "h1",
+      protocol: "ssh",
+      status: "connected",
+      dynamicTitle: "old",
+    }],
+  };
+
+  assert.equal(
+    terminalLayerSidePanelStableCtxEqual(
+      baseCtx,
+      {
+        ...baseCtx,
+        sessions: [{
+          id: "s1",
+          hostId: "h1",
+          protocol: "ssh",
+          status: "connected",
+          dynamicTitle: "new title from OSC",
+        }],
+      },
+    ),
+    true,
   );
 });
 

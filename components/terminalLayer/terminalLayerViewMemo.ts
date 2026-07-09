@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { sftpPickerSessionsEqual } from '../../domain/sftpConnectedHosts';
+
 type Ctx = Record<string, any>;
 
 function eq(prev: Ctx, next: Ctx, key: string): boolean {
@@ -157,6 +159,10 @@ function sidePanelCtxKeyEqual(prev: Ctx, next: Ctx, key: string): boolean {
   }
   if (key === 'terminalTheme') {
     return terminalThemeEqual(prev, next, key);
+  }
+  if (key === 'sessions') {
+    // Connected picker only needs id/hostId/protocol/status — ignore title/cwd churn.
+    return sftpPickerSessionsEqual(prev.sessions, next.sessions);
   }
   return prev[key] === next[key];
 }

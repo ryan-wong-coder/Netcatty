@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Host, TerminalSession } from "./models";
-import { listSftpConnectedHosts } from "./sftpConnectedHosts";
+import { listSftpConnectedHosts, sftpPickerSessionsEqual } from "./sftpConnectedHosts";
 
 const host = (overrides: Partial<Host> & Pick<Host, "id" | "label">): Host => ({
   hostname: `${overrides.id}.example.test`,
@@ -104,4 +104,22 @@ test("listSftpConnectedHosts skips sessions whose host is missing from the map",
     new Map(),
   );
   assert.deepEqual(result, []);
+});
+
+test("sftpPickerSessionsEqual ignores title-only changes", () => {
+  const prev = [session({ id: "s1", hostId: "a", status: "connected", dynamicTitle: "old" })];
+  const next = [session({ id: "s1", hostId: "a", status: "connected", dynamicTitle: "new" })];
+  assert.equal(sftpPickerSessionsEqual(prev, next), true);
+});
+
+test("sftpPickerSessionsEqual detects status and hostId changes", () => {
+  const base = session({ id: "s1", hostId: "a", status: "connecting" });
+  assert.equal(
+    sftpPickerSessionsEqual([base], [session({ id: "s1", hostId: "a", status: "connected" })]),
+    false,
+  );
+  assert.equal(
+    sftpPickerSessionsEqual([base], [session({ id: "s1", hostId: "b", status: "connecting" })]),
+    false,
+  );
 });
