@@ -890,6 +890,15 @@ function SettingsTerminalTab(props: {
       <SectionHeader title={t("settings.terminal.section.serverStats")} />
       <div className="space-y-0 divide-y divide-border rounded-lg border bg-card px-4">
         <SettingRow
+          label={t("settings.terminal.hostInfoBar.show")}
+          description={t("settings.terminal.hostInfoBar.show.desc")}
+        >
+          <Toggle
+            checked={terminalSettings.showHostInfoBar}
+            onChange={(v) => updateTerminalSetting("showHostInfoBar", v)}
+          />
+        </SettingRow>
+        <SettingRow
           label={t("settings.terminal.serverStats.show")}
           description={t("settings.terminal.serverStats.show.desc")}
         >
