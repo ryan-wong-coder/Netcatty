@@ -61,9 +61,10 @@ export const TerminalAuthDialog: React.FC<TerminalAuthDialogProps> = ({
     isValid,
 }) => {
     const { t } = useI18n();
+    const handleContinue = onSubmitWithoutSave ?? onSubmit;
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && isValid) {
-            onSubmit();
+            handleContinue();
         }
     };
 
@@ -74,6 +75,7 @@ export const TerminalAuthDialog: React.FC<TerminalAuthDialogProps> = ({
     );
 
     const [keyDropdownOpen, setKeyDropdownOpen] = React.useState(false);
+    const [submitOptionsOpen, setSubmitOptionsOpen] = React.useState(false);
 
     const selectedKey = authKeyId ? keys.find((k) => k.id === authKeyId) : null;
 
@@ -270,18 +272,21 @@ export const TerminalAuthDialog: React.FC<TerminalAuthDialogProps> = ({
                 <Button variant="secondary" onClick={onCancel}>
                     {t("common.close")}
                 </Button>
-                <Dropdown>
+                <Dropdown open={submitOptionsOpen} onOpenChange={setSubmitOptionsOpen}>
                     <div className="flex items-center rounded-md bg-primary text-primary-foreground">
                         <Button
                             disabled={!isValid}
-                            onClick={onSubmit}
+                            onClick={handleContinue}
                             className="rounded-r-none bg-transparent hover:bg-white/10 shadow-none"
                         >
-                            {t("terminal.auth.continueSave")}
+                            {t("common.continue")}
                         </Button>
                         <DropdownTrigger asChild>
                             <Button
                                 disabled={!isValid}
+                                aria-label={t("terminal.auth.continueSave")}
+                                aria-haspopup="menu"
+                                aria-expanded={submitOptionsOpen}
                                 className="px-2 rounded-l-none bg-transparent hover:bg-white/10 border-l border-primary-foreground/20 shadow-none"
                             >
                                 <ChevronDown size={14} />
@@ -291,10 +296,10 @@ export const TerminalAuthDialog: React.FC<TerminalAuthDialogProps> = ({
                     <DropdownContent className="w-44 p-1 z-50" align="end">
                         <button
                             className="w-full px-3 py-2 text-sm text-left hover:bg-secondary rounded-md"
-                            onClick={onSubmitWithoutSave ?? onSubmit}
+                            onClick={onSubmit}
                             disabled={!isValid}
                         >
-                            {t("common.continue")}
+                            {t("terminal.auth.continueSave")}
                         </button>
                     </DropdownContent>
                 </Dropdown>

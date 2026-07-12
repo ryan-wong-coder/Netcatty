@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyEphemeralHostsUpdate, isSavedVaultHost, splitHostsUpdateByEphemeral } from "./ephemeralHosts";
+import { applyEphemeralHostsUpdate, isSavedVaultHost, splitHostsUpdateByEphemeral, upsertEphemeralHost } from "./ephemeralHosts";
 import type { Host } from "./models";
 
 const makeHost = (id: string, overrides: Partial<Host> = {}): Host => ({
@@ -59,4 +59,16 @@ test("isSavedVaultHost is false for missing or ephemeral hosts", () => {
   assert.equal(isSavedVaultHost(makeHost("a", { ephemeral: true })), false);
   assert.equal(isSavedVaultHost(null), false);
   assert.equal(isSavedVaultHost(undefined), false);
+});
+
+test("upsertEphemeralHost keeps a complete unsaved host available to its session", () => {
+  const original = makeHost("quick-1", { ephemeral: true, password: "old" });
+  const replacement = makeHost("quick-1", {
+    ephemeral: true,
+    identityId: "identity-1",
+    etEnabled: true,
+    etPort: 2022,
+  });
+
+  assert.deepEqual(upsertEphemeralHost([original], replacement), [replacement]);
 });

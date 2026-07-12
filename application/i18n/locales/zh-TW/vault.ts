@@ -49,6 +49,8 @@ export const zhTWVaultMessages: Messages = {
   'quickConnect.knownHost.addQuestion': '是否將它加入 Known Hosts？',
   'quickConnect.knownHost.addAndContinue': '加入並繼續',
   'quickConnect.addKey': '新增 key',
+  'quickConnect.identity.label': '鑰匙串身分',
+  'quickConnect.identity.manual': '手動輸入憑證',
   'quickConnect.warning.unparsedOptions': '部分 SSH 引數已被忽略: {options}',
 
   // Protocol select dialog

@@ -513,6 +513,8 @@ export const ruVaultMessages: Messages = {
   'quickConnect.knownHost.addQuestion': 'Хотите добавить его в список известных хостов?',
   'quickConnect.knownHost.addAndContinue': 'Добавить и продолжить',
   'quickConnect.addKey': 'Добавить ключ',
+  'quickConnect.identity.label': 'Учетные данные из связки ключей',
+  'quickConnect.identity.manual': 'Ввести учетные данные вручную',
   'quickConnect.warning.unparsedOptions': 'Некоторые аргументы SSH были проигнорированы: {options}',
 
   // Terminal

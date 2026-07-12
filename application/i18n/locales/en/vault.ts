@@ -478,6 +478,8 @@ export const enVaultMessages: Messages = {
   'quickConnect.knownHost.addQuestion': 'Do you want to add it to the list of known hosts?',
   'quickConnect.knownHost.addAndContinue': 'Add and continue',
   'quickConnect.addKey': 'Add key',
+  'quickConnect.identity.label': 'Keychain identity',
+  'quickConnect.identity.manual': 'Enter credentials manually',
   'quickConnect.warning.unparsedOptions': 'Some SSH arguments were ignored: {options}',
 
   // Terminal
