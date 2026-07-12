@@ -170,15 +170,20 @@ export function resolveTerminalTopOffsets({
 }
 
 export function resolveTerminalRightInset({
-  showHostInfoBar,
-  isSearchOpen,
+  showHostInfoBar: _showHostInfoBar,
+  isSearchOpen: _isSearchOpen,
   terminalBodyInset = 4,
 }: {
   showHostInfoBar: boolean;
   isSearchOpen: boolean;
   terminalBodyInset?: number;
 }): number {
-  return terminalBodyInset + (!showHostInfoBar && !isSearchOpen ? 28 : 0);
+  // Compact speed-dial floats over the terminal (z-30 overlay). Do not reserve
+  // a right gutter for it — that pushes the xterm scrollbar left and leaves a
+  // dead strip next to the circular toggle.
+  void _showHostInfoBar;
+  void _isSearchOpen;
+  return terminalBodyInset;
 }
 
 /**
