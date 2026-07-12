@@ -80,10 +80,12 @@ test("getServerStats opens an ET stats companion connection for direct ET sessio
     sshUserHost: "alice@example.test",
     sshOptions: [],
     sshEnv: {},
+    tcpLatencyTarget: { hostname: "example.test", port: 2022 },
     etStatsAuth: { hostname: "example.test", username: "alice" },
   };
   let ensureCalls = 0;
   let execFallbackCalls = 0;
+  const latencyTargets = [];
   const api = makeApi(
     session,
     async () => {
@@ -98,6 +100,10 @@ test("getServerStats opens an ET stats companion connection for direct ET sessio
         s.etStatsConn = fakeConn(LINUX_STATS);
         return s.etStatsConn;
       },
+      measureTcpConnectLatency: async (target) => {
+        latencyTargets.push(target);
+        return 3;
+      },
     },
   );
 
@@ -110,6 +116,7 @@ test("getServerStats opens an ET stats companion connection for direct ET sessio
   assert.equal(result.stats.memTotal, 8000);
   assert.equal(result.stats.cpuCores, 4);
   assert.equal(typeof result.stats.latencyMs, "number");
+  assert.deepEqual(latencyTargets, [{ hostname: "example.test", port: 2022 }]);
 });
 
 test("getServerStats falls back to execOnEtSession for jumped ET sessions", async () => {

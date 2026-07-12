@@ -6,6 +6,7 @@ const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_CACHE_TTL_MS = 30000;
 const DEFAULT_FAILURE_CACHE_TTL_MS = 5000;
 const MAX_CACHE_ENTRIES = 256;
+const MAX_CONCURRENT_PROBES = 8;
 
 function createTcpConnectLatencyProbe({
   net,
@@ -14,8 +15,13 @@ function createTcpConnectLatencyProbe({
   cacheNow = () => Date.now(),
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
   failureCacheTtlMs = DEFAULT_FAILURE_CACHE_TTL_MS,
+  maxCacheEntries = MAX_CACHE_ENTRIES,
+  maxConcurrentProbes = MAX_CONCURRENT_PROBES,
 }) {
-  const cache = new Map();
+  const resultCache = new Map();
+  const inFlight = new Map();
+  const queue = [];
+  let activeProbeCount = 0;
 
   function runProbe({ hostname, port, timeoutMs }) {
     return new Promise((resolve) => {
@@ -52,35 +58,65 @@ function createTcpConnectLatencyProbe({
     });
   }
 
+  function startScheduledProbe(task) {
+    activeProbeCount += 1;
+    let result;
+    try {
+      result = Promise.resolve(task());
+    } catch (err) {
+      result = Promise.reject(err);
+    }
+    return result.finally(() => {
+      activeProbeCount -= 1;
+      while (activeProbeCount < maxConcurrentProbes && queue.length > 0) {
+        const next = queue.shift();
+        startScheduledProbe(next.task).then(next.resolve, next.reject);
+      }
+    });
+  }
+
+  function scheduleProbe(task) {
+    if (activeProbeCount < maxConcurrentProbes) return startScheduledProbe(task);
+    return new Promise((resolve, reject) => queue.push({ task, resolve, reject }));
+  }
+
+  function cacheResult(key, value) {
+    resultCache.delete(key);
+    resultCache.set(key, {
+      value,
+      expiresAt: cacheNow() + (value === null ? failureCacheTtlMs : cacheTtlMs),
+    });
+    while (resultCache.size > maxCacheEntries) {
+      resultCache.delete(resultCache.keys().next().value);
+    }
+  }
+
   return function measureTcpConnectLatency({ hostname, port, timeoutMs = DEFAULT_TIMEOUT_MS }) {
     if (!hostname || !Number.isInteger(port) || port < 1 || port > 65535) {
       return Promise.resolve(null);
     }
 
     const key = `${String(hostname).toLowerCase()}\u0000${port}`;
-    const cached = cache.get(key);
+    const pending = inFlight.get(key);
+    if (pending) return pending;
+
+    const cached = resultCache.get(key);
     const checkedAt = cacheNow();
-    if (cached?.promise || (cached && cached.expiresAt > checkedAt)) {
-      return cached.promise || Promise.resolve(cached.value);
+    if (cached && cached.expiresAt > checkedAt) {
+      resultCache.delete(key);
+      resultCache.set(key, cached);
+      return Promise.resolve(cached.value);
     }
+    resultCache.delete(key);
 
-    if (cache.size >= MAX_CACHE_ENTRIES) {
-      for (const [cachedKey, entry] of cache) {
-        if (!entry.promise && entry.expiresAt <= checkedAt) cache.delete(cachedKey);
-      }
-      while (cache.size >= MAX_CACHE_ENTRIES) {
-        cache.delete(cache.keys().next().value);
-      }
-    }
-
-    const promise = runProbe({ hostname, port, timeoutMs }).then((value) => {
-      cache.set(key, {
-        value,
-        expiresAt: cacheNow() + (value === null ? failureCacheTtlMs : cacheTtlMs),
+    const promise = scheduleProbe(() => runProbe({ hostname, port, timeoutMs }))
+      .catch(() => null)
+      .then((value) => {
+        inFlight.delete(key);
+        cacheResult(key, value);
+        return value;
       });
-      return value;
-    });
-    cache.set(key, { promise, expiresAt: Number.POSITIVE_INFINITY });
+    inFlight.set(key, promise);
     return promise;
   };
 }
@@ -89,4 +125,5 @@ module.exports = {
   createTcpConnectLatencyProbe,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_CACHE_TTL_MS,
+  MAX_CONCURRENT_PROBES,
 };

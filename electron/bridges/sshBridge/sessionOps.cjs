@@ -4,7 +4,7 @@ function createSessionOpsApi(ctx) {
     function getTcpLatencyTarget(session) {
       if (session.tcpLatencyDirect === false) return null;
 
-      const auth = session.moshStatsAuth || session.etStatsAuth || session._reuseEndpoint || null;
+      const auth = session.tcpLatencyTarget || session.moshStatsAuth || session.etStatsAuth || session._reuseEndpoint || null;
       if (auth?.hasJumpHost || auth?.hasProxy) return null;
 
       const hostname = auth?.hostname || session.hostname;

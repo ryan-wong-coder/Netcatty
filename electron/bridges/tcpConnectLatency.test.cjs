@@ -110,3 +110,51 @@ test("TCP latency deduplicates concurrent probes and reuses a recent result", as
   connectCallbacks[1]();
   assert.equal(await refreshed, 5);
 });
+
+test("TCP latency caps concurrent probes without evicting pending deduplication", async () => {
+  const connectCallbacks = [];
+  let activeSockets = 0;
+  let maxActiveSockets = 0;
+  const measure = createTcpConnectLatencyProbe({
+    net: {
+      isIP: () => 4,
+      createConnection(_options, callback) {
+        const socket = createSocket();
+        activeSockets += 1;
+        maxActiveSockets = Math.max(maxActiveSockets, activeSockets);
+        socket.destroy = () => {
+          if (!socket.destroyedByProbe) activeSockets -= 1;
+          socket.destroyedByProbe = true;
+        };
+        connectCallbacks.push(callback);
+        return socket;
+      },
+    },
+    now: () => 100,
+    cacheNow: () => 1_000,
+    maxCacheEntries: 2,
+    maxConcurrentProbes: 2,
+  });
+
+  const first = measure({ hostname: "192.0.2.1", port: 22 });
+  const duplicate = measure({ hostname: "192.0.2.1", port: 22 });
+  const second = measure({ hostname: "192.0.2.2", port: 22 });
+  const third = measure({ hostname: "192.0.2.3", port: 22 });
+  assert.equal(first, duplicate);
+  assert.equal(connectCallbacks.length, 2);
+  assert.equal(maxActiveSockets, 2);
+
+  connectCallbacks[0]();
+  await first;
+  assert.equal(connectCallbacks.length, 3);
+  assert.equal(maxActiveSockets, 2);
+
+  connectCallbacks[1]();
+  connectCallbacks[2]();
+  await Promise.all([second, third]);
+
+  const firstAgain = measure({ hostname: "192.0.2.1", port: 22 });
+  assert.equal(connectCallbacks.length, 4, "oldest settled result should be evicted");
+  connectCallbacks[3]();
+  await firstAgain;
+});

@@ -800,6 +800,12 @@ main();
           sshEnv: sshEnvironment?.env || {},
           sshOptions: sshEnvironment?.sshOptions || [],
           sshUserHost: sshEnvironment?.userHost || "",
+          tcpLatencyTarget: {
+            hostname: options.hostname,
+            port: options.etPort || 2022,
+          },
+          tcpLatencyDirect:
+            (!Array.isArray(options.jumpHosts) || options.jumpHosts.length === 0) && !options.proxy,
           etStatsAuth: {
             hostname: options.hostname,
             port: options.port || 22,
