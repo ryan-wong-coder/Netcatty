@@ -157,7 +157,15 @@ const SftpPaneViewInner: React.FC<SftpPaneViewProps> = ({
     draggedFilesCount: draggedFiles?.length ?? 0,
   });
 
-  const { sortField, sortOrder, columnWidths, handleSort, handleResizeStart } = useSftpPaneSorting();
+  const {
+    sortField,
+    sortOrder,
+    columnWidths,
+    visibleColumns,
+    handleSort,
+    handleResizeStart,
+    toggleColumnVisibility,
+  } = useSftpPaneSorting();
 
   // Bookmark support
   const updateHosts = useSftpUpdateHosts();
@@ -573,8 +581,10 @@ const SftpPaneViewInner: React.FC<SftpPaneViewProps> = ({
             onUploadExternalFileList={handleUploadExternalFileList}
             onUploadExternalFolder={handleUploadExternalFolder}
             columnWidths={columnWidths}
+            visibleColumns={visibleColumns}
             handleSort={handleSortWithTransition}
             handleResizeStart={handleResizeStart}
+            toggleColumnVisibility={toggleColumnVisibility}
             sortField={sortField}
             sortOrder={sortOrder}
             reloadRequest={treeReloadRequest}
@@ -590,10 +600,12 @@ const SftpPaneViewInner: React.FC<SftpPaneViewProps> = ({
           side={side}
           isPaneFocused={isPaneFocused}
           columnWidths={columnWidths}
+          visibleColumns={visibleColumns}
           sortField={sortField}
           sortOrder={sortOrder}
           handleSort={handleSortWithTransition}
           handleResizeStart={handleResizeStart}
+          toggleColumnVisibility={toggleColumnVisibility}
           fileListRef={fileListRef}
           handleFileListScroll={handleFileListScroll}
           shouldVirtualize={shouldVirtualize}

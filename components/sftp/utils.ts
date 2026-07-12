@@ -257,13 +257,38 @@ export interface ColumnWidths {
     type: number;
 }
 
-export const buildSftpColumnTemplate = (columnWidths: ColumnWidths): string => {
-    return [
-        `minmax(140px, ${columnWidths.name}fr)`,
-        `minmax(0, ${columnWidths.modified}fr)`,
-        `minmax(52px, ${columnWidths.size}fr)`,
-        `minmax(64px, ${columnWidths.type}fr)`,
-    ].join(' ');
+export type SftpColumnVisibility = Record<keyof ColumnWidths, boolean>;
+
+export const DEFAULT_SFTP_COLUMN_VISIBILITY: SftpColumnVisibility = {
+    name: true,
+    modified: true,
+    size: true,
+    type: true,
+};
+
+export const normalizeSftpColumnVisibility = (value: unknown): SftpColumnVisibility => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return DEFAULT_SFTP_COLUMN_VISIBILITY;
+    }
+
+    const stored = value as Partial<Record<keyof ColumnWidths, unknown>>;
+    return {
+        name: true,
+        modified: stored.modified !== false,
+        size: stored.size !== false,
+        type: stored.type !== false,
+    };
+};
+
+export const buildSftpColumnTemplate = (
+    columnWidths: ColumnWidths,
+    visibleColumns: SftpColumnVisibility = DEFAULT_SFTP_COLUMN_VISIBILITY,
+): string => {
+    const columns = [`minmax(140px, ${columnWidths.name}fr)`];
+    if (visibleColumns.modified) columns.push(`minmax(0, ${columnWidths.modified}fr)`);
+    if (visibleColumns.size) columns.push(`minmax(52px, ${columnWidths.size}fr)`);
+    if (visibleColumns.type) columns.push(`minmax(64px, ${columnWidths.type}fr)`);
+    return columns.join(' ');
 };
 
 export const sortSftpEntries = (

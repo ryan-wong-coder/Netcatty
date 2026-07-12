@@ -118,6 +118,7 @@ export const STORAGE_KEY_SFTP_AUTO_OPEN_SIDEBAR = 'netcatty_sftp_auto_open_sideb
 export const STORAGE_KEY_SFTP_FOLLOW_TERMINAL_CWD = 'netcatty_sftp_follow_terminal_cwd_v1';
 export const STORAGE_KEY_SFTP_DEFAULT_VIEW_MODE = 'netcatty_sftp_default_view_mode_v1';
 export const STORAGE_KEY_SFTP_HOST_VIEW_MODES = 'netcatty_sftp_host_view_modes_v1';
+export const STORAGE_KEY_SFTP_VISIBLE_COLUMNS = 'netcatty_sftp_visible_columns_v1';
 export const STORAGE_KEY_SFTP_TRANSFER_PANEL_HEIGHT = 'netcatty_sftp_transfer_panel_height_v1';
 export const STORAGE_KEY_SFTP_TRANSFER_CHILD_NAME_WIDTH = 'netcatty_sftp_transfer_child_name_width_v1';
 
