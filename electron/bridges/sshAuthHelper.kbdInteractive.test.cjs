@@ -621,7 +621,7 @@ test("createKeyboardInteractiveHandler allows save on multi-prompt Password + OT
   });
 
   handler(
-    "Two-factor",
+    "Authentication",
     "",
     "",
     [passwordPrompt, verificationCodePrompt],
