@@ -234,10 +234,12 @@ export function handleKeyboardInteractiveSubmitImpl(getCtx: AppContextGetter, re
     if (bridge?.respondKeyboardInteractive) {
       void bridge.respondKeyboardInteractive(requestId, responses, false);
     }
-    // Save password to host if requested
+    // Save password to host if requested — never for second-factor / EDR prompts
+    // (allowSavePassword === false) so a secondary secret cannot overwrite the
+    // host login password (#2150 / Codex review on #2151).
     if (savePassword) {
       const request = keyboardInteractiveQueue.find(r => r.requestId === requestId);
-      if (request?.sessionId) {
+      if (request?.sessionId && request.allowSavePassword !== false) {
         const session = sessions.find(s => s.id === request.sessionId);
         // Only save when the prompting hostname matches the session's host,
         // to avoid overwriting the destination host's password with a jump host's password

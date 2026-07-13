@@ -1368,12 +1368,23 @@ function createKeyboardInteractiveHandler(options) {
     // reporting partialSuccess between them (login password, then EDR). After
     // the first auto-fill, later rounds must open empty — not pre-filled with
     // the same login secret.
+    const secondFactorContext =
+      skipAutoFill ||
+      autoFilledOnce ||
+      OTP_PROMPT_PATTERN.test(
+        [contextText, ...prompts.map((p) => (typeof p?.prompt === "string" ? p.prompt : ""))]
+          .filter(Boolean)
+          .join("\n"),
+      );
     const savedPasswordForModal = shouldPrefillSavedPassword(prompts, password, {
       skipAutoFill: skipAutoFill || autoFilledOnce,
       contextText,
     })
       ? password
       : null;
+    // Hide "Save password" for second-factor / EDR challenges so a secondary
+    // secret cannot overwrite the host login password (Codex P2 on #2151).
+    const allowSavePassword = !secondFactorContext;
 
     console.log(`${logPrefix} Showing modal for ${promptsData.length} prompts`);
     try { onPromptShown?.(); } catch (err) { console.warn(`${logPrefix} onPromptShown callback threw`, err); }
@@ -1386,6 +1397,7 @@ function createKeyboardInteractiveHandler(options) {
       prompts: promptsData,
       hostname: hostname,
       savedPassword: savedPasswordForModal,
+      allowSavePassword,
       scope,
     });
   };

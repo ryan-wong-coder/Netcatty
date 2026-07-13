@@ -383,6 +383,8 @@ declare global {
         prompts: Array<{ prompt: string; echo: boolean }>;
         hostname: string;
         savedPassword?: string | null;
+        /** When false, UI must not offer saving the response as the host password. */
+        allowSavePassword?: boolean;
         scope?: "terminal" | "external";
       }) => void
     ): () => void;

@@ -203,6 +203,7 @@ export function useAppStartupEffects(ctx: StartupEffectsContext) {
         prompts: request.prompts,
         hostname: request.hostname,
         savedPassword: request.savedPassword,
+        allowSavePassword: request.allowSavePassword !== false,
       }]);
     });
 

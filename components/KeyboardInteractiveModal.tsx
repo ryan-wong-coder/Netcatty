@@ -31,6 +31,8 @@ export interface KeyboardInteractiveRequest {
   prompts: KeyboardInteractivePrompt[];
   hostname?: string;
   savedPassword?: string | null;
+  /** When false, hide save-password UI (second-factor / EDR challenges). Default true. */
+  allowSavePassword?: boolean;
 }
 
 const isAPasswordPrompt = (prompt: KeyboardInteractivePrompt) => {
@@ -124,14 +126,17 @@ export const KeyboardInteractiveModal: React.FC<KeyboardInteractiveModalProps> =
     });
   }, []);
 
+  const canSavePassword = request?.allowSavePassword !== false;
+
   const handleSubmit = useCallback(() => {
     if (!request || isSubmitting) return;
     setIsSubmitting(true);
-    const passwordToSave = savePassword && passwordPromptIndex >= 0
-      ? responses[passwordPromptIndex]
-      : undefined;
+    const passwordToSave =
+      canSavePassword && savePassword && passwordPromptIndex >= 0
+        ? responses[passwordPromptIndex]
+        : undefined;
     onSubmit(request.requestId, responses, passwordToSave);
-  }, [request, responses, onSubmit, isSubmitting, savePassword, passwordPromptIndex]);
+  }, [request, responses, onSubmit, isSubmitting, savePassword, passwordPromptIndex, canSavePassword]);
 
   const handleCancel = useCallback(() => {
     if (!request) return;
@@ -209,8 +214,8 @@ export const KeyboardInteractiveModal: React.FC<KeyboardInteractiveModalProps> =
                     </button>
                   )}
                 </div>
-                {/* Save password checkbox - shown only for the first password prompt */}
-                {index === passwordPromptIndex && (
+                {/* Save password checkbox - first-factor password prompts only */}
+                {canSavePassword && index === passwordPromptIndex && (
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"

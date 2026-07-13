@@ -561,7 +561,47 @@ test("createKeyboardInteractiveHandler shows modal for Secondary Authentication 
   assert.deepEqual(autoFillEvents, []);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].payload.savedPassword, null);
+  assert.equal(sent[0].payload.allowSavePassword, false);
   assert.equal(sent[0].payload.prompts[0].prompt, "Secondary Authentication Password:");
+
+  drainPendingRequests(sent);
+});
+
+test("createKeyboardInteractiveHandler disables save on post-partialSuccess Password prompt", () => {
+  const { sender, sent } = createSender();
+  const authPhase = { hadPartialSuccess: true };
+
+  const handler = createKeyboardInteractiveHandler({
+    sender,
+    sessionId: "session-1",
+    hostname: "corp-edr.example.com",
+    password: "login-password",
+    shouldSkipAutoFill: () => authPhase.hadPartialSuccess,
+  });
+
+  handler("", "", "", [passwordPrompt], () => {});
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.savedPassword, null);
+  assert.equal(sent[0].payload.allowSavePassword, false);
+
+  drainPendingRequests(sent);
+});
+
+test("createKeyboardInteractiveHandler allows save on first-factor password modal", () => {
+  const { sender, sent } = createSender();
+
+  const handler = createKeyboardInteractiveHandler({
+    sender,
+    sessionId: "session-1",
+    hostname: "vps-1.example.com",
+    // No saved password → modal with save checkbox for first login
+  });
+
+  handler("", "", "", [passwordPrompt], () => {});
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.allowSavePassword, true);
 
   drainPendingRequests(sent);
 });
