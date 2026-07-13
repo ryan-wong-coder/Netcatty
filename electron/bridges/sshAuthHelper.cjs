@@ -1368,23 +1368,33 @@ function createKeyboardInteractiveHandler(options) {
     // reporting partialSuccess between them (login password, then EDR). After
     // the first auto-fill, later rounds must open empty — not pre-filled with
     // the same login secret.
-    const secondFactorContext =
-      skipAutoFill ||
-      autoFilledOnce ||
-      OTP_PROMPT_PATTERN.test(
-        [contextText, ...prompts.map((p) => (typeof p?.prompt === "string" ? p.prompt : ""))]
-          .filter(Boolean)
-          .join("\n"),
-      );
     const savedPasswordForModal = shouldPrefillSavedPassword(prompts, password, {
       skipAutoFill: skipAutoFill || autoFilledOnce,
       contextText,
     })
       ? password
       : null;
-    // Hide "Save password" for second-factor / EDR challenges so a secondary
-    // secret cannot overwrite the host login password (Codex P2 on #2151).
-    const allowSavePassword = !secondFactorContext;
+    // Hide "Save password" only for true second-factor challenges:
+    //   - after partialSuccess / a prior auto-fill round, or
+    //   - a *single* OTP / EDR secondary field (possibly with secondary wording
+    //     only in name/instructions).
+    // Do NOT disable save just because a multi-prompt challenge also includes
+    // an OTP field next to Password: (PAM/Duo first-login) — the modal only
+    // ever saves the isAPasswordPrompt slot (Codex P3 on #2151).
+    const singlePromptText =
+      prompts.length === 1 && typeof prompts[0]?.prompt === "string"
+        ? prompts[0].prompt
+        : "";
+    const singleSecondaryChallenge =
+      prompts.length === 1 &&
+      OTP_PROMPT_PATTERN.test(
+        [contextText, singlePromptText].filter(Boolean).join("\n"),
+      );
+    const allowSavePassword = !(
+      skipAutoFill ||
+      autoFilledOnce ||
+      singleSecondaryChallenge
+    );
 
     console.log(`${logPrefix} Showing modal for ${promptsData.length} prompts`);
     try { onPromptShown?.(); } catch (err) { console.warn(`${logPrefix} onPromptShown callback threw`, err); }

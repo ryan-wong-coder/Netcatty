@@ -605,3 +605,33 @@ test("createKeyboardInteractiveHandler allows save on first-factor password moda
 
   drainPendingRequests(sent);
 });
+
+test("createKeyboardInteractiveHandler allows save on multi-prompt Password + OTP (#2151 P3)", () => {
+  // PAM/Duo style: one keyboard-interactive challenge with a password slot
+  // and a verification-code slot. Saving should still target the password
+  // field only — do not disable allowSavePassword just because OTP wording
+  // appears in another prompt of the same challenge.
+  const { sender, sent } = createSender();
+
+  const handler = createKeyboardInteractiveHandler({
+    sender,
+    sessionId: "session-1",
+    hostname: "duo.example.com",
+    password: "login-password",
+  });
+
+  handler(
+    "Two-factor",
+    "",
+    "",
+    [passwordPrompt, verificationCodePrompt],
+    () => {},
+  );
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.allowSavePassword, true);
+  // Prefill still OK for the password slot in multi-prompt first-factor forms.
+  assert.equal(sent[0].payload.savedPassword, "login-password");
+
+  drainPendingRequests(sent);
+});
