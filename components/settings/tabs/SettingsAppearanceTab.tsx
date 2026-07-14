@@ -1,7 +1,7 @@
-import React, { memo, useCallback } from "react";
+import React, { memo, useCallback, useState } from "react";
 import { applyCustomCssToDocument } from "../../../lib/customCss";
 import { DebouncedTextarea } from "../DebouncedTextarea";
-import { Check, Monitor, Moon, Palette, Sun } from "lucide-react";
+import { Check, HelpCircle, Monitor, Moon, Palette, Sun } from "lucide-react";
 import { useI18n } from "../../../application/i18n/I18nProvider";
 import { DARK_UI_THEMES, LIGHT_UI_THEMES } from "../../../infrastructure/config/uiThemes";
 import { useAvailableUIFonts } from "../../../application/state/uiFontStore";
@@ -12,6 +12,16 @@ import { cn } from "../../../lib/utils";
 import { SectionHeader, SettingsTabContent, SettingRow, Toggle, Select } from "../settings-ui";
 import { FontSelect } from "../FontSelect";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "../../ui/dialog";
+import { LazyMessageResponse } from "../../ai-elements/LazyMessageResponse";
+
+const CUSTOM_CSS_HELP_PROSE_CLASS =
+  "text-xs text-foreground/90 leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0";
 
 function SettingsAppearanceTab(props: {
   theme: "dark" | "light" | "system";
@@ -46,6 +56,7 @@ function SettingsAppearanceTab(props: {
 }) {
   const { t } = useI18n();
   const availableUIFonts = useAvailableUIFonts();
+  const [customCssHelpOpen, setCustomCssHelpOpen] = useState(false);
   const {
     theme,
     resolvedTheme,
@@ -413,7 +424,19 @@ function SettingsAppearanceTab(props: {
         </SettingRow>
       </div>
 
-      <SectionHeader title={t("settings.appearance.customCss")} />
+      <div className="mb-3 flex items-center gap-1.5">
+        <h3 className="text-sm font-semibold text-foreground">
+          {t("settings.appearance.customCss")}
+        </h3>
+        <button
+          type="button"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          aria-label={t("settings.appearance.customCss.help.ariaLabel")}
+          onClick={() => setCustomCssHelpOpen(true)}
+        >
+          <HelpCircle size={13} />
+        </button>
+      </div>
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground">
           {t("settings.appearance.customCss.desc")}
@@ -427,6 +450,21 @@ function SettingsAppearanceTab(props: {
           spellCheck={false}
         />
       </div>
+
+      <Dialog open={customCssHelpOpen} onOpenChange={setCustomCssHelpOpen}>
+        <DialogContent className="flex max-h-[80vh] flex-col overflow-hidden sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>{t("settings.appearance.customCss.help.title")}</DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {customCssHelpOpen ? (
+              <LazyMessageResponse className={CUSTOM_CSS_HELP_PROSE_CLASS}>
+                {t("settings.appearance.customCss.help.body")}
+              </LazyMessageResponse>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </SettingsTabContent>
   );
 }

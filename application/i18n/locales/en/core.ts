@@ -293,7 +293,110 @@ export const enCoreMessages: Messages = {
   'settings.appearance.themeColor.dark': 'Dark palette',
   'settings.appearance.customCss': 'Custom CSS',
   'settings.appearance.customCss.desc':
-    'Add custom CSS to personalize the app appearance. Changes apply immediately. Major UI regions expose a [data-section="..."] attribute you can target — e.g. snippets-panel, host-details-panel, group-details-panel, serial-host-details-panel, ai-chat-panel, vault-sidebar, vault-main, vault-hosts-header, vault-host-list, vault-view, terminal-workspace, terminal-workspace-sidebar (focus-mode terminal list), terminal-host-tree-sidebar, terminal-host-tree-sidebar-content, terminal-host-tree-sidebar-row, terminal-side-panel (SFTP/Scripts/Theme/AI panel, available while open), terminal-side-panel-tabs, terminal-side-panel-content, terminal-sftp-panel, terminal-sftp-host-header, terminal-sftp-pane, terminal-sftp-toolbar, terminal-sftp-path, terminal-sftp-filter-bar, terminal-sftp-list, terminal-sftp-list-header, terminal-sftp-list-row, terminal-sftp-tree, terminal-sftp-tree-row, terminal-sftp-transfer-queue, terminal-sftp-transfer-row, terminal-split-pane, terminal-split-resizer, top-tabs, top-tabs-host-tree-toggle, top-tabs-quick-switcher-toggle.',
+    'Add custom CSS to personalize the app appearance. Changes apply immediately.',
+  'settings.appearance.customCss.help.ariaLabel': 'Custom CSS help',
+  'settings.appearance.customCss.help.title': 'Custom CSS guide',
+  'settings.appearance.customCss.help.body': `Major UI regions expose a \`data-section\` attribute you can target. Changes apply as soon as you edit the CSS.
+
+### How to select
+
+Use attribute selectors:
+
+\`\`\`css
+[data-section="terminal-side-panel"] {
+  border: 2px solid #00c851 !important;
+  border-radius: 6px !important;
+}
+\`\`\`
+
+Some rows and panes also support state hooks such as \`[data-selected="true"]\` or \`[data-focused="true"]\`.
+
+Because many styles come from Tailwind utilities, you often need \`!important\` to override them.
+
+### Top tabs
+
+- \`top-tabs\`
+- \`top-tabs-host-tree-toggle\`
+- \`top-tabs-quick-switcher-toggle\`
+
+### Vault
+
+- \`vault-view\`
+- \`vault-sidebar\`
+- \`vault-main\`
+- \`vault-hosts-header\`
+- \`vault-host-list\`
+
+### Terminal workspace
+
+- \`terminal-workspace\`
+- \`terminal-workspace-sidebar\` — Focus-mode terminal list
+- \`terminal-host-tree-sidebar\`
+- \`terminal-host-tree-sidebar-content\`
+- \`terminal-host-tree-sidebar-row\`
+- \`terminal-split-pane\`
+- \`terminal-split-resizer\`
+
+### Terminal side panel
+
+- \`terminal-side-panel\` — SFTP / Scripts / Theme / AI panel (only present while open)
+- \`terminal-side-panel-tabs\`
+- \`terminal-side-panel-content\`
+
+### SFTP
+
+- \`terminal-sftp-panel\`
+- \`terminal-sftp-host-header\`
+- \`terminal-sftp-pane\`
+- \`terminal-sftp-toolbar\`
+- \`terminal-sftp-path\`
+- \`terminal-sftp-filter-bar\`
+- \`terminal-sftp-list\`
+- \`terminal-sftp-list-header\`
+- \`terminal-sftp-list-row\`
+- \`terminal-sftp-tree\`
+- \`terminal-sftp-tree-row\`
+- \`terminal-sftp-transfer-queue\`
+- \`terminal-sftp-transfer-row\`
+
+### Detail / tool panels
+
+- \`snippets-panel\`
+- \`host-details-panel\`
+- \`group-details-panel\`
+- \`serial-host-details-panel\`
+- \`ai-chat-panel\`
+
+### Examples
+
+Hide the host-list toggle in the top tab bar:
+
+\`\`\`css
+[data-section="top-tabs-host-tree-toggle"] {
+  width: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+\`\`\`
+
+Style selected SFTP file rows:
+
+\`\`\`css
+[data-section="terminal-sftp-list-row"][data-selected="true"] {
+  background-color: #00c851 !important;
+  color: #001b10 !important;
+}
+\`\`\`
+
+Highlight the focused split pane:
+
+\`\`\`css
+[data-section="terminal-split-pane"][data-focused="true"] {
+  outline: 2px solid hsl(var(--primary)) !important;
+  outline-offset: -2px;
+}
+\`\`\`
+`,
   'settings.appearance.customCss.placeholder':
     '/* Examples — use !important to beat Tailwind utility specificity */\n\n/* Hide the host-list toggle in the top tab bar */\n[data-section="top-tabs-host-tree-toggle"] {\n  width: 0 !important;\n  opacity: 0 !important;\n  pointer-events: none !important;\n}\n\n/* Hide the plus button that opens the quick switcher */\n[data-section="top-tabs-quick-switcher-toggle"] {\n  display: none !important;\n}\n\n/* Border around the SFTP / side panel (does not linger after closing) */\n[data-section="terminal-side-panel"] {\n  border: 2px solid #00c851 !important;\n  border-radius: 6px !important;\n}\n\n/* Change the whole side panel background, not only the top tabs */\n[data-section="terminal-side-panel"],\n[data-section="terminal-side-panel-tabs"],\n[data-section="terminal-side-panel-content"],\n[data-section="terminal-sftp-panel"],\n[data-section="terminal-sftp-pane"],\n[data-section="terminal-sftp-list"],\n[data-section="terminal-sftp-tree"],\n[data-section="terminal-sftp-transfer-queue"] {\n  background-color: #1c384a !important;\n}\n\n/* Style selected SFTP file rows */\n[data-section="terminal-sftp-list-row"][data-selected="true"] {\n  background-color: #00c851 !important;\n  color: #001b10 !important;\n}\n\n/* Thicker split dividers */\n[data-section="terminal-split-resizer-bar"] {\n  background-color: hsl(var(--primary)) !important;\n  transform: scale(2) !important;\n}\n\n/* Highlight the focused split pane */\n[data-section="terminal-split-pane"][data-focused="true"] {\n  outline: 2px solid hsl(var(--primary)) !important;\n  outline-offset: -2px;\n}\n\n/* Or use Settings → Terminal → Workspace Focus Indicator → Border on focused pane */',
   'settings.appearance.language': 'Language',

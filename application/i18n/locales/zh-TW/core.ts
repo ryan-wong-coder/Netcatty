@@ -291,7 +291,110 @@ export const zhTWCoreMessages: Messages = {
   'settings.appearance.themeColor.dark': '深色主題',
   'settings.appearance.customCss': '自訂 CSS',
   'settings.appearance.customCss.desc':
-    '使用自訂 CSS 個人化介面，修改會立即生效。主要 UI 區塊都公開了 [data-section="..."] 屬性供你定位，比如：snippets-panel、host-details-panel、group-details-panel、serial-host-details-panel、ai-chat-panel、vault-sidebar、vault-main、vault-hosts-header、vault-host-list、vault-view、terminal-workspace、terminal-workspace-sidebar（Focus 模式終端列表）、terminal-host-tree-sidebar、terminal-host-tree-sidebar-content、terminal-host-tree-sidebar-row、terminal-side-panel（SFTP/指令碼/主題/AI 側欄，開啟時生效）、terminal-side-panel-tabs、terminal-side-panel-content、terminal-sftp-panel、terminal-sftp-host-header、terminal-sftp-pane、terminal-sftp-toolbar、terminal-sftp-path、terminal-sftp-filter-bar、terminal-sftp-list、terminal-sftp-list-header、terminal-sftp-list-row、terminal-sftp-tree、terminal-sftp-tree-row、terminal-sftp-transfer-queue、terminal-sftp-transfer-row、terminal-split-pane、terminal-split-resizer、top-tabs、top-tabs-host-tree-toggle、top-tabs-quick-switcher-toggle。',
+    '使用自訂 CSS 個人化介面，修改會立即生效。',
+  'settings.appearance.customCss.help.ariaLabel': '自訂 CSS 說明',
+  'settings.appearance.customCss.help.title': '自訂 CSS 說明',
+  'settings.appearance.customCss.help.body': `主要 UI 區塊都公開了 \`data-section\` 屬性，供你用 CSS 定位。編輯後會立即生效。
+
+### 如何選擇元素
+
+使用屬性選擇器：
+
+\`\`\`css
+[data-section="terminal-side-panel"] {
+  border: 2px solid #00c851 !important;
+  border-radius: 6px !important;
+}
+\`\`\`
+
+部分列 / 窗格還支援 \`[data-selected="true"]\`、\`[data-focused="true"]\` 等狀態鉤子。
+
+由於 Tailwind 工具類優先順序較高，覆蓋樣式時通常需要使用 \`!important\`。
+
+### 頂部標籤列
+
+- \`top-tabs\`
+- \`top-tabs-host-tree-toggle\`
+- \`top-tabs-quick-switcher-toggle\`
+
+### 保險庫
+
+- \`vault-view\`
+- \`vault-sidebar\`
+- \`vault-main\`
+- \`vault-hosts-header\`
+- \`vault-host-list\`
+
+### 終端工作區
+
+- \`terminal-workspace\`
+- \`terminal-workspace-sidebar\` — Focus 模式終端列表
+- \`terminal-host-tree-sidebar\`
+- \`terminal-host-tree-sidebar-content\`
+- \`terminal-host-tree-sidebar-row\`
+- \`terminal-split-pane\`
+- \`terminal-split-resizer\`
+
+### 終端側欄
+
+- \`terminal-side-panel\` — SFTP / 指令碼 / 主題 / AI 側欄（僅在開啟時存在）
+- \`terminal-side-panel-tabs\`
+- \`terminal-side-panel-content\`
+
+### SFTP
+
+- \`terminal-sftp-panel\`
+- \`terminal-sftp-host-header\`
+- \`terminal-sftp-pane\`
+- \`terminal-sftp-toolbar\`
+- \`terminal-sftp-path\`
+- \`terminal-sftp-filter-bar\`
+- \`terminal-sftp-list\`
+- \`terminal-sftp-list-header\`
+- \`terminal-sftp-list-row\`
+- \`terminal-sftp-tree\`
+- \`terminal-sftp-tree-row\`
+- \`terminal-sftp-transfer-queue\`
+- \`terminal-sftp-transfer-row\`
+
+### 詳情 / 工具面板
+
+- \`snippets-panel\`
+- \`host-details-panel\`
+- \`group-details-panel\`
+- \`serial-host-details-panel\`
+- \`ai-chat-panel\`
+
+### 範例
+
+隱藏頂部標籤列裡的主機列表開關：
+
+\`\`\`css
+[data-section="top-tabs-host-tree-toggle"] {
+  width: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+\`\`\`
+
+修改選取的 SFTP 檔案列：
+
+\`\`\`css
+[data-section="terminal-sftp-list-row"][data-selected="true"] {
+  background-color: #00c851 !important;
+  color: #001b10 !important;
+}
+\`\`\`
+
+標示目前聚焦的分割窗格：
+
+\`\`\`css
+[data-section="terminal-split-pane"][data-focused="true"] {
+  outline: 2px solid hsl(var(--primary)) !important;
+  outline-offset: -2px;
+}
+\`\`\`
+`,
   'settings.appearance.customCss.placeholder':
     '/* 範例 — 由於 Tailwind 優先順序較高，需要使用 !important */\n\n/* 隱藏頂部標籤欄裡的主機列表開關 */\n[data-section="top-tabs-host-tree-toggle"] {\n  width: 0 !important;\n  opacity: 0 !important;\n  pointer-events: none !important;\n}\n\n/* 隱藏開啟快速切換器的加號按鈕 */\n[data-section="top-tabs-quick-switcher-toggle"] {\n  display: none !important;\n}\n\n/* SFTP / 操作側欄邊框（關閉側欄後不會殘留） */\n[data-section="terminal-side-panel"] {\n  border: 2px solid #00c851 !important;\n  border-radius: 6px !important;\n}\n\n/* 修改整個操作側欄背景，而不只是頂部標籤 */\n[data-section="terminal-side-panel"],\n[data-section="terminal-side-panel-tabs"],\n[data-section="terminal-side-panel-content"],\n[data-section="terminal-sftp-panel"],\n[data-section="terminal-sftp-pane"],\n[data-section="terminal-sftp-list"],\n[data-section="terminal-sftp-tree"],\n[data-section="terminal-sftp-transfer-queue"] {\n  background-color: #1c384a !important;\n}\n\n/* 修改選取的 SFTP 檔案行 */\n[data-section="terminal-sftp-list-row"][data-selected="true"] {\n  background-color: #00c851 !important;\n  color: #001b10 !important;\n}\n\n/* 加粗分割分割線 */\n[data-section="terminal-split-resizer-bar"] {\n  background-color: hsl(var(--primary)) !important;\n  transform: scale(2) !important;\n}\n\n/* 標示目前聚焦的分割 */\n[data-section="terminal-split-pane"][data-focused="true"] {\n  outline: 2px solid hsl(var(--primary)) !important;\n  outline-offset: -2px;\n}\n\n/* 也可在 設定 → 終端 → 工作區聚焦指示 → 聚焦窗格顯示邊框 */',
   'settings.appearance.language': '語言',

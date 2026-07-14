@@ -282,7 +282,110 @@ export const ruCoreMessages: Messages = {
   'settings.appearance.themeColor.dark': 'Палитра тёмной темы',
   'settings.appearance.customCss': 'Пользовательский CSS',
   'settings.appearance.customCss.desc':
-    'Добавьте пользовательский CSS, чтобы настроить внешний вид приложения. Изменения применяются сразу. Основные области интерфейса имеют атрибут [data-section="..."], который можно использовать для выбора элементов, например: snippets-panel, host-details-panel, group-details-panel, serial-host-details-panel, ai-chat-panel, vault-sidebar, vault-main, vault-hosts-header, vault-host-list, vault-view, terminal-workspace, terminal-workspace-sidebar (список терминалов в режиме Focus), terminal-host-tree-sidebar, terminal-host-tree-sidebar-content, terminal-host-tree-sidebar-row, terminal-side-panel (панель SFTP/скриптов/темы/AI, доступна пока открыта), terminal-side-panel-tabs, terminal-side-panel-content, terminal-sftp-panel, terminal-sftp-host-header, terminal-sftp-pane, terminal-sftp-toolbar, terminal-sftp-path, terminal-sftp-filter-bar, terminal-sftp-list, terminal-sftp-list-header, terminal-sftp-list-row, terminal-sftp-tree, terminal-sftp-tree-row, terminal-sftp-transfer-queue, terminal-sftp-transfer-row, terminal-split-pane, terminal-split-resizer, top-tabs, top-tabs-host-tree-toggle, top-tabs-quick-switcher-toggle.',
+    'Добавьте пользовательский CSS, чтобы настроить внешний вид. Изменения применяются сразу.',
+  'settings.appearance.customCss.help.ariaLabel': 'Справка по пользовательскому CSS',
+  'settings.appearance.customCss.help.title': 'Руководство по пользовательскому CSS',
+  'settings.appearance.customCss.help.body': `Основные области интерфейса помечены атрибутом \`data-section\` для CSS-селекторов. Изменения применяются сразу после правки.
+
+### Как выбирать элементы
+
+Используйте селекторы по атрибуту:
+
+\`\`\`css
+[data-section="terminal-side-panel"] {
+  border: 2px solid #00c851 !important;
+  border-radius: 6px !important;
+}
+\`\`\`
+
+У некоторых строк и панелей также есть хуки состояния вроде \`[data-selected="true"]\` и \`[data-focused="true"]\`.
+
+Из‑за высокой специфичности утилит Tailwind часто требуется \`!important\`.
+
+### Верхние вкладки
+
+- \`top-tabs\`
+- \`top-tabs-host-tree-toggle\`
+- \`top-tabs-quick-switcher-toggle\`
+
+### Хранилище
+
+- \`vault-view\`
+- \`vault-sidebar\`
+- \`vault-main\`
+- \`vault-hosts-header\`
+- \`vault-host-list\`
+
+### Рабочая область терминала
+
+- \`terminal-workspace\`
+- \`terminal-workspace-sidebar\` — список терминалов в режиме Focus
+- \`terminal-host-tree-sidebar\`
+- \`terminal-host-tree-sidebar-content\`
+- \`terminal-host-tree-sidebar-row\`
+- \`terminal-split-pane\`
+- \`terminal-split-resizer\`
+
+### Боковая панель терминала
+
+- \`terminal-side-panel\` — панель SFTP / скриптов / темы / AI (только пока открыта)
+- \`terminal-side-panel-tabs\`
+- \`terminal-side-panel-content\`
+
+### SFTP
+
+- \`terminal-sftp-panel\`
+- \`terminal-sftp-host-header\`
+- \`terminal-sftp-pane\`
+- \`terminal-sftp-toolbar\`
+- \`terminal-sftp-path\`
+- \`terminal-sftp-filter-bar\`
+- \`terminal-sftp-list\`
+- \`terminal-sftp-list-header\`
+- \`terminal-sftp-list-row\`
+- \`terminal-sftp-tree\`
+- \`terminal-sftp-tree-row\`
+- \`terminal-sftp-transfer-queue\`
+- \`terminal-sftp-transfer-row\`
+
+### Панели деталей / инструментов
+
+- \`snippets-panel\`
+- \`host-details-panel\`
+- \`group-details-panel\`
+- \`serial-host-details-panel\`
+- \`ai-chat-panel\`
+
+### Примеры
+
+Скрыть переключатель списка хостов в верхней панели вкладок:
+
+\`\`\`css
+[data-section="top-tabs-host-tree-toggle"] {
+  width: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+\`\`\`
+
+Стилизовать выбранные строки SFTP:
+
+\`\`\`css
+[data-section="terminal-sftp-list-row"][data-selected="true"] {
+  background-color: #00c851 !important;
+  color: #001b10 !important;
+}
+\`\`\`
+
+Подсветить активную панель сплита:
+
+\`\`\`css
+[data-section="terminal-split-pane"][data-focused="true"] {
+  outline: 2px solid hsl(var(--primary)) !important;
+  outline-offset: -2px;
+}
+\`\`\`
+`,
   'settings.appearance.customCss.placeholder':
     '/* Примеры — используйте !important, чтобы переопределить специфичность утилит Tailwind */\n\n/* Скрыть переключатель списка хостов в верхней панели вкладок */\n[data-section="top-tabs-host-tree-toggle"] {\n  width: 0 !important;\n  opacity: 0 !important;\n  pointer-events: none !important;\n}\n\n/* Скрыть кнопку плюса, открывающую быстрый переключатель */\n[data-section="top-tabs-quick-switcher-toggle"] {\n  display: none !important;\n}\n\n/* Рамка вокруг боковой панели SFTP (не остаётся после закрытия) */\n[data-section="terminal-side-panel"] {\n  border: 2px solid #00c851 !important;\n  border-radius: 6px !important;\n}\n\n/* Изменить фон всей боковой панели, а не только верхних вкладок */\n[data-section="terminal-side-panel"],\n[data-section="terminal-side-panel-tabs"],\n[data-section="terminal-side-panel-content"],\n[data-section="terminal-sftp-panel"],\n[data-section="terminal-sftp-pane"],\n[data-section="terminal-sftp-list"],\n[data-section="terminal-sftp-tree"],\n[data-section="terminal-sftp-transfer-queue"] {\n  background-color: #1c384a !important;\n}\n\n/* Настроить выбранные строки SFTP */\n[data-section="terminal-sftp-list-row"][data-selected="true"] {\n  background-color: #00c851 !important;\n  color: #001b10 !important;\n}\n\n/* Более заметные разделители сплита */\n[data-section="terminal-split-resizer-bar"] {\n  background-color: hsl(var(--primary)) !important;\n  transform: scale(2) !important;\n}\n\n/* Подсветка активной панели сплита */\n[data-section="terminal-split-pane"][data-focused="true"] {\n  outline: 2px solid hsl(var(--primary)) !important;\n  outline-offset: -2px;\n}\n\n/* Или: Настройки → Терминал → Индикатор фокуса → Рамка вокруг активной панели */',
   'settings.appearance.language': 'Язык',
