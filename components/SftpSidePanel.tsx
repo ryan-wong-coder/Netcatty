@@ -353,6 +353,20 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
       s.selectTab("left", existingTab.id);
       connectedKeyRef.current = connectionKey;
       connectedHostObjRef.current = activeHost;
+      // Session memory keys are per terminal session; republish the visible
+      // path so reopening SFTP from the newly focused session keeps this dir.
+      const path = existingTab.connection?.currentPath;
+      if (
+        path
+        && existingTab.connection
+        && !existingTab.connection.isLocal
+      ) {
+        onCurrentPathChangeRef.current?.({
+          hostId: existingTab.connection.hostId,
+          connectionKey,
+          path,
+        });
+      }
       return;
     }
 
