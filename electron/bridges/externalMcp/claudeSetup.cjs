@@ -9,13 +9,22 @@ function loadShellUtils() {
   return require("../ai/shellUtils.cjs");
 }
 
-function formatClaudeCommandText(args) {
-  return ["claude", ...args.map(quoteCommandArg)].join(" ");
+function loadDesktopCliResolver() {
+  return require("./desktopCliResolver.cjs");
+}
+
+function formatClaudeCommandText(args, cliPath = "claude") {
+  const executable = typeof cliPath === "string" && cliPath.trim()
+    ? cliPath.trim()
+    : "claude";
+  return [quoteCommandArg(executable), ...args.map(quoteCommandArg)].join(" ");
 }
 
 function quoteCommandArg(value) {
   if (typeof value !== "string" || value.length === 0) return '""';
-  if (!/[\s"]/u.test(value)) return value;
+  // Match ExternalMcpCard quoteShellArg so copyable commands stay shell-safe
+  // for paths with spaces, quotes, apostrophes, or backslashes.
+  if (!/[\s"'\\]/u.test(value)) return value;
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }
 
@@ -175,13 +184,19 @@ function hasRequiredDiscoveryEnv(entryEnv, discoveryEnv) {
   return keys.every((key) => String(entryEnv[key] || "") === String(required[key]));
 }
 
-function classifyClaudeExternalMcpStatus({ getResult, launcherPath, claudePath, discoveryEnv }) {
+function classifyClaudeExternalMcpStatus({
+  getResult,
+  launcherPath,
+  claudePath,
+  discoveryEnv,
+  commandExecutable,
+}) {
   const commandArgs = buildClaudeAddArgs(launcherPath, discoveryEnv || {});
   const base = {
     ok: true,
     claudePath: claudePath || null,
     launcherPath: launcherPath || null,
-    command: formatClaudeCommandText(commandArgs),
+    command: formatClaudeCommandText(commandArgs, commandExecutable || claudePath),
     existingCommand: null,
     error: null,
   };
@@ -258,21 +273,33 @@ function createExternalMcpClaudeSetup(options = {}) {
       : {},
     getShellEnv: options.getShellEnv || loadShellUtils().getShellEnv,
     resolveCliFromPath: options.resolveCliFromPath || loadShellUtils().resolveCliFromPath,
+    resolveDesktopManagedCli: options.resolveDesktopManagedCli
+      || loadDesktopCliResolver().resolveDesktopManagedCli,
     prepareCommandForSpawn: options.prepareCommandForSpawn || loadShellUtils().prepareCommandForSpawn,
     spawn: options.spawn || require("node:child_process").spawn,
     stripAnsi: options.stripAnsi || loadShellUtils().stripAnsi,
   };
 
-  function getManualCommand() {
-    return formatClaudeCommandText(buildClaudeAddArgs(deps.launcherPath, deps.discoveryEnv));
+  function getManualCommand(cliPath) {
+    return formatClaudeCommandText(
+      buildClaudeAddArgs(deps.launcherPath, deps.discoveryEnv),
+      cliPath,
+    );
   }
 
   async function resolveClaude() {
     const shellEnv = await deps.getShellEnv();
-    const claudePath = deps.resolveCliFromPath("claude", shellEnv);
+    // PATH installs keep the bare `claude` copyable command (portable across
+    // shells). Desktop-managed absolute paths only appear when PATH misses.
+    const pathResolved = deps.resolveCliFromPath("claude", shellEnv) || null;
+    const desktopResolved = pathResolved
+      ? null
+      : (deps.resolveDesktopManagedCli("claude") || null);
+    const claudePath = pathResolved || desktopResolved;
     return {
       shellEnv,
-      claudePath: claudePath || null,
+      claudePath,
+      commandExecutable: pathResolved ? "claude" : (desktopResolved || "claude"),
     };
   }
 
@@ -307,7 +334,7 @@ function createExternalMcpClaudeSetup(options = {}) {
   }
 
   async function getStatus() {
-    const { shellEnv, claudePath } = await resolveClaude();
+    const { shellEnv, claudePath, commandExecutable } = await resolveClaude();
     if (!claudePath) {
       return {
         ok: true,
@@ -333,10 +360,11 @@ function createExternalMcpClaudeSetup(options = {}) {
         launcherPath: deps.launcherPath,
         claudePath,
         discoveryEnv: deps.discoveryEnv,
+        commandExecutable,
       });
       return {
         ...status,
-        command: getManualCommand(),
+        command: getManualCommand(commandExecutable),
       };
     } catch (error) {
       return {
@@ -344,7 +372,7 @@ function createExternalMcpClaudeSetup(options = {}) {
         state: "error",
         claudePath,
         launcherPath: deps.launcherPath,
-        command: getManualCommand(),
+        command: getManualCommand(commandExecutable),
         existingCommand: null,
         error: error?.message || String(error),
       };
@@ -360,7 +388,7 @@ function createExternalMcpClaudeSetup(options = {}) {
       return status;
     }
 
-    const { shellEnv, claudePath } = await resolveClaude();
+    const { shellEnv, claudePath, commandExecutable } = await resolveClaude();
     if (!claudePath) {
       return {
         ...status,
@@ -395,7 +423,7 @@ function createExternalMcpClaudeSetup(options = {}) {
           state: "error",
           claudePath,
           launcherPath: deps.launcherPath,
-          command: getManualCommand(),
+          command: getManualCommand(commandExecutable),
           existingCommand: null,
           error: summarizeFailure(addResult, `Claude exited with code ${addResult.exitCode ?? "unknown"}`),
         };
@@ -407,7 +435,7 @@ function createExternalMcpClaudeSetup(options = {}) {
         state: "error",
         claudePath,
         launcherPath: deps.launcherPath,
-        command: getManualCommand(),
+        command: getManualCommand(commandExecutable),
         existingCommand: null,
         error: error?.message || String(error),
       };

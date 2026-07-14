@@ -424,15 +424,14 @@ export const ExternalMcpCard: React.FC = () => {
     || grokStatus?.launcherPath
     || null;
   const discoveryPath = status?.discoveryPath || null;
-  const codexCommand = launcherPath
-    ? formatCodexAddCommand(launcherPath, discoveryPath)
-    : (codexStatus?.command || "");
-  const claudeCommand = launcherPath
-    ? formatClaudeAddCommand(launcherPath, discoveryPath)
-    : (claudeStatus?.command || "");
-  const grokCommand = launcherPath
-    ? formatGrokAddCommand(launcherPath, discoveryPath)
-    : (grokStatus?.command || "");
+  // Prefer backend status.command so desktop-resolved absolute CLI paths
+  // (outside PATH) survive into the copyable setup command.
+  const codexCommand = (codexStatus?.command || "").trim()
+    || (launcherPath ? formatCodexAddCommand(launcherPath, discoveryPath) : "");
+  const claudeCommand = (claudeStatus?.command || "").trim()
+    || (launcherPath ? formatClaudeAddCommand(launcherPath, discoveryPath) : "");
+  const grokCommand = (grokStatus?.command || "").trim()
+    || (launcherPath ? formatGrokAddCommand(launcherPath, discoveryPath) : "");
   const codexTomlSnippet = launcherPath ? buildCodexTomlSnippet(launcherPath, discoveryPath) : "";
   const grokTomlSnippet = launcherPath ? buildGrokTomlSnippet(launcherPath, discoveryPath) : "";
   const claudeSnippet = launcherPath ? buildClaudeSnippet(launcherPath, discoveryPath) : "";

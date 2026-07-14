@@ -9,6 +9,10 @@ function loadShellUtils() {
   return require("../ai/shellUtils.cjs");
 }
 
+function loadDesktopCliResolver() {
+  return require("./desktopCliResolver.cjs");
+}
+
 function parseCodexMcpList(rawOutput) {
   const parsed = JSON.parse(String(rawOutput || "[]"));
   if (!Array.isArray(parsed)) {
@@ -26,13 +30,18 @@ function parseCodexMcpList(rawOutput) {
     }));
 }
 
-function formatCodexCommandText(args) {
-  return ["codex", ...args.map(quoteCommandArg)].join(" ");
+function formatCodexCommandText(args, cliPath = "codex") {
+  const executable = typeof cliPath === "string" && cliPath.trim()
+    ? cliPath.trim()
+    : "codex";
+  return [quoteCommandArg(executable), ...args.map(quoteCommandArg)].join(" ");
 }
 
 function quoteCommandArg(value) {
   if (typeof value !== "string" || value.length === 0) return '""';
-  if (!/[\s"]/u.test(value)) return value;
+  // Match ExternalMcpCard quoteShellArg so copyable commands stay shell-safe
+  // for paths with spaces, quotes, apostrophes, or backslashes.
+  if (!/[\s"'\\]/u.test(value)) return value;
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }
 
@@ -90,13 +99,19 @@ function hasRequiredDiscoveryEnv(entryEnv, discoveryEnv) {
   return keys.every((key) => String(entryEnv[key] || "") === String(required[key]));
 }
 
-function classifyCodexExternalMcpStatus({ entries, launcherPath, codexPath, discoveryEnv }) {
+function classifyCodexExternalMcpStatus({
+  entries,
+  launcherPath,
+  codexPath,
+  discoveryEnv,
+  commandExecutable,
+}) {
   const commandArgs = buildCodexAddArgs(launcherPath, discoveryEnv || {});
   const base = {
     ok: true,
     codexPath: codexPath || null,
     launcherPath: launcherPath || null,
-    command: formatCodexCommandText(commandArgs),
+    command: formatCodexCommandText(commandArgs, commandExecutable || codexPath),
     existingCommand: null,
     error: null,
   };
@@ -156,21 +171,33 @@ function createExternalMcpCodexSetup(options = {}) {
       : {},
     getShellEnv: options.getShellEnv || loadShellUtils().getShellEnv,
     resolveCliFromPath: options.resolveCliFromPath || loadShellUtils().resolveCliFromPath,
+    resolveDesktopManagedCli: options.resolveDesktopManagedCli
+      || loadDesktopCliResolver().resolveDesktopManagedCli,
     prepareCommandForSpawn: options.prepareCommandForSpawn || loadShellUtils().prepareCommandForSpawn,
     spawn: options.spawn || require("node:child_process").spawn,
     stripAnsi: options.stripAnsi || loadShellUtils().stripAnsi,
   };
 
-  function getManualCommand() {
-    return formatCodexCommandText(buildCodexAddArgs(deps.launcherPath, deps.discoveryEnv));
+  function getManualCommand(cliPath) {
+    return formatCodexCommandText(
+      buildCodexAddArgs(deps.launcherPath, deps.discoveryEnv),
+      cliPath,
+    );
   }
 
   async function resolveCodex() {
     const shellEnv = await deps.getShellEnv();
-    const codexPath = deps.resolveCliFromPath("codex", shellEnv);
+    // PATH installs keep the bare `codex` copyable command (portable across
+    // shells). Desktop-managed absolute paths only appear when PATH misses.
+    const pathResolved = deps.resolveCliFromPath("codex", shellEnv) || null;
+    const desktopResolved = pathResolved
+      ? null
+      : (deps.resolveDesktopManagedCli("codex") || null);
+    const codexPath = pathResolved || desktopResolved;
     return {
       shellEnv,
-      codexPath: codexPath || null,
+      codexPath,
+      commandExecutable: pathResolved ? "codex" : (desktopResolved || "codex"),
     };
   }
 
@@ -209,7 +236,7 @@ function createExternalMcpCodexSetup(options = {}) {
   }
 
   async function getStatus() {
-    const { shellEnv, codexPath } = await resolveCodex();
+    const { shellEnv, codexPath, commandExecutable } = await resolveCodex();
     if (!codexPath) {
       return {
         ok: true,
@@ -230,7 +257,7 @@ function createExternalMcpCodexSetup(options = {}) {
           state: "error",
           codexPath,
           launcherPath: deps.launcherPath,
-          command: getManualCommand(),
+          command: getManualCommand(commandExecutable),
           existingCommand: null,
           error: summarizeFailure(result, `Codex exited with code ${result.exitCode ?? "unknown"}`),
         };
@@ -240,10 +267,11 @@ function createExternalMcpCodexSetup(options = {}) {
         launcherPath: deps.launcherPath,
         codexPath,
         discoveryEnv: deps.discoveryEnv,
+        commandExecutable,
       });
       return {
         ...status,
-        command: getManualCommand(),
+        command: getManualCommand(commandExecutable),
       };
     } catch (error) {
       return {
@@ -251,7 +279,7 @@ function createExternalMcpCodexSetup(options = {}) {
         state: "error",
         codexPath,
         launcherPath: deps.launcherPath,
-        command: getManualCommand(),
+        command: getManualCommand(commandExecutable),
         existingCommand: null,
         error: error?.message || String(error),
       };
@@ -267,7 +295,7 @@ function createExternalMcpCodexSetup(options = {}) {
       return status;
     }
 
-    const { shellEnv, codexPath } = await resolveCodex();
+    const { shellEnv, codexPath, commandExecutable } = await resolveCodex();
     if (!codexPath) {
       return {
         ...status,
@@ -291,7 +319,7 @@ function createExternalMcpCodexSetup(options = {}) {
           state: "error",
           codexPath,
           launcherPath: deps.launcherPath,
-          command: getManualCommand(),
+          command: getManualCommand(commandExecutable),
           existingCommand: null,
           error: summarizeFailure(addResult, `Codex exited with code ${addResult.exitCode ?? "unknown"}`),
         };
@@ -303,7 +331,7 @@ function createExternalMcpCodexSetup(options = {}) {
         state: "error",
         codexPath,
         launcherPath: deps.launcherPath,
-        command: getManualCommand(),
+        command: getManualCommand(commandExecutable),
         existingCommand: null,
         error: error?.message || String(error),
       };

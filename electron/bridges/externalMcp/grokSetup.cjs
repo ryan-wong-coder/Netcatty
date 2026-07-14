@@ -15,7 +15,9 @@ function formatGrokCommandText(args) {
 
 function quoteCommandArg(value) {
   if (typeof value !== "string" || value.length === 0) return '""';
-  if (!/[\s"]/u.test(value)) return value;
+  // Match ExternalMcpCard quoteShellArg so copyable commands stay shell-safe
+  // for paths with spaces, quotes, apostrophes, or backslashes.
+  if (!/[\s"'\\]/u.test(value)) return value;
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }
 

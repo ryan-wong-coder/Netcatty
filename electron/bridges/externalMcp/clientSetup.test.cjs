@@ -82,6 +82,59 @@ describe("external MCP client setup classifiers", () => {
     assert.equal(status.state, "conflict");
   });
 
+  it("embeds desktop-managed Codex path in the copyable setup command", () => {
+    const desktopPath = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const status = classifyCodexExternalMcpStatus({
+      entries: [],
+      launcherPath: "/path/to/netcatty-external-mcp",
+      codexPath: desktopPath,
+      commandExecutable: desktopPath,
+    });
+    assert.equal(status.state, "not_configured");
+    assert.ok(status.command.startsWith(`${desktopPath} `));
+    assert.equal(status.command.startsWith("codex "), false);
+  });
+
+  it("keeps bare codex for PATH installs even when codexPath is absolute", () => {
+    const status = classifyCodexExternalMcpStatus({
+      entries: [],
+      launcherPath: "/path/to/netcatty-external-mcp",
+      codexPath: "C:\\Program Files\\Codex\\codex.exe",
+      commandExecutable: "codex",
+    });
+    assert.equal(status.state, "not_configured");
+    assert.ok(status.command.startsWith("codex "));
+  });
+
+  it("embeds desktop-managed Claude path in the copyable setup command", () => {
+    const desktopPath = "/Users/test/Library/Application Support/Claude/claude-code/2.10.0/claude.app/Contents/MacOS/claude";
+    const status = classifyClaudeExternalMcpStatus({
+      getResult: {
+        exitCode: 1,
+        stdout: "",
+        stderr: 'No MCP server found with name: "netcatty-external"',
+      },
+      launcherPath: "/path/to/netcatty-external-mcp",
+      claudePath: desktopPath,
+      commandExecutable: desktopPath,
+    });
+    assert.equal(status.state, "not_configured");
+    assert.ok(status.command.startsWith(`"${desktopPath}" `));
+    assert.equal(status.command.startsWith("claude "), false);
+  });
+
+  it("quotes launcher paths with apostrophes in the copyable setup command", () => {
+    const launcherPath = "/Applications/Bob's/Netcatty.app/Contents/MacOS/netcatty-external-mcp";
+    const status = classifyCodexExternalMcpStatus({
+      entries: [],
+      launcherPath,
+      codexPath: "/usr/bin/codex",
+      commandExecutable: "codex",
+    });
+    assert.equal(status.state, "not_configured");
+    assert.ok(status.command.includes(`"${launcherPath}"`));
+  });
+
   it("classifies Claude configured and missing states", () => {
     const configured = classifyClaudeExternalMcpStatus({
       getResult: { exitCode: 0, stdout: `${EXTERNAL_MCP_CLAUDE_NAME}: /path/to/netcatty-external-mcp - connected`, stderr: "" },
