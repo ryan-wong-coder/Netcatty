@@ -107,22 +107,15 @@ test("shouldResetSftpSidePanelSourceSession detects terminal session changes", (
   assert.equal(shouldResetSftpSidePanelSourceSession("sess-a", null), false);
 });
 
-test("healthy same-endpoint tabs still skip auto-connect after a terminal session change", () => {
+test("session change still requires rebind even when the endpoint key matches", () => {
   const tab = remoteConnectedTab();
-  // Session focus changes must not tear down a healthy SFTP tab for the same host.
+  // Callers must not skip auto-connect solely because the tab is healthy —
+  // a new focused terminal session can share a saved host key while the live
+  // endpoint (user/host overrides) differs. Path stickiness is handled by
+  // remembered initialPath on reconnect.
   assert.equal(shouldResetSftpSidePanelSourceSession("sess-a", "sess-b"), true);
   assert.equal(
     shouldSkipSftpSidePanelAutoConnect("host-key", "host-key", tab, true, "host-key"),
     true,
-  );
-  assert.equal(
-    findReusableSftpSidePanelTab(
-      [tab],
-      "host-1",
-      "host-key",
-      new Map([[tab.id, "host-key"]]),
-      () => true,
-    ),
-    tab,
   );
 });

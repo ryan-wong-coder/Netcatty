@@ -308,10 +308,12 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
     if (activeTab && activeTabConnectionKey) {
       tabConnectionKeyMapRef.current.set(activeTab.id, activeTabConnectionKey);
     }
-    // Same-host terminal focus changes used to force a reconnect (and often
-    // dropped back to $HOME). Keep a healthy tab for this endpoint instead.
+    // Rebind when the focused terminal session changes: saved host keys can lag
+    // live session endpoints (edited host / unsaved user). Still keep the
+    // browsed path sticky via remembered initialPath below.
     if (
-      shouldSkipSftpSidePanelAutoConnect(
+      !sessionChanged
+      && shouldSkipSftpSidePanelAutoConnect(
         connectionKey,
         connectedKeyRef.current,
         activeTab,
@@ -332,14 +334,16 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
     });
 
     const tabs = s.leftTabs.tabs;
-    const existingTab = findReusableSftpSidePanelTab(
-      tabs,
-      activeHost.id,
-      connectionKey,
-      tabConnectionKeyMapRef.current,
-      hasBackendSession,
-      (connectionId) => s.getConnectionCacheKey?.(connectionId) ?? null,
-    );
+    const existingTab = sessionChanged
+      ? null
+      : findReusableSftpSidePanelTab(
+        tabs,
+        activeHost.id,
+        connectionKey,
+        tabConnectionKeyMapRef.current,
+        hasBackendSession,
+        (connectionId) => s.getConnectionCacheKey?.(connectionId) ?? null,
+      );
     if (existingTab) {
       s.selectTab("left", existingTab.id);
       connectedKeyRef.current = connectionKey;
