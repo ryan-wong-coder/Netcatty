@@ -339,16 +339,20 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
     });
 
     const tabs = s.leftTabs.tabs;
-    // Prefer an existing healthy tab for this endpoint even after a terminal
-    // focus change — otherwise alternating sessions forceNewTab forever.
-    const existingTab = findReusableSftpSidePanelTab(
-      tabs,
-      activeHost.id,
-      connectionKey,
-      tabConnectionKeyMapRef.current,
-      hasBackendSession,
-      (connectionId) => s.getConnectionCacheKey?.(connectionId) ?? null,
-    );
+    // Session focus changes must rebind SFTP onto the new terminal SSH session
+    // (proxy/jump path can differ even when hostId/hostname/port/user match).
+    // Same-endpoint rebind happens in place below with remembered initialPath so
+    // we keep the browsed directory without stacking tabs.
+    const existingTab = sessionChanged
+      ? null
+      : findReusableSftpSidePanelTab(
+        tabs,
+        activeHost.id,
+        connectionKey,
+        tabConnectionKeyMapRef.current,
+        hasBackendSession,
+        (connectionId) => s.getConnectionCacheKey?.(connectionId) ?? null,
+      );
     if (existingTab) {
       s.selectTab("left", existingTab.id);
       // selectTab does not update reconnect metadata; keep lastConnectedHost
@@ -371,6 +375,27 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
         });
       }
       return;
+    }
+
+    // Capture the visible path before rebind so session switches keep it even
+    // if the path-memory effect has not written this endpoint yet.
+    if (
+      sessionChanged
+      && activeTab?.connection
+      && !activeTab.connection.isLocal
+      && activeTab.connection.status === "connected"
+      && activeTab.connection.currentPath
+      && activeTabConnectionKey === connectionKey
+    ) {
+      lastBrowsedPathByConnectionKeyRef.current.set(
+        connectionKey,
+        activeTab.connection.currentPath,
+      );
+      onCurrentPathChangeRef.current?.({
+        hostId: activeTab.connection.hostId,
+        connectionKey,
+        path: activeTab.connection.currentPath,
+      });
     }
 
     const currentConn = s.leftPane.connection;
