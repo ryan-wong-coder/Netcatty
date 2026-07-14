@@ -250,6 +250,9 @@ function createPreloadApi(ctx) {
   closeSession: (sessionId) => {
     markTerminalDataSessionClosed(sessionId);
     telnetEchoModeListeners.delete(sessionId);
+    // closeSession sets session.closed before kill; mosh exit handlers skip
+    // the exit event in that case, so clear ready listeners here too.
+    moshSessionReadyListeners.delete(sessionId);
     ipcRenderer.send("netcatty:close", { sessionId });
   },
   setSessionEncoding: async (sessionId, encoding) => {

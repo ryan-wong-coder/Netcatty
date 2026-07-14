@@ -1294,8 +1294,8 @@ test("startMosh rejects jump host chains instead of connecting directly", async 
 
 test("startMosh defers startup commands until mosh-client is ready", async () => {
   const sent: string[] = [];
-  const statuses: string[] = [];
   let readyCb: ((evt: { sessionId: string }) => void) | null = null;
+  let readyDisposed = false;
   let dataCb: ((data: string, meta?: { moshHandshake?: boolean }) => void) | null = null;
 
   const terminalBackend = {
@@ -1318,7 +1318,9 @@ test("startMosh defers startup commands until mosh-client is ready", async () =>
     onSessionExit: () => noop,
     onMoshSessionReady: (_id: string, cb: (evt: { sessionId: string }) => void) => {
       readyCb = cb;
-      return noop;
+      return () => {
+        readyDisposed = true;
+      };
     },
     onChainProgress: () => noop,
     writeToSession: (_id: string, data: string) => sent.push(data),
@@ -1347,7 +1349,9 @@ test("startMosh defers startup commands until mosh-client is ready", async () =>
     fitAddonRef: { current: null },
     serializeAddonRef: { current: null },
     pendingAuthRef: { current: null },
-    updateStatus: (status: string) => statuses.push(status),
+    updateStatus: (status: string) => {
+      if (status === "connected") ctx.hasConnectedRef.current = true;
+    },
     setStatus: noop,
     setError: noop,
     setNeedsAuth: noop,
@@ -1370,14 +1374,27 @@ test("startMosh defers startup commands until mosh-client is ready", async () =>
 
   await createTerminalSessionStarters(ctx as never).startMosh(term as never);
 
-  // Handshake output must not mark the session connected or send startup input.
+  // Handshake output dismisses the overlay (connected) but must not send startup input yet.
   dataCb?.("ssh login banner\r\n", { moshHandshake: true });
-  assert.deepEqual(statuses, []);
+  assert.equal(ctx.hasConnectedRef.current, true);
   assert.deepEqual(sent, []);
   assert.ok(readyCb, "expected onMoshSessionReady subscription");
 
+  // Cancel before ready must dispose the ready listener (no exit event on close).
+  ctx.disposeExitRef.current?.();
+  assert.equal(readyDisposed, true);
+
+  // Fresh start for the ready-path assertion.
+  readyDisposed = false;
+  readyCb = null;
+  sent.length = 0;
+  ctx.hasConnectedRef.current = false;
+  ctx.hasRunStartupCommandRef.current = false;
+  ctx.disposeDataRef.current = null;
+  ctx.disposeExitRef.current = null;
+  await createTerminalSessionStarters(ctx as never).startMosh(term as never);
+  assert.ok(readyCb);
   readyCb?.({ sessionId: "mosh-session" });
-  assert.deepEqual(statuses, ["connected"]);
 
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.ok(sent.some((chunk) => chunk.includes("echo from-snippet")));

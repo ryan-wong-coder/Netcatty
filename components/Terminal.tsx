@@ -294,6 +294,10 @@ const TerminalComponent: React.FC<TerminalProps> = ({
   const connectScriptsInFlightRef = useRef(false);
   const pendingScriptRunIdRef = useRef<string | null>(null);
   const pendingScriptHandledRef = useRef<Snippet | null>(null);
+  // Mosh marks status=connected during the SSH handshake so interactive
+  // prompts remain reachable. Connect/pending scripts must wait until
+  // mosh-client is ready (#2199).
+  const [moshShellReady, setMoshShellReady] = useState(() => !host.moshEnabled);
   const [saveRecordingOpen, setSaveRecordingOpen] = useState(false);
   const [recordedCode, setRecordedCode] = useState('');
   const recorder = useScriptRecorder(sessionId);
@@ -1619,8 +1623,26 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     if (status === 'disconnected' && !autoReconnectLoopActiveRef.current) {
       connectScriptsConsumedRef.current = false;
       connectScriptsCompletedIdsRef.current = new Set();
+      if (host.moshEnabled) {
+        setMoshShellReady(false);
+      }
     }
-  }, [status]);
+  }, [host.moshEnabled, status]);
+
+  useEffect(() => {
+    if (!host.moshEnabled) {
+      setMoshShellReady(true);
+      return;
+    }
+    // Stay false until ready fires (or reconnect completes a new handshake).
+    setMoshShellReady(false);
+    const dispose = terminalBackend.onMoshSessionReady?.(sessionId, () => {
+      setMoshShellReady(true);
+    });
+    return () => {
+      dispose?.();
+    };
+  }, [host.moshEnabled, sessionId, terminalBackend]);
 
   useEffect(() => {
     if (status !== "disconnected") return;
@@ -1651,6 +1673,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
 
   useEffect(() => {
     if (status !== 'connected') return;
+    if (host.moshEnabled && !moshShellReady) return;
 
     let pendingOne: Snippet | undefined;
     if (pendingScript && isScriptSnippet(pendingScript)) {
@@ -1784,7 +1807,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     }, 400);
 
     return () => window.clearTimeout(timer);
-  }, [host, isPendingScriptAlreadyHandled, pendingScript, pendingScriptId, sessionId, snippets, status, t]);
+  }, [host, isPendingScriptAlreadyHandled, moshShellReady, pendingScript, pendingScriptId, sessionId, snippets, status, t]);
 
   useEffect(() => {
     return registerScreenSnapshotProvider(sessionId, () => {

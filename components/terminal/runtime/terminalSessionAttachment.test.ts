@@ -1185,7 +1185,7 @@ test("tryAttachSessionToTerminal closes orphan sessions after unmount", () => {
   assert.equal(ctx.sessionRef.current, null);
 });
 
-test("attachSessionToTerminal ignores mosh handshake output when marking connected", () => {
+test("attachSessionToTerminal marks connected on first output including mosh handshake", () => {
   const { term } = createFakeTerm();
   const statuses: string[] = [];
   let onData: ((data: string, meta?: { moshHandshake?: boolean }) => void) | null = null;
@@ -1224,11 +1224,8 @@ test("attachSessionToTerminal ignores mosh handshake output when marking connect
   };
 
   attachSessionToTerminal(ctx as never, term, "session-1");
+  // Handshake output must dismiss the overlay so interactive prompts are reachable.
   onData?.("ssh handshake banner\r\n", { moshHandshake: true });
-  assert.deepEqual(statuses, []);
-  assert.equal(ctx.hasConnectedRef.current, false);
-
-  onData?.("alice@host:~$ ");
   assert.deepEqual(statuses, ["connected"]);
   assert.equal(ctx.hasConnectedRef.current, true);
 });
