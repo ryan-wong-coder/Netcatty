@@ -259,21 +259,32 @@ export function handleKeyboardInteractiveSubmitImpl(
       session?.hostId
       && (!request?.hostname || request.hostname === session.hostname)
     );
-    // Save password to host if requested — never for second-factor / EDR prompts
+    const host = canUpdateDestinationHost
+      ? hosts.find(h => h.id === session.hostId)
+      : undefined;
+    // Save password to host if requested - never for second-factor / EDR prompts
     // (allowSavePassword === false) so a secondary secret cannot overwrite the
     // host login password (#2150 / Codex review on #2151).
-    if (savePassword && canUpdateDestinationHost && request?.allowSavePassword !== false) {
-      const host = hosts.find(h => h.id === session.hostId);
-      if (host) {
-        updateHosts(hosts.map(h => h.id === host.id ? { ...h, password: savePassword, savePassword: true } : h));
-      }
-    }
+    const shouldSavePassword = !!(
+      savePassword
+      && host
+      && request?.allowSavePassword !== false
+    );
     // Persist host-level MFA mode when the secondary-auth modal suggested it
     // and the user left the checkbox on (#2150 / #2217).
-    if (enableRequiresMfa && canUpdateDestinationHost) {
-      const host = hosts.find(h => h.id === session.hostId);
-      if (host && !host.requiresMfa) {
-        updateHosts(hosts.map(h => h.id === host.id ? { ...h, requiresMfa: true } : h));
+    const shouldEnableRequiresMfa = !!(
+      enableRequiresMfa
+      && host
+      && !host.requiresMfa
+    );
+
+    if (host && (shouldSavePassword || shouldEnableRequiresMfa)) {
+      updateHosts(hosts.map(h => h.id === host.id ? {
+        ...h,
+        ...(shouldSavePassword ? { password: savePassword, savePassword: true } : {}),
+        ...(shouldEnableRequiresMfa ? { requiresMfa: true } : {}),
+      } : h));
+      if (shouldEnableRequiresMfa) {
         toast?.info?.(
           typeof t === "function"
             ? t("keyboard.interactive.mfaEnabled")

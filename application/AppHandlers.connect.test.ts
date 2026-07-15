@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   flushQueuedTrayPanelConnectHostsImpl,
   handleConnectToHostImpl,
+  handleKeyboardInteractiveSubmitImpl,
   handleTrayPanelConnectRequestImpl,
 } from './app/AppHandlers.ts';
 import type { Host } from '../types';
@@ -115,4 +116,65 @@ test('queued tray panel connects flush in order', () => {
 
   assert.deepEqual(connectedHostIds, ['host-1', 'host-2']);
   assert.deepEqual(pendingHostIds, []);
+});
+
+test('keyboard-interactive submit preserves saved password when enabling MFA', () => {
+  let hosts: Host[] = [{
+    ...baseHost,
+    password: 'old-password',
+    savePassword: false,
+    requiresMfa: false,
+  }];
+  let queue = [{
+    requestId: 'ki-1',
+    sessionId: 'session-1',
+    hostname: baseHost.hostname,
+    allowSavePassword: true,
+  }];
+  const bridgeResponses: unknown[] = [];
+  const hostUpdates: Host[][] = [];
+  const toasts: string[] = [];
+
+  handleKeyboardInteractiveSubmitImpl(
+    () => ({
+      hosts,
+      keyboardInteractiveQueue: queue,
+      netcattyBridge: {
+        get: () => ({
+          respondKeyboardInteractive: (...args: unknown[]) => {
+            bridgeResponses.push(args);
+          },
+        }),
+      },
+      sessions: [{
+        id: 'session-1',
+        hostId: baseHost.id,
+        hostname: baseHost.hostname,
+      }],
+      setKeyboardInteractiveQueue: (updater: (items: typeof queue) => typeof queue) => {
+        queue = updater(queue);
+      },
+      t: (key: string) => key,
+      toast: { info: (message: string) => toasts.push(message) },
+      updateHosts: (nextHosts: Host[]) => {
+        hostUpdates.push(nextHosts);
+        hosts = nextHosts;
+      },
+    }),
+    'ki-1',
+    ['login-password', 'otp-code'],
+    'new-login-password',
+    true,
+  );
+
+  assert.equal(hostUpdates.length, 1);
+  assert.deepEqual(hosts[0], {
+    ...baseHost,
+    password: 'new-login-password',
+    savePassword: true,
+    requiresMfa: true,
+  });
+  assert.deepEqual(queue, []);
+  assert.deepEqual(toasts, ['keyboard.interactive.mfaEnabled']);
+  assert.equal(bridgeResponses.length, 1);
 });
