@@ -23,8 +23,10 @@ export const buildCacheKey = (
   protocol?: string,
   sftpSudo?: boolean,
   username?: string,
+  sftpFileProtocol?: string,
 ): string => {
-  return `${hostId}:${hostname ?? ''}:${port ?? ''}:${protocol ?? ''}:${sftpSudo ? 'sudo' : ''}:${username ?? ''}`;
+  const fileProto = sftpFileProtocol && sftpFileProtocol !== "auto" ? sftpFileProtocol : "";
+  return `${hostId}:${hostname ?? ''}:${port ?? ''}:${protocol ?? ''}:${sftpSudo ? 'sudo' : ''}:${username ?? ''}:${fileProto}`;
 };
 
 export const getSharedRemoteHostCache = (

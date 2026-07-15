@@ -26,7 +26,7 @@ function sftpCapability(id, description, policyOverrides, surfaces) {
 const SFTP_CAPABILITIES = [
   sftpCapability(
     "sftp.list",
-    "List a remote directory over SFTP.",
+    "List a remote directory over the session file backend (SFTP or SCP-mode).",
     { sensitiveRead: true },
     {
       builtin: { rpcMethod: "netcatty/sftp/list" },
@@ -36,7 +36,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.read",
-    "Read a remote file over SFTP.",
+    "Read a remote file over the session file backend (SFTP or SCP-mode).",
     { sensitiveRead: true },
     {
       builtin: { rpcMethod: "netcatty/sftp/read" },
@@ -46,7 +46,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.write",
-    "Write a remote file over SFTP.",
+    "Write a remote file over the session file backend (SFTP or SCP-mode).",
     { write: true, bypassesApproval: false, bypassesChatCancel: false },
     {
       builtin: { rpcMethod: "netcatty/sftp/write" },
@@ -76,7 +76,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.stat",
-    "Get remote file metadata over SFTP.",
+    "Get remote file metadata over the session file backend (SFTP or SCP-mode).",
     { sensitiveRead: true },
     {
       builtin: { rpcMethod: "netcatty/sftp/stat" },
@@ -96,7 +96,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.mkdir",
-    "Create a remote directory over SFTP.",
+    "Create a remote directory over the session file backend (SFTP or SCP-mode).",
     { write: true, bypassesApproval: false, bypassesChatCancel: false },
     {
       builtin: { rpcMethod: "netcatty/sftp/mkdir" },
@@ -106,7 +106,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.delete",
-    "Delete a remote file or directory over SFTP.",
+    "Delete a remote file or directory over the session file backend (SFTP or SCP-mode).",
     { write: true, bypassesApproval: false, bypassesChatCancel: false },
     {
       builtin: { rpcMethod: "netcatty/sftp/delete" },
@@ -116,7 +116,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.rename",
-    "Rename a remote file or directory over SFTP.",
+    "Rename a remote file or directory over the session file backend (SFTP or SCP-mode).",
     { write: true, bypassesApproval: false, bypassesChatCancel: false },
     {
       builtin: { rpcMethod: "netcatty/sftp/rename" },
@@ -126,7 +126,7 @@ const SFTP_CAPABILITIES = [
   ),
   sftpCapability(
     "sftp.chmod",
-    "Change remote file permissions over SFTP.",
+    "Change remote file permissions over the session file backend (SFTP or SCP-mode).",
     { write: true, bypassesApproval: false, bypassesChatCancel: false },
     {
       builtin: { rpcMethod: "netcatty/sftp/chmod" },

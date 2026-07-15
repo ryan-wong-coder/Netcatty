@@ -37,7 +37,7 @@ interface UseSftpHostCredentialsParams {
  * authenticated. Endpoint fields must match the session for findReusableSession.
  */
 export const buildSftpReuseCredentials = (
-  host: Pick<Host, "hostname" | "username" | "port">,
+  host: Pick<Host, "hostname" | "username" | "port" | "sftpFileProtocol">,
   sourceSessionId: string,
 ): NetcattySSHOptions => ({
   hostname: host.hostname,
@@ -46,6 +46,7 @@ export const buildSftpReuseCredentials = (
   sourceSessionId,
   reuseOnly: true,
   sudo: false,
+  fileProtocol: host.sftpFileProtocol || "auto",
 });
 
 export const buildSftpHostCredentials = ({
@@ -204,6 +205,7 @@ export const buildSftpHostCredentials = ({
     proxy: proxyConfig,
     jumpHosts: jumpHosts && jumpHosts.length > 0 ? jumpHosts : undefined,
     sudo: host.sftpSudo,
+    fileProtocol: host.sftpFileProtocol || "auto",
     identityFilePaths: keyAuth.identityFilePaths,
     ...targetAgentAuth,
     keepaliveInterval: targetKeepalive.interval,

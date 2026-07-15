@@ -137,6 +137,8 @@ declare global {
     algorithmOverrides?: import("./domain/models").HostAlgorithmOverrides;
     // Use sudo for SFTP server
     sudo?: boolean;
+    // Remote file protocol: auto (SFTP then SCP fallback) | sftp | scp
+    fileProtocol?: 'auto' | 'sftp' | 'scp';
     // Saved host password used by background system tools when they need sudo.
     sudoAutofillPassword?: string;
     // Session log configuration for real-time streaming

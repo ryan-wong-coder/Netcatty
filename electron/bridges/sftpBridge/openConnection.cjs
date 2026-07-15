@@ -1,9 +1,41 @@
 /* eslint-disable no-undef */
 const { resolveSshConnectionTimeouts } = require("../sshBridge/startSession.cjs");
 const { runWhenProxyConnectionReady } = require("../proxyUtils.cjs");
+const { normalizeFileProtocol } = require("./scpShell.cjs");
+const { getScpBackendForClient } = require("./scpBackend.cjs");
 
 function createOpenConnectionApi(ctx) {
   with (ctx) {
+    /**
+     * Mark a session client as SCP-mode and optionally probe shell access.
+     */
+    async function activateScpMode(client, { probe = true } = {}) {
+      client.__netcattyFileProtocol = "scp";
+      client.sftp = null;
+      if (probe) {
+        const backend = getScpBackendForClient(client);
+        // Cheap probe: home dir resolves via shell exec
+        await backend.homeDir().catch(async () => {
+          // Some minimal environments still support scp/list without $HOME — try pwd
+          const sshClient = client.client;
+          if (!sshClient?.exec) throw new Error("SCP mode requires SSH exec");
+          await new Promise((resolve, reject) => {
+            sshClient.exec("pwd", (err, stream) => {
+              if (err) return reject(err);
+              let out = "";
+              stream.on("data", (d) => { out += d.toString(); });
+              stream.on("close", (code) => {
+                if (code === 0 && out.trim()) resolve();
+                else reject(new Error("SCP mode shell probe failed"));
+              });
+              stream.on("error", reject);
+            });
+          });
+        });
+      }
+      return client;
+    }
+
     const hasUsableProxy = (proxy) => {
       if (!proxy) return false;
       if (proxy.type === "command") return !!proxy.command?.trim();
@@ -628,14 +660,39 @@ function createOpenConnectionApi(ctx) {
             sourceSession.conn,
             { refHolder, sourceSessionId: options.sourceSessionId },
           );
+          const fileProtocol = normalizeFileProtocol(options.fileProtocol);
           try {
             sendSftpProgress(event.sender, connId, options.hostname, 'connecting', 'reusing terminal connection');
-            await requireSftpChannel(reusedClient);
-            reusedClient.__netcattySudoMode = false;
-            sftpClients.set(connId, reusedClient);
-            sendSftpProgress(event.sender, connId, options.hostname, 'connected', 'reused terminal connection');
-            console.log(`[SFTP] Reused terminal SSH connection ${options.sourceSessionId} for ${connId}`);
-            return { sftpId: connId };
+            if (fileProtocol === "scp") {
+              await activateScpMode(reusedClient);
+              reusedClient.__netcattySudoMode = false;
+              sftpClients.set(connId, reusedClient);
+              sendSftpProgress(event.sender, connId, options.hostname, 'connected', 'reused terminal connection (SCP mode)');
+              console.log(`[SFTP] Reused terminal SSH connection ${options.sourceSessionId} for ${connId} in SCP mode`);
+              return { sftpId: connId, fileProtocol: "scp" };
+            }
+            try {
+              await requireSftpChannel(reusedClient);
+              reusedClient.__netcattyFileProtocol = "sftp";
+              reusedClient.__netcattySudoMode = false;
+              sftpClients.set(connId, reusedClient);
+              sendSftpProgress(event.sender, connId, options.hostname, 'connected', 'reused terminal connection');
+              console.log(`[SFTP] Reused terminal SSH connection ${options.sourceSessionId} for ${connId}`);
+              return { sftpId: connId, fileProtocol: "sftp" };
+            } catch (sftpErr) {
+              if (fileProtocol === "sftp") throw sftpErr;
+              // Auto: fall back to SCP-mode on the same reused SSH connection
+              console.warn(
+                `[SFTP] SFTP channel unavailable on reused session ${options.sourceSessionId}; falling back to SCP mode:`,
+                sftpErr?.message || String(sftpErr),
+              );
+              await activateScpMode(reusedClient);
+              reusedClient.__netcattySudoMode = false;
+              sftpClients.set(connId, reusedClient);
+              sendSftpProgress(event.sender, connId, options.hostname, 'connected', 'reused terminal connection (SCP mode)');
+              console.log(`[SFTP] Reused terminal SSH connection ${options.sourceSessionId} for ${connId} in SCP mode (auto fallback)`);
+              return { sftpId: connId, fileProtocol: "scp" };
+            }
           } catch (reuseErr) {
             try {
               await reusedClient.end();
@@ -985,16 +1042,42 @@ function createOpenConnectionApi(ctx) {
             clearAuthReadyTimer();
             cleanup();
             sendSftpProgress(event.sender, connId, options.hostname, 'connected');
-    
+
+            const fileProtocol = normalizeFileProtocol(options.fileProtocol);
+
+            const finishSftp = (sftp) => {
+              client.sftp = sftp;
+              client.__netcattyFileProtocol = "sftp";
+              resolve();
+            };
+
+            const finishScp = async (reason) => {
+              try {
+                if (reason) {
+                  console.warn(`[SFTP] ${reason}; activating SCP mode for ${connId}`);
+                }
+                await activateScpMode(client);
+                resolve();
+              } catch (scpErr) {
+                try { sshClient.end(); } catch { /* ignore */ }
+                reject(scpErr);
+              }
+            };
+
+            if (fileProtocol === "scp") {
+              console.log(`[SFTP] Forced SCP mode for connection: ${connId}`);
+              void finishScp(null);
+              return;
+            }
+
             if (options.sudo) {
               console.log(`[SFTP] Using sudo mode for connection: ${connId}`);
               (async () => {
                 try {
                   const sudoPass = options.password || "";
                   const sftpWrapper = await connectSudoSftp(sshClient, sudoPass);
-                  client.sftp = sftpWrapper;
-                  client.sftp.on('close', () => client.end());
-                  resolve();
+                  sftpWrapper.on('close', () => client.end());
+                  finishSftp(sftpWrapper);
                 } catch (e) {
                   // Fallback: if sftp-server binary is missing (exit code 127),
                   // try standard SFTP subsystem instead of failing completely.
@@ -1005,12 +1088,17 @@ function createOpenConnectionApi(ctx) {
                     options.sudo = false; // Mark as non-sudo for downstream logic
                     sshClient.sftp((sftpErr, sftp) => {
                       if (sftpErr) {
+                        if (fileProtocol === "auto") {
+                          void finishScp(`SFTP subsystem failed after sudo fallback (${sftpErr.message})`);
+                          return;
+                        }
                         sshClient.end();
                         return reject(sftpErr);
                       }
-                      client.sftp = sftp;
-                      resolve();
+                      finishSftp(sftp);
                     });
+                  } else if (fileProtocol === "auto") {
+                    void finishScp(`SFTP sudo mode failed (${e.message})`);
                   } else {
                     sshClient.end();
                     reject(e);
@@ -1020,9 +1108,14 @@ function createOpenConnectionApi(ctx) {
             } else {
               // Open standard SFTP subsystem channel
               sshClient.sftp((err, sftp) => {
-                if (err) return reject(err);
-                client.sftp = sftp;
-                resolve();
+                if (err) {
+                  if (fileProtocol === "auto") {
+                    void finishScp(`SFTP subsystem unavailable (${err.message})`);
+                    return;
+                  }
+                  return reject(err);
+                }
+                finishSftp(sftp);
               });
             }
           });
@@ -1042,7 +1135,10 @@ function createOpenConnectionApi(ctx) {
         }
     
         // Used by transferBridge to decide whether isolated fast-transfer channels are safe.
-        client.__netcattySudoMode = !!options.sudo;
+        client.__netcattySudoMode = !!options.sudo && client.__netcattyFileProtocol !== "scp";
+        if (!client.__netcattyFileProtocol) {
+          client.__netcattyFileProtocol = "sftp";
+        }
         sftpClients.set(connId, client);
     
         // Store jump connections for cleanup when SFTP is closed
@@ -1053,8 +1149,8 @@ function createOpenConnectionApi(ctx) {
           });
         }
     
-        console.log(`[SFTP] Connection established: ${connId}`);
-        return { sftpId: connId };
+        console.log(`[SFTP] Connection established: ${connId} (protocol=${client.__netcattyFileProtocol})`);
+        return { sftpId: connId, fileProtocol: client.__netcattyFileProtocol };
       } catch (err) {
         // Cleanup jump connections on error
         cleanupPendingConnection();

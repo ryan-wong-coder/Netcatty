@@ -180,7 +180,7 @@
     "toolName": "sftp_list",
     "rpcMethod": "netcatty/sftp/list",
     "localExecution": false,
-    "description": "List a remote directory over SFTP.",
+    "description": "List a remote directory over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -209,7 +209,7 @@
     "toolName": "sftp_read_file",
     "rpcMethod": "netcatty/sftp/read",
     "localExecution": false,
-    "description": "Read a remote file over SFTP.",
+    "description": "Read a remote file over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -238,7 +238,7 @@
     "toolName": "sftp_write_file",
     "rpcMethod": "netcatty/sftp/write",
     "localExecution": false,
-    "description": "Write a remote file over SFTP.",
+    "description": "Write a remote file over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -340,7 +340,7 @@
     "toolName": "sftp_stat",
     "rpcMethod": "netcatty/sftp/stat",
     "localExecution": false,
-    "description": "Get remote file metadata over SFTP.",
+    "description": "Get remote file metadata over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -393,7 +393,7 @@
     "toolName": "sftp_mkdir",
     "rpcMethod": "netcatty/sftp/mkdir",
     "localExecution": false,
-    "description": "Create a remote directory over SFTP.",
+    "description": "Create a remote directory over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -422,7 +422,7 @@
     "toolName": "sftp_delete",
     "rpcMethod": "netcatty/sftp/delete",
     "localExecution": false,
-    "description": "Delete a remote file or directory over SFTP.",
+    "description": "Delete a remote file or directory over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -451,7 +451,7 @@
     "toolName": "sftp_rename",
     "rpcMethod": "netcatty/sftp/rename",
     "localExecution": false,
-    "description": "Rename a remote file or directory over SFTP.",
+    "description": "Rename a remote file or directory over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",
@@ -485,7 +485,7 @@
     "toolName": "sftp_chmod",
     "rpcMethod": "netcatty/sftp/chmod",
     "localExecution": false,
-    "description": "Change remote file permissions over SFTP.",
+    "description": "Change remote file permissions over the session file backend (SFTP or SCP-mode).",
     "inputShape": {
       "sessionId": {
         "type": "string",

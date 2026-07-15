@@ -140,12 +140,12 @@ export const useSftpPaneActions = ({
     // Fallback: lastConnectedHostRef (per-side, may be stale for multi-tab)
     const connHost = lastConnectedHostRef.current[side];
     if (connHost && connHost !== "local" && connHost.id === hostId) {
-      return buildCacheKey(connHost.id, connHost.hostname, connHost.port, connHost.protocol, connHost.sftpSudo, connHost.username);
+      return buildCacheKey(connHost.id, connHost.hostname, connHost.port, connHost.protocol, connHost.sftpSudo, connHost.username, connHost.sftpFileProtocol);
     }
     // Fall back to vault host
     const host = hostsRef.current.find(h => h.id === hostId);
     if (host) {
-      return buildCacheKey(host.id, host.hostname, host.port, host.protocol, host.sftpSudo, host.username);
+      return buildCacheKey(host.id, host.hostname, host.port, host.protocol, host.sftpSudo, host.username, host.sftpFileProtocol);
     }
     return hostId;
   }, [connectionCacheKeyMapRef, lastConnectedHostRef]);

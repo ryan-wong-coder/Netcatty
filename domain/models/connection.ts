@@ -216,6 +216,9 @@ export interface Host {
   serialConfig?: SerialConfig;
   // SFTP specific configuration
   sftpSudo?: boolean; // Use sudo for SFTP operations (requires password)
+  // Remote file browser protocol: Auto tries SFTP then falls back to SCP-mode
+  // (shell browse + scp -t/-f transfers) when the SFTP subsystem is unavailable.
+  sftpFileProtocol?: 'auto' | 'sftp' | 'scp';
   sftpEncoding?: SftpFilenameEncoding; // Filename encoding for SFTP operations
   sftpBookmarks?: SftpBookmark[]; // Bookmarked SFTP paths for quick navigation
   sftpFollowTerminalCwd?: boolean; // Overrides global SFTP follow-terminal-directory setting

@@ -109,5 +109,5 @@ test("openSftp with reuseOnly does not require renderer endpoint to match", asyn
   );
 
   assert.equal(requestedTarget, undefined);
-  assert.deepEqual(result, { sftpId: "sftp-1" });
+  assert.deepEqual(result, { sftpId: "sftp-1", fileProtocol: "sftp" });
 });

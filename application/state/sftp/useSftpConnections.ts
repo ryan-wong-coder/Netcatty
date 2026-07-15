@@ -285,7 +285,7 @@ export const useSftpConnections = ({
       if (host !== "local") {
         connectionCacheKeyMapRef.current.set(
           connectionId,
-          buildCacheKey(host.id, host.hostname, host.port, host.protocol, host.sftpSudo, host.username),
+          buildCacheKey(host.id, host.hostname, host.port, host.protocol, host.sftpSudo, host.username, host.sftpFileProtocol),
         );
       }
 
@@ -371,7 +371,7 @@ export const useSftpConnections = ({
           }));
         }
       } else {
-        const hostCacheKey = buildCacheKey(host.id, host.hostname, host.port, host.protocol, host.sftpSudo, host.username);
+        const hostCacheKey = buildCacheKey(host.id, host.hostname, host.port, host.protocol, host.sftpSudo, host.username, host.sftpFileProtocol);
         const sharedHostCacheCandidate = options?.ignoreSharedCache
           ? null
           : getSharedRemoteHostCache(hostCacheKey);

@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { encodePathForSession, ensureRemoteDirForSession, requireSftpChannel, resolveEncodingForRequest } = require("./sftpBridge.cjs");
+const { isScpModeClient, getScpBackendForClient } = require("./sftpBridge/scpBackend.cjs");
 const { TRANSFER_CHUNK_SIZE, TRANSFER_CONCURRENCY } = require("./transferLimits.cjs");
 
 /**
@@ -327,6 +328,16 @@ async function acquireIsolatedDownloadChannel(client, transfer) {
  * Falls back to sequential stream piping if fastPut is unavailable.
  */
 async function uploadFile(localPath, remotePath, client, fileSize, transfer, sendProgress) {
+  if (isScpModeClient(client)) {
+    const backend = getScpBackendForClient(client);
+    await backend.uploadFile(localPath, remotePath, {
+      fileSize,
+      transfer,
+      onProgress: (transferred, total) => sendProgress(transferred, total || fileSize),
+    });
+    return;
+  }
+
   await requireSftpChannel(client);
   const sftp = client.sftp;
   if (!sftp) throw new Error("SFTP client not ready");
@@ -448,6 +459,16 @@ async function uploadFile(localPath, remotePath, client, fileSize, transfer, sen
  * Falls back to sequential stream piping if fastGet is unavailable.
  */
 async function downloadFile(remotePath, localPath, client, fileSize, transfer, sendProgress) {
+  if (isScpModeClient(client)) {
+    const backend = getScpBackendForClient(client);
+    await backend.downloadFile(remotePath, localPath, {
+      fileSize,
+      transfer,
+      onProgress: (transferred, total) => sendProgress(transferred, total || fileSize),
+    });
+    return;
+  }
+
   await requireSftpChannel(client);
   const sftp = client.sftp;
   if (!sftp) throw new Error("SFTP client not ready");
@@ -687,10 +708,15 @@ async function startTransfer(event, payload, onProgress) {
       } else if (sourceType === 'sftp') {
         const client = sftpClients.get(sourceSftpId);
         if (!client) throw new Error("Source SFTP session not found");
-        await requireSftpChannel(client);
-        const encodedSourcePath = encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
-        const stat = await client.stat(encodedSourcePath);
-        fileSize = stat.size;
+        if (isScpModeClient(client)) {
+          const st = await getScpBackendForClient(client).stat(sourcePath);
+          fileSize = st.size;
+        } else {
+          await requireSftpChannel(client);
+          const encodedSourcePath = encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
+          const stat = await client.stat(encodedSourcePath);
+          fileSize = stat.size;
+        }
       }
     }
 
@@ -703,7 +729,9 @@ async function startTransfer(event, payload, onProgress) {
       const dir = path.dirname(targetPath).replace(/\\/g, '/');
       try { await ensureRemoteDirForSession(targetSftpId, dir, targetEncoding); } catch { }
 
-      const encodedTargetPath = encodePathForSession(targetSftpId, targetPath, targetEncoding);
+      const encodedTargetPath = isScpModeClient(client)
+        ? targetPath
+        : encodePathForSession(targetSftpId, targetPath, targetEncoding);
       await uploadFile(sourcePath, encodedTargetPath, client, fileSize, transfer, sendProgress);
 
     } else if (sourceType === 'sftp' && targetType === 'local') {
@@ -713,7 +741,9 @@ async function startTransfer(event, payload, onProgress) {
       const dir = path.dirname(targetPath);
       await ensureLocalDir(dir);
 
-      const encodedSourcePath = encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
+      const encodedSourcePath = isScpModeClient(client)
+        ? sourcePath
+        : encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
       await downloadFile(encodedSourcePath, targetPath, client, fileSize, transfer, sendProgress);
 
     } else if (sourceType === 'local' && targetType === 'local') {

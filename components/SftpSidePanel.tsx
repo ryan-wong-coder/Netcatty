@@ -288,6 +288,7 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
       activeHost.protocol,
       activeHost.sftpSudo,
       activeHost.username,
+      activeHost.sftpFileProtocol,
     );
     const sessionChanged = shouldResetSftpSidePanelSourceSession(
       lastSourceSessionIdRef.current,
