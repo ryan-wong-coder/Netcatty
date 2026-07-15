@@ -133,6 +133,7 @@ export const buildSftpHostCredentials = ({
       const hopConnectionTimeouts = resolveHostSshConnectionTimeouts(jumpHost);
       return {
         hostname: jumpHost.hostname,
+        hostId: jumpHost.id,
         port: jumpHost.port || 22,
         username: jumpAuth.username || "root",
         authMethod: jumpAuth.authMethod,
@@ -193,6 +194,7 @@ export const buildSftpHostCredentials = ({
   const targetConnectionTimeouts = resolveHostSshConnectionTimeouts(host);
   return {
     hostname: host.hostname,
+    hostId: host.id,
     username: resolved.username,
     authMethod: resolved.authMethod,
     requiresMfa: !!host.requiresMfa,

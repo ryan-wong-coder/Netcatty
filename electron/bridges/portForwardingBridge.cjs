@@ -106,6 +106,7 @@ async function startPortForward(event, payload) {
     remoteHost,
     remotePort,
     hostname,
+    hostId,
     port = 22,
     username,
     authMethod,
@@ -193,6 +194,7 @@ async function startPortForward(event, payload) {
   connectOpts.hostVerifier = hostKeyVerifier.createHostVerifier({
     sender,
     sessionId: tunnelId,
+    hostId,
     hostname,
     port,
     knownHosts,

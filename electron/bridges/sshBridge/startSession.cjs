@@ -930,18 +930,21 @@ function createStartSessionApi(ctx) {
 
         if (authAgent) {
           const order = ["none", "agent"];
-          if (connectOpts.password) order.push("password");
+          if (connectOpts.password) {
+            if (options.requiresMfa) order.push("keyboard-interactive");
+            order.push("password");
+          }
           // Default key fallback only when this is not password-only (issue #266 / #2079).
           // Must also set connectOpts.privateKey for ssh2 to actually try publickey auth.
           if (defaultKeyInfo && !hasUserConfiguredKey(options) && !isPasswordOnlyAuth) {
             connectOpts.privateKey = defaultKeyInfo.privateKey;
             order.push("publickey");
           }
-          order.push("keyboard-interactive");
+          if (!order.includes("keyboard-interactive")) order.push("keyboard-interactive");
           // Function form so authPhase.hadPartialSuccess updates for cert/agent
           // first-factor + keyboard-interactive second-factor (#2150).
           connectOpts.authHandler = createOrderedStringAuthHandler(order, authPhase);
-          log("Auth order (agent mode)", { order });
+          log("Auth order (agent mode)", { order, requiresMfa: !!options.requiresMfa });
         } else {
           // Build dynamic auth handler for fallback support
           const authMethods = [];
@@ -1666,6 +1669,7 @@ function createStartSessionApi(ctx) {
           conn.on("keyboard-interactive", createKeyboardInteractiveHandler({
             sender,
             sessionId,
+            hostId: options.hostId,
             hostname: options.hostname,
             password: options.password,
             logPrefix,

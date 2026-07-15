@@ -615,6 +615,7 @@ export const startPortForward = async (
           const hopConnectionTimeouts = resolveHostSshConnectionTimeouts(jumpHost);
           return {
             hostname: jumpHost.hostname,
+            hostId: jumpHost.id,
             port: jumpHost.port || 22,
             username: jumpResolved.username || 'root',
             authMethod: jumpResolved.authMethod,
@@ -713,6 +714,7 @@ export const startPortForward = async (
       remoteHost: rule.remoteHost,
       remotePort: rule.remotePort,
       hostname: host.hostname,
+      hostId: host.id,
       port: host.port,
       username: resolved.username,
       authMethod: resolved.authMethod,

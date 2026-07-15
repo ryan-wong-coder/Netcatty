@@ -825,6 +825,7 @@ async function connectThroughChain(event, options, jumpHosts, targetHost, target
         conn.on('keyboard-interactive', createKeyboardInteractiveHandler({
           sender,
           sessionId,
+          hostId: jump.hostId,
           hostname: hopLabel,
           password: jump.password,
           logPrefix: `[Chain] Hop ${i + 1}/${totalHops}`,

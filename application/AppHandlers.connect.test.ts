@@ -178,3 +178,105 @@ test('keyboard-interactive submit preserves saved password when enabling MFA', (
   assert.deepEqual(toasts, ['keyboard.interactive.mfaEnabled']);
   assert.equal(bridgeResponses.length, 1);
 });
+
+test('keyboard-interactive submit can enable MFA for external requests with hostId', () => {
+  let hosts: Host[] = [{
+    ...baseHost,
+    requiresMfa: false,
+  }];
+  let queue = [{
+    requestId: 'ki-external',
+    sessionId: 'sftp-connection-1',
+    hostId: baseHost.id,
+    scope: 'external',
+    hostname: baseHost.hostname,
+    allowSavePassword: false,
+  }];
+  const hostUpdates: Host[][] = [];
+  const toasts: string[] = [];
+
+  handleKeyboardInteractiveSubmitImpl(
+    () => ({
+      hosts,
+      keyboardInteractiveQueue: queue,
+      netcattyBridge: {
+        get: () => ({
+          respondKeyboardInteractive: () => {},
+        }),
+      },
+      sessions: [],
+      setKeyboardInteractiveQueue: (updater: (items: typeof queue) => typeof queue) => {
+        queue = updater(queue);
+      },
+      t: (key: string) => key,
+      toast: { info: (message: string) => toasts.push(message) },
+      updateHosts: (nextHosts: Host[]) => {
+        hostUpdates.push(nextHosts);
+        hosts = nextHosts;
+      },
+    }),
+    'ki-external',
+    ['secondary-password'],
+    undefined,
+    true,
+  );
+
+  assert.equal(hostUpdates.length, 1);
+  assert.equal(hosts[0].requiresMfa, true);
+  assert.deepEqual(queue, []);
+  assert.deepEqual(toasts, ['keyboard.interactive.mfaEnabled']);
+});
+
+test('keyboard-interactive submit uses explicit hostId instead of rewriting the terminal target', () => {
+  const jumpHost: Host = {
+    ...baseHost,
+    id: 'jump-1',
+    label: 'Jump',
+    hostname: 'jump.example.com',
+    requiresMfa: false,
+  };
+  let hosts: Host[] = [{
+    ...baseHost,
+    requiresMfa: false,
+  }, jumpHost];
+  let queue = [{
+    requestId: 'ki-jump',
+    sessionId: 'terminal-session-1',
+    hostId: jumpHost.id,
+    scope: 'terminal',
+    hostname: jumpHost.hostname,
+    allowSavePassword: false,
+  }];
+
+  handleKeyboardInteractiveSubmitImpl(
+    () => ({
+      hosts,
+      keyboardInteractiveQueue: queue,
+      netcattyBridge: {
+        get: () => ({
+          respondKeyboardInteractive: () => {},
+        }),
+      },
+      sessions: [{
+        id: 'terminal-session-1',
+        hostId: baseHost.id,
+        hostname: baseHost.hostname,
+      }],
+      setKeyboardInteractiveQueue: (updater: (items: typeof queue) => typeof queue) => {
+        queue = updater(queue);
+      },
+      t: (key: string) => key,
+      toast: { info: () => {} },
+      updateHosts: (nextHosts: Host[]) => {
+        hosts = nextHosts;
+      },
+    }),
+    'ki-jump',
+    ['secondary-password'],
+    undefined,
+    true,
+  );
+
+  assert.equal(hosts.find((host) => host.id === baseHost.id)?.requiresMfa, false);
+  assert.equal(hosts.find((host) => host.id === jumpHost.id)?.requiresMfa, true);
+});

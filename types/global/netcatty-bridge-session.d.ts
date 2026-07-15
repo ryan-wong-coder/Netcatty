@@ -387,6 +387,7 @@ declare global {
       cb: (request: {
         requestId: string;
         sessionId: string;
+        hostId?: string;
         name: string;
         instructions: string;
         prompts: Array<{ prompt: string; echo: boolean }>;

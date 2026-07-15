@@ -382,6 +382,7 @@ function createOpenConnectionApi(ctx) {
             const sftpChainKiHandler = createKeyboardInteractiveHandler({
               sender,
               sessionId: connId,
+              hostId: jump.hostId,
               hostname: hopLabel,
               password: jump.password,
               logPrefix: `[SFTP Chain] Hop ${i + 1}/${jumpHosts.length}`,
@@ -872,6 +873,7 @@ function createOpenConnectionApi(ctx) {
       connectOpts.hostVerifier = hostKeyVerifier.createHostVerifier({
         sender: event.sender,
         sessionId: connId,
+        hostId: options.hostId,
         hostname: options.hostname,
         port: options.port || 22,
         knownHosts: options.knownHosts,

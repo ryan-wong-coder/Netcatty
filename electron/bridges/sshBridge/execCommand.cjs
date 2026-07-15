@@ -212,6 +212,7 @@ function createExecCommandApi(ctx) {
           conn.on("keyboard-interactive", createKeyboardInteractiveHandler({
             sender,
             sessionId,
+            hostId: payload.hostId,
             hostname: payload.hostname,
             password: payload.password,
             logPrefix: "[SSH Exec]",

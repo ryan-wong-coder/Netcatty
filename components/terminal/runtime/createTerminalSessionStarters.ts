@@ -327,6 +327,7 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
 
       return {
         hostname: jumpHost.hostname,
+        hostId: jumpHost.id,
         port: jumpHost.port || 22,
         username: jumpAuth.username || "root",
         authMethod: jumpAuth.authMethod,
@@ -517,6 +518,7 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
           sessionId: ctx.sessionId,
           hostLabel: ctx.host.label,
           hostname: ctx.host.hostname,
+          hostId: ctx.host.id,
           username: effectiveUsername,
           authMethod,
           requiresMfa: !!ctx.host.requiresMfa,
@@ -1296,6 +1298,7 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
 
         return {
           hostname: jumpHost.hostname,
+          hostId: jumpHost.id,
           port: jumpHost.port || 22,
           // ET server port on this bastion: the bridge tunnels the ET socket to
           // the jumphost's etserver, so a custom etPort must be forwarded or it
@@ -1340,6 +1343,7 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
       const id = await ctx.terminalBackend.startEtSession({
         sessionId: ctx.sessionId,
         hostname: ctx.host.hostname,
+        hostId: ctx.host.id,
         username: resolvedAuth.username || "root",
         password: effectivePassword,
         privateKey: (usesSystemAgent && !key?.certificate) || key?.source === 'reference' ? undefined : sanitizeCredentialValue(key?.privateKey),

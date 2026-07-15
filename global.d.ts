@@ -41,6 +41,7 @@ declare global {
   // Jump host configuration for SSH tunneling
   interface NetcattyJumpHost {
     hostname: string;
+    hostId?: string;
     port: number;
     username: string;
     authMethod?: import("./domain/models").HostAuthMethod;
@@ -92,10 +93,12 @@ declare global {
 
   interface NetcattySSHOptions {
     sessionId?: string;
+    hostId?: string;
     hostLabel?: string;
     hostname: string;
     username: string;
     authMethod?: import("./domain/models").HostAuthMethod;
+    requiresMfa?: boolean;
     port?: number;
     password?: string;
     privateKey?: string;
@@ -194,9 +197,11 @@ declare global {
     remotePort?: number;
     // SSH connection details
     hostname: string;
+    hostId?: string;
     port?: number;
     username: string;
     authMethod?: import("./domain/models").HostAuthMethod;
+    requiresMfa?: boolean;
     password?: string;
     privateKey?: string;
     certificate?: string;

@@ -1009,6 +1009,29 @@ test("createKeyboardInteractiveHandler suggests enabling host MFA for Secondary 
 
   assert.equal(sent[0].payload.suggestEnableMfa, true);
   assert.equal(sent[0].payload.allowSavePassword, false);
+  drainPendingRequests(sent, 1);
+});
+
+test("createKeyboardInteractiveHandler includes owning hostId in modal payload", () => {
+  const { sender, sent } = createSender();
+  const handler = createKeyboardInteractiveHandler({
+    sender,
+    sessionId: "sftp-connection-1",
+    hostId: "host-1",
+    hostname: "host",
+    password: "saved",
+  });
+
+  handler(
+    "Keyboard-interactive authentication prompts from server",
+    "为保障主机安全，请输入二次认证密码",
+    "",
+    [{ prompt: "Secondary Authentication Password:", echo: false }],
+    () => {},
+  );
+
+  assert.equal(sent[0].payload.hostId, "host-1");
+  drainPendingRequests(sent, sender.id);
 });
 
 test("createKeyboardInteractiveHandler does not suggest MFA when host already has requiresMfa", () => {
@@ -1034,6 +1057,7 @@ test("createKeyboardInteractiveHandler does not suggest MFA when host already ha
   );
 
   assert.equal(sent[0].payload.suggestEnableMfa, false);
+  drainPendingRequests(sent, 1);
 });
 
 test("createKeyboardInteractiveHandler shows modal for Secondary Authentication Password banner (#2150)", () => {

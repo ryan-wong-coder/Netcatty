@@ -12,8 +12,9 @@ type KeyboardInteractiveScope = "terminal" | "external";
 type KeyboardInteractiveRequestLike = {
   scope?: KeyboardInteractiveScope;
   sessionId?: string;
+  hostId?: string;
 };
-type SessionIdLike = { id: string };
+type SessionIdLike = { id: string; hostId?: string; hostname?: string };
 
 export function shouldQueueKeyboardInteractiveRequest(
   request: KeyboardInteractiveRequestLike,
@@ -193,25 +194,41 @@ export function useAppStartupEffects(ctx: StartupEffectsContext) {
 
     const unsubscribe = bridge.onKeyboardInteractive((request) => {
       if (!shouldQueueKeyboardInteractiveRequest(request, sessionsRef.current)) return;
+      const owningTerminalSession = request.sessionId
+        ? sessionsRef.current.find((session) => session.id === request.sessionId)
+        : undefined;
+      const hasExplicitOwningHost = !!(
+        request.hostId &&
+        hosts.some((host: any) => host?.id === request.hostId)
+      );
+      const hasOwningHost = !!(
+        hasExplicitOwningHost ||
+        (
+          request.scope === "terminal" &&
+          owningTerminalSession?.hostId &&
+          (!request.hostname || request.hostname === owningTerminalSession.hostname)
+        )
+      );
       console.log('[App] Keyboard-interactive request received:', request);
       // Add to queue instead of replacing - supports multiple concurrent sessions
       setKeyboardInteractiveQueue(prev => [...prev, {
         requestId: request.requestId,
         sessionId: request.sessionId,
+        hostId: request.hostId,
         name: request.name,
         instructions: request.instructions,
         prompts: request.prompts,
         hostname: request.hostname,
         savedPassword: request.savedPassword,
         allowSavePassword: request.allowSavePassword !== false,
-        suggestEnableMfa: request.suggestEnableMfa === true,
+        suggestEnableMfa: request.suggestEnableMfa === true && hasOwningHost,
       }]);
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [enabled, setKeyboardInteractiveQueue]);
+  }, [enabled, hosts, setKeyboardInteractiveQueue]);
 
 
 }

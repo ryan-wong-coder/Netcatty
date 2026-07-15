@@ -253,14 +253,21 @@ export function handleKeyboardInteractiveSubmitImpl(
     const session = request?.sessionId
       ? sessions.find(s => s.id === request.sessionId)
       : undefined;
+    const explicitHostId = typeof request?.hostId === "string" ? request.hostId : undefined;
+    const canUseExplicitHost = !!explicitHostId;
     // Only mutate the destination host when the prompting hostname matches —
-    // jump-host challenges must not rewrite the target host.
+    // jump-host challenges without an explicit hostId must not rewrite the target host.
     const canUpdateDestinationHost = !!(
       session?.hostId
       && (!request?.hostname || request.hostname === session.hostname)
     );
-    const host = canUpdateDestinationHost
-      ? hosts.find(h => h.id === session.hostId)
+    const hostIdToUpdate = canUseExplicitHost
+      ? explicitHostId
+      : canUpdateDestinationHost
+        ? session.hostId
+        : undefined;
+    const host = hostIdToUpdate
+      ? hosts.find(h => h.id === hostIdToUpdate)
       : undefined;
     // Save password to host if requested - never for second-factor / EDR prompts
     // (allowSavePassword === false) so a secondary secret cannot overwrite the

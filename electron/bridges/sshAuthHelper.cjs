@@ -1576,6 +1576,7 @@ function looksLikeSecondaryAuthChallenge(name, instructions, prompts, extraConte
  * @param {Object} options
  * @param {Object} options.sender - Electron webContents sender
  * @param {string} options.sessionId - Session/connection ID
+ * @param {string} [options.hostId] - Owning vault host ID, when known.
  * @param {string} options.hostname - Host being connected to
  * @param {string} [options.password] - Saved password; used both as the
  *   one-click fill button payload and as the auto-fill for the single-
@@ -1605,6 +1606,7 @@ function createKeyboardInteractiveHandler(options) {
   const {
     sender,
     sessionId,
+    hostId,
     hostname,
     password,
     logPrefix = "[SSH]",
@@ -1735,6 +1737,7 @@ function createKeyboardInteractiveHandler(options) {
     safeSend(sender, "netcatty:keyboard-interactive", {
       requestId,
       sessionId,
+      hostId,
       name: name || hostname,
       instructions: modalInstructions,
       prompts: promptsData,
