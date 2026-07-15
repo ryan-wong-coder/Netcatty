@@ -653,7 +653,12 @@ describe('handleVaultAgentOp vault management gaps', () => {
         path: 'prod',
         startupCommand: 'echo startup-secret',
         environmentVariables: [{ name: 'TOKEN', value: 'environment-secret' }],
-        proxyConfig: { type: 'command', command: 'proxy-command-secret' },
+        identityFileId: 'key-1',
+        identityFilePaths: ['/Users/alice/.ssh/id_prod'],
+        moshServerPath: '/Users/alice/bin/mosh-server',
+        proxyConfig: {
+          type: 'command', host: 'proxy.internal', port: 22, command: 'proxy-command-secret',
+        },
       }],
     });
 
@@ -670,6 +675,8 @@ describe('handleVaultAgentOp vault management gaps', () => {
     assert.equal(serializedList.includes('startup-secret'), false);
     assert.equal(serializedList.includes('environment-secret'), false);
     assert.equal(serializedList.includes('proxy-command-secret'), false);
+    assert.equal(serializedList.includes('/Users/alice'), false);
+    assert.equal(serializedList.includes('key-1'), false);
     assert.equal(serializedList.includes('deploy'), true);
 
     const removed = await handleVaultAgentOp('group.delete', { path: 'prod' }, deps);

@@ -157,24 +157,57 @@ function serializeVaultNoteForAgent(note: VaultNote) {
   };
 }
 
+const SAFE_GROUP_CONFIG_KEYS = [
+  'path',
+  'order',
+  'username',
+  'authMethod',
+  'identityId',
+  'port',
+  'protocol',
+  'deviceType',
+  'agentForwarding',
+  'proxyProfileId',
+  'hostChain',
+  'startupCommandRunMode',
+  'loginScriptId',
+  'legacyAlgorithms',
+  'skipEcdsaHostKey',
+  'algorithms',
+  'charset',
+  'moshEnabled',
+  'etEnabled',
+  'etPort',
+  'telnetEnabled',
+  'telnetPort',
+  'telnetIdentityId',
+  'telnetUsername',
+  'theme',
+  'themeOverride',
+  'fontFamily',
+  'fontFamilyOverride',
+  'fontSize',
+  'fontSizeOverride',
+  'fontWeight',
+  'fontWeightOverride',
+  'backspaceBehavior',
+] as const satisfies readonly (keyof GroupConfig)[];
+
 function sanitizeGroupConfigForAgent(config: GroupConfig): Record<string, unknown> {
-  const {
-    password: _password,
-    telnetPassword: _telnetPassword,
-    startupCommand: _startupCommand,
-    environmentVariables: _environmentVariables,
-    proxyConfig,
-    ...safe
-  } = config;
+  const safe = Object.fromEntries(
+    SAFE_GROUP_CONFIG_KEYS
+      .filter((key) => Object.hasOwn(config, key))
+      .map((key) => [key, config[key]]),
+  );
   return {
     ...safe,
-    ...(proxyConfig ? {
+    ...(config.proxyConfig ? {
       proxyConfig: {
-        type: proxyConfig.type,
-        host: proxyConfig.host,
-        port: proxyConfig.port,
-        identityId: proxyConfig.identityId,
-        username: proxyConfig.username,
+        type: config.proxyConfig.type,
+        host: config.proxyConfig.host,
+        port: config.proxyConfig.port,
+        identityId: config.proxyConfig.identityId,
+        username: config.proxyConfig.username,
       },
     } : {}),
   };

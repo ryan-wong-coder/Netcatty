@@ -37,7 +37,19 @@ export interface VaultHostDraft {
   protocol?: unknown;
 }
 
-export type VaultHostUpdatePatch = VaultHostDraft;
+export interface VaultHostUpdatePatch extends VaultHostDraft {
+  identityId?: unknown;
+  jumpHostIds?: unknown;
+  proxyProfileId?: unknown;
+  startupCommand?: unknown;
+  startupCommandRunMode?: unknown;
+  environmentVariables?: unknown;
+  moshEnabled?: unknown;
+  moshServerPath?: unknown;
+  etEnabled?: unknown;
+  etPort?: unknown;
+  serialConfig?: unknown;
+}
 
 export interface VaultHostUpdateOptions {
   resolveEffectiveHost?: (host: Host) => Host;

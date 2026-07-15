@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { Host, Identity, ManagedSource } from './models.ts';
+import type { Host, Identity, ManagedSource, ProxyProfile } from './models.ts';
 import { applyGroupDefaults } from './groupConfig.ts';
 import {
   applyVaultHostDelete,
@@ -11,6 +11,7 @@ import {
   buildVaultHostsFromDrafts,
   parseVaultHostDraftsInput,
   type VaultHostDraft,
+  type VaultHostUpdatePatch,
 } from './vaultHostCreate.ts';
 
 test('buildVaultHostFromDraft maps minimal unstructured fields to a vault host', () => {
@@ -274,6 +275,125 @@ test('applyVaultHostUpdate changes default ports when switching protocols', () =
   assert.equal(toSsh.updatedHost.port, 22);
   assert.equal(keepCustom.updatedHost.port, 2222);
   assert.equal(explicitPort.updatedHost.port, 2323);
+});
+
+test('applyVaultHostUpdate applies and clears advanced connection settings', () => {
+  const host: Host = {
+    id: 'host-1', label: 'host', hostname: 'host.example.com', username: 'root',
+    port: 22, protocol: 'ssh', tags: [], os: 'linux',
+  };
+  const jump: Host = {
+    id: 'jump-1', label: 'jump', hostname: 'jump.example.com', username: 'root', tags: [], os: 'linux',
+  };
+  const identity: Identity = {
+    id: 'identity-1', label: 'deploy', username: 'deploy', authMethod: 'key', keyId: 'key-1', created: 1,
+  };
+  const proxyProfile: ProxyProfile = {
+    id: 'proxy-1', label: 'proxy', config: { type: 'socks5', host: '127.0.0.1', port: 1080 }, createdAt: 1,
+  };
+  const patch: VaultHostUpdatePatch = {
+    protocol: 'serial',
+    identityId: identity.id,
+    jumpHostIds: [jump.id],
+    proxyProfileId: proxyProfile.id,
+    startupCommand: 'tmux attach || tmux',
+    startupCommandRunMode: 'lineDelay',
+    environmentVariables: [{ name: 'APP_ENV', value: 'production' }],
+    moshEnabled: true,
+    moshServerPath: '/usr/local/bin/mosh-server',
+    etEnabled: true,
+    etPort: 2022,
+    serialConfig: {
+      path: '/dev/ttyUSB0', baudRate: 115200, dataBits: 8, stopBits: 1,
+      parity: 'none', flowControl: 'rts/cts', localEcho: true, lineMode: false,
+    },
+  };
+
+  const result = applyVaultHostUpdate(
+    [host, jump], [], host.id, patch,
+    { identities: [identity], proxyProfiles: [proxyProfile] },
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.updatedHost.protocol, 'serial');
+  assert.equal(result.updatedHost.identityId, identity.id);
+  assert.equal(result.updatedHost.username, 'deploy');
+  assert.deepEqual(result.updatedHost.hostChain, { hostIds: [jump.id] });
+  assert.equal(result.updatedHost.proxyProfileId, proxyProfile.id);
+  assert.equal(result.updatedHost.startupCommand, 'tmux attach || tmux');
+  assert.equal(result.updatedHost.startupCommandRunMode, 'lineDelay');
+  assert.deepEqual(result.updatedHost.environmentVariables, [{ name: 'APP_ENV', value: 'production' }]);
+  assert.equal(result.updatedHost.moshEnabled, true);
+  assert.equal(result.updatedHost.moshServerPath, '/usr/local/bin/mosh-server');
+  assert.equal(result.updatedHost.etEnabled, true);
+  assert.equal(result.updatedHost.etPort, 2022);
+  assert.deepEqual(result.updatedHost.serialConfig, {
+    path: '/dev/ttyUSB0', baudRate: 115200, dataBits: 8, stopBits: 1,
+    parity: 'none', flowControl: 'rts/cts', localEcho: true, lineMode: false,
+  });
+
+  const cleared = applyVaultHostUpdate([result.updatedHost, jump], [], host.id, {
+    jumpHostIds: [],
+    proxyProfileId: '',
+    startupCommand: '',
+    startupCommandRunMode: '',
+    environmentVariables: {},
+    moshEnabled: false,
+    moshServerPath: '',
+    etEnabled: false,
+  }, { identities: [identity], proxyProfiles: [proxyProfile] });
+  assert.equal(cleared.ok, true);
+  if (!cleared.ok) return;
+  assert.deepEqual(cleared.updatedHost.hostChain, { hostIds: [] });
+  assert.equal(cleared.updatedHost.proxyProfileId, '');
+  assert.equal(cleared.updatedHost.startupCommand, '');
+  assert.equal(cleared.updatedHost.startupCommandRunMode, undefined);
+  assert.deepEqual(cleared.updatedHost.environmentVariables, []);
+  assert.equal(cleared.updatedHost.moshEnabled, false);
+  assert.equal(cleared.updatedHost.moshServerPath, undefined);
+  assert.equal(cleared.updatedHost.etEnabled, false);
+});
+
+test('applyVaultHostUpdate rejects malformed advanced connection settings', () => {
+  const host: Host = {
+    id: 'host-1', label: 'host', hostname: 'host.example.com', username: 'root', tags: [], os: 'linux',
+  };
+  const jump: Host = {
+    id: 'jump-1', label: 'jump', hostname: 'jump.example.com', username: 'root', tags: [], os: 'linux',
+  };
+  const cases: Array<{ patch: VaultHostUpdatePatch; error: RegExp }> = [
+    { patch: { protocol: 'unknown' }, error: /protocol/i },
+    { patch: { identityId: 42 }, error: /identityId must be a string/i },
+    { patch: { identityId: 'missing' }, error: /Identity .* was not found/i },
+    { patch: { jumpHostIds: '["jump-1"' }, error: /valid JSON array/i },
+    { patch: { jumpHostIds: [host.id] }, error: /cannot use itself/i },
+    { patch: { jumpHostIds: [jump.id, jump.id] }, error: /duplicates/i },
+    { patch: { jumpHostIds: ['missing'] }, error: /Jump host .* was not found/i },
+    { patch: { proxyProfileId: 'missing' }, error: /Proxy profile .* was not found/i },
+    { patch: { startupCommand: 42 }, error: /startupCommand must be a string/i },
+    { patch: { startupCommandRunMode: 'fast' }, error: /paste or lineDelay/i },
+    { patch: { environmentVariables: '{' }, error: /valid JSON/i },
+    { patch: { environmentVariables: [{ value: 'missing-name' }] }, error: /require name and value/i },
+    { patch: { moshEnabled: 'maybe' }, error: /moshEnabled must be true or false/i },
+    { patch: { etEnabled: 'maybe' }, error: /etEnabled must be true or false/i },
+    { patch: { etPort: 0 }, error: /between 1 and 65535/i },
+    { patch: { serialConfig: '{' }, error: /valid JSON/i },
+    { patch: { serialConfig: {} }, error: /requires path and a positive baudRate/i },
+    { patch: { serialConfig: { path: '/dev/ttyUSB0', baudRate: 9600, dataBits: 9 } }, error: /dataBits/i },
+    { patch: { serialConfig: { path: '/dev/ttyUSB0', baudRate: 9600, stopBits: 3 } }, error: /stopBits/i },
+    { patch: { serialConfig: { path: '/dev/ttyUSB0', baudRate: 9600, parity: 'bad' } }, error: /parity/i },
+    { patch: { serialConfig: { path: '/dev/ttyUSB0', baudRate: 9600, flowControl: 'bad' } }, error: /flowControl/i },
+    { patch: { serialConfig: { path: '/dev/ttyUSB0', baudRate: 9600, localEcho: 'maybe' } }, error: /localEcho/i },
+    { patch: { serialConfig: { path: '/dev/ttyUSB0', baudRate: 9600, lineMode: 'maybe' } }, error: /lineMode/i },
+  ];
+
+  for (const entry of cases) {
+    const result = applyVaultHostUpdate([host, jump], [], host.id, entry.patch, {
+      identities: [], proxyProfiles: [],
+    });
+    assert.equal(result.ok, false, JSON.stringify(entry.patch));
+    if (!result.ok) assert.match(result.error, entry.error);
+  }
 });
 
 test('applyVaultHostUpdate can switch a host to a referenced key path', () => {
