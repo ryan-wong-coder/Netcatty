@@ -209,9 +209,9 @@ function shellQuotePath(remotePath, encoding = "utf-8") {
     // eslint-disable-next-line global-require
     const iconv = require("iconv-lite");
     const b64 = iconv.encode(remotePath, "gb18030").toString("base64");
-    // Expand base64 to raw bytes on the remote, then single-quote via printf %q if available
-    // or wrap in double quotes after base64 -d into a variable.
-    return `"$(printf '%s' '${b64}' | base64 -d 2>/dev/null || printf '%s' '${b64}' | base64 -D 2>/dev/null)"`;
+    // Expand base64 to raw bytes on the remote. Prefer base64, then openssl
+    // (same fallback used when listing names on minimal NAS hosts).
+    return `"$(printf '%s' '${b64}' | base64 -d 2>/dev/null || printf '%s' '${b64}' | base64 -D 2>/dev/null || printf '%s' '${b64}' | openssl base64 -d 2>/dev/null || printf '%s' '${b64}' | openssl enc -base64 -d 2>/dev/null)"`;
   }
   return shellQuote(remotePath);
 }
