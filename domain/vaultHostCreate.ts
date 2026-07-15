@@ -301,6 +301,10 @@ export function applyVaultHostUpdate(
           : selectedIdentity.username;
         updated.authMethod = 'password';
         updated.authPolicyVersion = 1;
+      } else if (selectedIdentity) {
+        updated.identityId = selectedIdentity.id;
+        updated.authMethod = selectedIdentity.authMethod;
+        updated.authPolicyVersion = 1;
       }
     }
   }

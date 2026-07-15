@@ -318,6 +318,55 @@ test('applyVaultHostUpdate preserves key login when only the password changes', 
   assert.deepEqual(result.updatedHost.identityFilePaths, ['~/.ssh/key']);
 });
 
+test('applyVaultHostUpdate preserves an inherited key identity when the password changes', () => {
+  const existing: Host = {
+    id: 'host-1',
+    label: 'host',
+    hostname: '10.0.0.1',
+    username: '',
+    group: 'prod',
+    tags: [],
+    os: 'linux',
+  };
+  const identity: Identity = {
+    id: 'identity-1',
+    label: 'shared key',
+    username: 'deploy',
+    authMethod: 'key',
+    keyId: 'key-1',
+    created: 1,
+  };
+  const resolveEffectiveHost = (host: Host): Host => applyGroupDefaults(host, {
+    identityId: identity.id,
+    username: identity.username,
+    authMethod: 'key',
+    identityFileId: identity.keyId,
+  });
+
+  const updated = applyVaultHostUpdate(
+    [existing],
+    [],
+    existing.id,
+    { password: 'fallback' },
+    { identities: [identity], resolveEffectiveHost },
+  );
+  const cleared = applyVaultHostUpdate(
+    [existing],
+    [],
+    existing.id,
+    { password: '' },
+    { identities: [identity], resolveEffectiveHost },
+  );
+
+  assert.equal(updated.ok, true);
+  assert.equal(cleared.ok, true);
+  if (!updated.ok || !cleared.ok) return;
+  assert.equal(updated.updatedHost.identityId, identity.id);
+  assert.equal(resolveEffectiveHost(updated.updatedHost).authMethod, 'key');
+  assert.equal(cleared.updatedHost.identityId, identity.id);
+  assert.equal(resolveEffectiveHost(cleared.updatedHost).authMethod, 'key');
+});
+
 test('applyVaultHostUpdate detaches a password identity so the new password takes effect', () => {
   const existing: Host = {
     id: 'host-1',
