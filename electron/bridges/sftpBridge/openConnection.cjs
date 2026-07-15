@@ -4,12 +4,52 @@ const { runWhenProxyConnectionReady } = require("../proxyUtils.cjs");
 const { normalizeFileProtocol } = require("./scpShell.cjs");
 const { getScpBackendForClient } = require("./scpBackend.cjs");
 
+/** Bound shell/scp probes so a hung remote exec cannot leave the panel connecting forever. */
+const SCP_PROBE_TIMEOUT_MS = 15_000;
+
+/**
+ * AbortSignal that fires on parent abort or after timeoutMs.
+ * Caller must dispose() to clear the timer.
+ */
+function createBoundedProbeSignal(parentSignal = null, timeoutMs = SCP_PROBE_TIMEOUT_MS) {
+  const ac = new AbortController();
+  let timedOut = false;
+  let timer = null;
+  const onParentAbort = () => {
+    try { ac.abort(); } catch { /* ignore */ }
+  };
+  if (parentSignal?.aborted) {
+    ac.abort();
+  } else {
+    if (parentSignal && typeof parentSignal.addEventListener === "function") {
+      parentSignal.addEventListener("abort", onParentAbort, { once: true });
+    }
+    timer = setTimeout(() => {
+      timedOut = true;
+      try { ac.abort(); } catch { /* ignore */ }
+    }, Math.max(1, Number(timeoutMs) || SCP_PROBE_TIMEOUT_MS));
+    if (typeof timer.unref === "function") timer.unref();
+  }
+  return {
+    signal: ac.signal,
+    get timedOut() {
+      return timedOut;
+    },
+    dispose: () => {
+      if (timer) clearTimeout(timer);
+      if (parentSignal && typeof parentSignal.removeEventListener === "function") {
+        try { parentSignal.removeEventListener("abort", onParentAbort); } catch { /* ignore */ }
+      }
+    },
+  };
+}
+
 function createOpenConnectionApi(ctx) {
   with (ctx) {
     /**
      * Mark a session client as SCP-mode and optionally probe shell access.
      */
-    async function activateScpMode(client, { probe = true, signal = null } = {}) {
+    async function activateScpMode(client, { probe = true, signal = null, timeoutMs = SCP_PROBE_TIMEOUT_MS } = {}) {
       client.__netcattyFileProtocol = "scp";
       client.sftp = null;
       // Ensure closeSftp can tear down owned SSH sockets even when sftp is null.
@@ -27,22 +67,33 @@ function createOpenConnectionApi(ctx) {
         client.__netcattyScpEndWrapped = true;
       }
       if (probe) {
-        const backend = getScpBackendForClient(client);
-        // Require a working shell AND scp binary — transfers need `scp -t/-f`.
-        await backend.homeDir({ signal }).catch(async () => {
+        const bounded = createBoundedProbeSignal(signal, timeoutMs);
+        try {
+          const backend = getScpBackendForClient(client);
+          // Require a working shell AND scp binary — transfers need `scp -t/-f`.
+          await backend.homeDir({ signal: bounded.signal }).catch(async () => {
+            if (bounded.signal.aborted) throw new Error("SCP mode shell probe aborted");
+            const adapters = require("./scpBackend.cjs").createSshExecAdapters(client.client);
+            const pwd = await adapters.exec("pwd", { signal: bounded.signal });
+            if (pwd.code !== 0 || !(pwd.stdout || "").trim()) {
+              throw new Error("SCP mode shell probe failed");
+            }
+          });
           const adapters = require("./scpBackend.cjs").createSshExecAdapters(client.client);
-          const pwd = await adapters.exec("pwd", { signal });
-          if (pwd.code !== 0 || !(pwd.stdout || "").trim()) {
-            throw new Error("SCP mode shell probe failed");
+          const scpProbe = await adapters.exec(
+            "command -v scp >/dev/null 2>&1 || which scp >/dev/null 2>&1",
+            { signal: bounded.signal },
+          );
+          if (scpProbe.code !== 0) {
+            throw new Error("SCP binary not available on remote host (command -v scp failed)");
           }
-        });
-        const adapters = require("./scpBackend.cjs").createSshExecAdapters(client.client);
-        const scpProbe = await adapters.exec(
-          "command -v scp >/dev/null 2>&1 || which scp >/dev/null 2>&1",
-          { signal },
-        );
-        if (scpProbe.code !== 0) {
-          throw new Error("SCP binary not available on remote host (command -v scp failed)");
+        } catch (err) {
+          if (bounded.timedOut && !signal?.aborted) {
+            throw new Error(`SCP mode probe timed out after ${timeoutMs}ms`);
+          }
+          throw err;
+        } finally {
+          bounded.dispose();
         }
       }
       return client;
@@ -1178,4 +1229,8 @@ function createOpenConnectionApi(ctx) {
   }
 }
 
-module.exports = { createOpenConnectionApi };
+module.exports = {
+  createOpenConnectionApi,
+  createBoundedProbeSignal,
+  SCP_PROBE_TIMEOUT_MS,
+};

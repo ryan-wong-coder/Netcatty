@@ -818,25 +818,43 @@ async function openSftpForSession(_event, payload) {
       ?? session?.sftpFileProtocol
       ?? session?.fileProtocol,
   );
+  const {
+    createBoundedProbeSignal,
+    SCP_PROBE_TIMEOUT_MS,
+  } = require("./sftpBridge/openConnection.cjs");
+  const probeTimeoutMs = Number.isFinite(payload?.timeoutMs) && payload.timeoutMs > 0
+    ? payload.timeoutMs
+    : SCP_PROBE_TIMEOUT_MS;
+
+  async function probeScpCapability() {
+    const bounded = createBoundedProbeSignal(payload?.abortSignal || null, probeTimeoutMs);
+    try {
+      await getScpBackendForClient(client).homeDir({ signal: bounded.signal });
+      const { createSshExecAdapters } = require("./sftpBridge/scpBackend.cjs");
+      const adapters = createSshExecAdapters(sshClient);
+      const scpProbe = await adapters.exec(
+        "command -v scp >/dev/null 2>&1 || which scp >/dev/null 2>&1",
+        { signal: bounded.signal },
+      );
+      if (scpProbe.code !== 0) {
+        throw new Error("SCP binary not available on remote host");
+      }
+    } catch (err) {
+      if (bounded.timedOut && !payload?.abortSignal?.aborted) {
+        throw new Error(`SCP mode probe timed out after ${probeTimeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      bounded.dispose();
+    }
+  }
+
   try {
     if (fileProtocol === "scp") {
       client.__netcattyFileProtocol = "scp";
       client.sftp = null;
       // Probe must succeed: SCP mode requires working SSH exec + scp binary.
-      await getScpBackendForClient(client).homeDir({
-        signal: payload?.abortSignal || null,
-      });
-      {
-        const { createSshExecAdapters } = require("./sftpBridge/scpBackend.cjs");
-        const adapters = createSshExecAdapters(sshClient);
-        const scpProbe = await adapters.exec(
-          "command -v scp >/dev/null 2>&1 || which scp >/dev/null 2>&1",
-          { signal: payload?.abortSignal || null },
-        );
-        if (scpProbe.code !== 0) {
-          throw new Error("SCP binary not available on remote host");
-        }
-      }
+      await probeScpCapability();
       throwIfAborted(payload?.abortSignal);
       copySftpEncodingState(payload?.encodingStateKey, sftpId);
       sftpClients.set(sftpId, client);
@@ -859,18 +877,7 @@ async function openSftpForSession(_event, payload) {
       client.__netcattyFileProtocol = "scp";
       client.sftp = null;
       try {
-        await getScpBackendForClient(client).homeDir({
-          signal: payload?.abortSignal || null,
-        });
-        const { createSshExecAdapters } = require("./sftpBridge/scpBackend.cjs");
-        const adapters = createSshExecAdapters(sshClient);
-        const scpProbe = await adapters.exec(
-          "command -v scp >/dev/null 2>&1 || which scp >/dev/null 2>&1",
-          { signal: payload?.abortSignal || null },
-        );
-        if (scpProbe.code !== 0) {
-          throw new Error("SCP binary not available on remote host");
-        }
+        await probeScpCapability();
       } catch (probeErr) {
         throw new Error(
           `SFTP unavailable and SCP-mode probe failed: ${probeErr?.message || String(probeErr)}`,
