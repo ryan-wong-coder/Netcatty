@@ -124,18 +124,27 @@ test("stopAndCleanupRuleAndWait preserves a pending reconnect after stop failure
   );
   const connection = getActiveConnection("retrying-rule");
   assert.ok(connection);
-  const reconnectTimeoutId = setTimeout(() => undefined, 60_000);
+  let reconnectAttempts = 0;
+  const reconnectTimerCallback = () => {
+    reconnectAttempts++;
+  };
+  const reconnectTimeoutId = setTimeout(reconnectTimerCallback, 10);
   connection.reconnectTimeoutId = reconnectTimeoutId;
+  connection.reconnectDueAt = Date.now() + 10;
+  connection.reconnectTimerCallback = reconnectTimerCallback;
 
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
       netcatty: {
-        stopPortForwardByRuleId: async () => ({
-          stopped: 0,
-          failed: 1,
-          errors: ["backend stop failed"],
-        }),
+        stopPortForwardByRuleId: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          return {
+            stopped: 0,
+            failed: 1,
+            errors: ["backend stop failed"],
+          };
+        },
       },
     },
   });
@@ -143,11 +152,66 @@ test("stopAndCleanupRuleAndWait preserves a pending reconnect after stop failure
   const result = await stopAndCleanupRuleAndWait("retrying-rule");
 
   assert.equal(result.success, false);
-  assert.equal(getActiveConnection("retrying-rule")?.reconnectTimeoutId, reconnectTimeoutId);
+  assert.equal(reconnectAttempts, 0);
+  assert.ok(getActiveConnection("retrying-rule")?.reconnectTimeoutId);
+  await new Promise<void>((resolve) => setTimeout(resolve, 15));
+  assert.equal(reconnectAttempts, 1);
 
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      netcatty: {
+        stopPortForwardByRuleId: async () => {
+          throw new Error("cleanup failure");
+        },
+      },
+    },
+  });
   stopAndCleanupRule("retrying-rule");
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(getActiveConnection("retrying-rule"), undefined);
+});
+
+test("stopAndCleanupRuleAndWait blocks a pending reconnect while stop succeeds", async () => {
+  installBridgeStub();
+  await startPortForward(
+    rule({ id: "stopping-rule" }),
+    host(),
+    [],
+    [],
+    [],
+    () => undefined,
+    true,
+  );
+  const connection = getActiveConnection("stopping-rule");
+  assert.ok(connection);
+  let reconnectAttempts = 0;
+  const reconnectTimerCallback = () => {
+    reconnectAttempts++;
+  };
+  connection.reconnectTimeoutId = setTimeout(reconnectTimerCallback, 10);
+  connection.reconnectDueAt = Date.now() + 10;
+  connection.reconnectTimerCallback = reconnectTimerCallback;
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      netcatty: {
+        stopPortForwardByRuleId: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          return { stopped: 1, failed: 0, errors: [] };
+        },
+      },
+    },
+  });
+
+  const result = await stopAndCleanupRuleAndWait("stopping-rule");
+
+  assert.equal(result.success, true);
+  assert.equal(reconnectAttempts, 0);
+  await new Promise<void>((resolve) => setTimeout(resolve, 15));
+  assert.equal(reconnectAttempts, 0);
+  assert.equal(getActiveConnection("stopping-rule"), undefined);
 });
 
 test("stopAndCleanupRule still clears local reconnect state after backend stop failures", async () => {

@@ -41,22 +41,42 @@ function isTunnelCancelled(tunnelState) {
 
 function cancelTunnel(tunnelId, tunnel, sendStatus, { deleteEntry = false } = {}) {
   if (!tunnel) return;
+  const errors = [];
+  const cleanup = (label, action) => {
+    try {
+      action();
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`${label}: ${message}`);
+      return false;
+    }
+  };
   tunnel.cancelled = true;
   tunnel.status = 'inactive';
   if (tunnel.server) {
-    try { tunnel.server.close(); } catch { /* ignore */ }
+    if (cleanup('server', () => tunnel.server.close())) tunnel.server = null;
   }
   if (tunnel.passphraseAbortController && !tunnel.passphraseAbortController.signal.aborted) {
-    try { tunnel.passphraseAbortController.abort(); } catch { /* ignore */ }
+    cleanup('passphrase prompt', () => tunnel.passphraseAbortController.abort());
   }
   if (tunnel.pendingConn) {
-    try { tunnel.pendingConn.end(); } catch { /* ignore */ }
+    if (cleanup('pending SSH connection', () => tunnel.pendingConn.end())) tunnel.pendingConn = null;
   }
-  cleanupChainConnections(tunnel.chainConnections);
+  if (Array.isArray(tunnel.chainConnections)) {
+    tunnel.chainConnections = tunnel.chainConnections.filter((chainConn, index) => (
+      !cleanup(`jump connection ${index + 1}`, () => chainConn.end())
+    ));
+  }
   if (tunnel.conn) {
-    try { tunnel.conn.end(); } catch { /* ignore */ }
+    if (cleanup('SSH connection', () => tunnel.conn.end())) tunnel.conn = null;
   }
   sendStatus?.('inactive');
+  if (errors.length > 0) {
+    tunnel.cleanupFailed = true;
+    throw new Error(errors.join('; '));
+  }
+  tunnel.cleanupFailed = false;
   if (deleteEntry) {
     portForwardingTunnels.delete(tunnelId);
   }
@@ -323,7 +343,9 @@ async function startPortForward(event, payload) {
       tunnelState.chainConnections = chainConnections;
       if (isTunnelCancelled(tunnelState)) {
         cleanupChainConnections(chainConnections);
-        portForwardingTunnels.delete(tunnelId);
+        if (!tunnelState.cleanupFailed) {
+          portForwardingTunnels.delete(tunnelId);
+        }
         return { tunnelId, success: false, cancelled: true };
       }
       connectOpts.sock = connectionSocket;
@@ -339,7 +361,9 @@ async function startPortForward(event, payload) {
       if (isTunnelCancelled(tunnelState)) {
         try { connectionSocket?.end?.(); } catch { /* ignore */ }
         try { connectionSocket?.destroy?.(); } catch { /* ignore */ }
-        portForwardingTunnels.delete(tunnelId);
+        if (!tunnelState.cleanupFailed) {
+          portForwardingTunnels.delete(tunnelId);
+        }
         return { tunnelId, success: false, cancelled: true };
       }
       tunnelState.pendingConn = null;
@@ -349,7 +373,9 @@ async function startPortForward(event, payload) {
     }
   } catch (err) {
     if (isTunnelCancelled(tunnelState)) {
-      portForwardingTunnels.delete(tunnelId);
+      if (!tunnelState.cleanupFailed) {
+        portForwardingTunnels.delete(tunnelId);
+      }
       return { tunnelId, success: false, cancelled: true };
     }
     if (isPassphraseCancelledError(err)) {
@@ -627,7 +653,9 @@ async function startPortForward(event, payload) {
           try { tunnel.pendingConn.end(); } catch { /* ignore */ }
         }
         sendStatus('inactive');
-        portForwardingTunnels.delete(tunnelId);
+        if (!tunnel.cleanupFailed) {
+          portForwardingTunnels.delete(tunnelId);
+        }
       }
       // If the Promise was never settled (tunnel killed during
       // handshake by stopPortForwardByRuleId), settle it.

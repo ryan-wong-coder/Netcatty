@@ -40,10 +40,17 @@ export interface PortForwardingConnection {
   // Reconnect state
   reconnectAttempts?: number;
   reconnectTimeoutId?: ReturnType<typeof setTimeout>;
+  reconnectDueAt?: number;
+  reconnectTimerCallback?: () => void;
 }
 
 // Map to track active connections
 const activeConnections = new Map<string, PortForwardingConnection>();
+const rulesPendingCleanup = new Set<string>();
+const deferredReconnects = new Map<string, {
+  enableReconnect: boolean;
+  onStatusChange: (status: PortForwardingRule['status'], error?: string) => void;
+}>();
 
 // Reconnect configuration
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -71,8 +78,44 @@ export const clearReconnectTimer = (ruleId: string): void => {
   const conn = activeConnections.get(ruleId);
   if (conn?.reconnectTimeoutId) {
     clearTimeout(conn.reconnectTimeoutId);
-    conn.reconnectTimeoutId = undefined;
   }
+  if (conn) {
+    conn.reconnectTimeoutId = undefined;
+    conn.reconnectDueAt = undefined;
+    conn.reconnectTimerCallback = undefined;
+  }
+};
+
+interface PausedReconnectTimer {
+  connection: PortForwardingConnection;
+  callback: () => void;
+  remainingMs: number;
+}
+
+const pauseReconnectTimer = (ruleId: string): PausedReconnectTimer | undefined => {
+  const connection = activeConnections.get(ruleId);
+  if (!connection?.reconnectTimeoutId || !connection.reconnectTimerCallback) return undefined;
+
+  clearTimeout(connection.reconnectTimeoutId);
+  const paused = {
+    connection,
+    callback: connection.reconnectTimerCallback,
+    remainingMs: Math.max(0, (connection.reconnectDueAt ?? Date.now()) - Date.now()),
+  };
+  connection.reconnectTimeoutId = undefined;
+  connection.reconnectDueAt = undefined;
+  connection.reconnectTimerCallback = undefined;
+  return paused;
+};
+
+const restoreReconnectTimer = (ruleId: string, paused?: PausedReconnectTimer): void => {
+  if (!paused) return;
+  const connection = activeConnections.get(ruleId);
+  if (connection !== paused.connection || connection.reconnectTimeoutId) return;
+
+  connection.reconnectDueAt = Date.now() + paused.remainingMs;
+  connection.reconnectTimerCallback = paused.callback;
+  connection.reconnectTimeoutId = setTimeout(paused.callback, paused.remainingMs);
 };
 
 // Cross-window reconnect cancellation via localStorage broadcast.
@@ -132,6 +175,10 @@ const scheduleReconnectIfNeeded = (
   if (!enableReconnect || !reconnectCallback) {
     return false;
   }
+  if (rulesPendingCleanup.has(ruleId)) {
+    deferredReconnects.set(ruleId, { enableReconnect, onStatusChange });
+    return true;
+  }
 
   const currentConn = activeConnections.get(ruleId);
   const attempts = (currentConn?.reconnectAttempts ?? 0) + 1;
@@ -148,11 +195,18 @@ const scheduleReconnectIfNeeded = (
     logger.info(`[PortForwardingService] Scheduling reconnect ${attempts}/${MAX_RECONNECT_ATTEMPTS}`);
 
     currentConn.reconnectAttempts = attempts;
-    currentConn.reconnectTimeoutId = setTimeout(() => {
+    const runReconnect = () => {
+      if (currentConn.reconnectTimerCallback !== runReconnect) return;
+      currentConn.reconnectTimeoutId = undefined;
+      currentConn.reconnectDueAt = undefined;
+      currentConn.reconnectTimerCallback = undefined;
       if (reconnectCallback) {
         reconnectCallback(ruleId, onStatusChange);
       }
-    }, RECONNECT_DELAY_MS);
+    };
+    currentConn.reconnectDueAt = Date.now() + RECONNECT_DELAY_MS;
+    currentConn.reconnectTimerCallback = runReconnect;
+    currentConn.reconnectTimeoutId = setTimeout(runReconnect, RECONNECT_DELAY_MS);
 
     onStatusChange('connecting', `Reconnecting (${attempts}/${MAX_RECONNECT_ATTEMPTS})...`);
     return true;
@@ -183,6 +237,8 @@ export const getActiveRuleIds = (): string[] => {
 };
 
 const finishRuleCleanup = (ruleId: string): void => {
+  rulesPendingCleanup.delete(ruleId);
+  deferredReconnects.delete(ruleId);
   clearReconnectTimer(ruleId);
   const conn = activeConnections.get(ruleId);
   conn?.unsubscribe?.();
@@ -190,11 +246,33 @@ const finishRuleCleanup = (ruleId: string): void => {
   broadcastReconnectCancel(ruleId);
 };
 
+const resumeReconnectAfterFailedCleanup = (
+  ruleId: string,
+  pausedReconnect?: PausedReconnectTimer,
+): void => {
+  rulesPendingCleanup.delete(ruleId);
+  const deferredReconnect = deferredReconnects.get(ruleId);
+  deferredReconnects.delete(ruleId);
+  if (pausedReconnect) {
+    restoreReconnectTimer(ruleId, pausedReconnect);
+    return;
+  }
+  if (deferredReconnect) {
+    scheduleReconnectIfNeeded(
+      ruleId,
+      deferredReconnect.enableReconnect,
+      deferredReconnect.onStatusChange,
+    );
+  }
+};
+
 /** Stop every tunnel for a rule and cancel reconnects in every window. */
 export const stopAndCleanupRuleAndWait = async (
   ruleId: string,
 ): Promise<{ success: boolean; error?: string }> => {
   const conn = activeConnections.get(ruleId);
+  rulesPendingCleanup.add(ruleId);
+  const pausedReconnect = pauseReconnectTimer(ruleId);
 
   // Use stopPortForwardByRuleId so every tunnel for this rule is marked
   // cancelled before its sockets are closed.
@@ -206,6 +284,7 @@ export const stopAndCleanupRuleAndWait = async (
         const error = result.errors?.filter(Boolean).join('; ') ||
           `Failed to stop ${result.failed} port forwarding tunnel(s)`;
         logger.warn(`[PortForwardingService] Backend stopByRuleId failed for ${ruleId}: ${error}`);
+        resumeReconnectAfterFailedCleanup(ruleId, pausedReconnect);
         return { success: false, error };
       }
       finishRuleCleanup(ruleId);
@@ -213,15 +292,21 @@ export const stopAndCleanupRuleAndWait = async (
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       logger.warn(`[PortForwardingService] Backend stopByRuleId failed for ${ruleId}:`, err);
+      resumeReconnectAfterFailedCleanup(ruleId, pausedReconnect);
       return { success: false, error };
     }
   }
   if (conn && bridge?.stopPortForward) {
     try {
       const result = await bridge.stopPortForward(conn.tunnelId);
-      if (result.success) finishRuleCleanup(ruleId);
+      if (result.success) {
+        finishRuleCleanup(ruleId);
+      } else {
+        resumeReconnectAfterFailedCleanup(ruleId, pausedReconnect);
+      }
       return result;
     } catch (err) {
+      resumeReconnectAfterFailedCleanup(ruleId, pausedReconnect);
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
