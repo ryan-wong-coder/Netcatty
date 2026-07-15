@@ -643,6 +643,24 @@ describe('handleVaultAgentOp vault management gaps', () => {
     assert.equal(deps.getPortForwardingRules().length, 1);
   });
 
+  it('reports an inactive rule after changing a running forwarding connection', async () => {
+    const rule: PortForwardingRule = {
+      id: 'rule-1', label: 'Web', type: 'local', localPort: 8080,
+      bindAddress: '127.0.0.1', remoteHost: '127.0.0.1', remotePort: 80,
+      hostId: host.id, status: 'active', createdAt: 1,
+    };
+    const deps = createDeps({ hosts: [host], portForwardingRules: [rule] });
+
+    const result = await handleVaultAgentOp('portforward.rules.update', {
+      ruleId: rule.id,
+      localPort: 8081,
+    }, deps);
+
+    assert.equal(result.ok, true);
+    assert.equal((result as { rule?: { status?: string } }).rule?.status, 'inactive');
+    assert.equal(deps.getPortForwardingRules()[0]?.status, 'inactive');
+  });
+
   it('manages groups and applies reusable defaults without exposing secrets', async () => {
     const deps = createDeps({
       hosts: [{ ...host, group: 'prod' }],

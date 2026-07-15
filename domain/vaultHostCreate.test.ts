@@ -277,6 +277,27 @@ test('applyVaultHostUpdate changes default ports when switching protocols', () =
   assert.equal(explicitPort.updatedHost.port, 2323);
 });
 
+test('applyVaultHostUpdate requires serial settings when switching to serial', () => {
+  const ssh: Host = {
+    id: 'ssh', label: 'ssh', hostname: 'ssh.example.com', username: 'root',
+    port: 22, protocol: 'ssh', tags: [], os: 'linux',
+  };
+
+  const missingConfig = applyVaultHostUpdate([ssh], [], ssh.id, { protocol: 'serial' });
+  assert.equal(missingConfig.ok, false);
+  if (!missingConfig.ok) assert.match(missingConfig.error, /serialConfig is required/i);
+
+  const configured = applyVaultHostUpdate([ssh], [], ssh.id, {
+    protocol: 'serial',
+    serialConfig: { path: '/dev/ttyUSB0', baudRate: 115200 },
+  });
+  assert.equal(configured.ok, true);
+  if (configured.ok) {
+    assert.equal(configured.updatedHost.protocol, 'serial');
+    assert.equal(configured.updatedHost.serialConfig?.baudRate, 115200);
+  }
+});
+
 test('applyVaultHostUpdate applies and clears advanced connection settings', () => {
   const host: Host = {
     id: 'host-1', label: 'host', hostname: 'host.example.com', username: 'root',

@@ -358,7 +358,8 @@ export function applyVaultHostUpdate(
       return { ok: false, error: 'protocol must be ssh, telnet, local, or serial.' };
     }
     if (
-      !port.provided
+      nextProtocol !== 'serial'
+      && !port.provided
       && (current.port === undefined || current.port === defaultPortForProtocol(current.protocol))
     ) {
       updated.port = defaultPortForProtocol(nextProtocol);
@@ -472,6 +473,9 @@ export function applyVaultHostUpdate(
       ...(localEcho !== undefined ? { localEcho } : {}),
       ...(lineMode !== undefined ? { lineMode } : {}),
     };
+  }
+  if (updated.protocol === 'serial' && !updated.serialConfig) {
+    return { ok: false, error: 'serialConfig is required when protocol is serial.' };
   }
 
   const effectiveBeforeSavePassword = options.resolveEffectiveHost?.(updated) ?? updated;

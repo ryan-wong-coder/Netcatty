@@ -22,6 +22,12 @@ describe('portForwardingAgentOps', () => {
     assert.equal(createPortForwardingRule([], [host], { ...source, localPort: 0 }, { id: 'x', now: 1 }).ok, false);
     assert.equal(createPortForwardingRule([], [host], { ...source, hostId: 'missing' }, { id: 'x', now: 1 }).ok, false);
     assert.equal(createPortForwardingRule([], [host], { ...source, type: 'invalid' }, { id: 'x', now: 1 }).ok, false);
+    const serialHost: Host = { ...host, id: 'serial-host', protocol: 'serial' };
+    const serialResult = createPortForwardingRule([], [serialHost], {
+      ...source, hostId: serialHost.id,
+    }, { id: 'serial-rule', now: 1 });
+    assert.equal(serialResult.ok, false);
+    if (!serialResult.ok) assert.match(serialResult.error, /does not support port forwarding/i);
     const dynamic = createPortForwardingRule([], [host], {
       type: 'dynamic', localPort: 1080, hostId: 'host-1',
     }, { id: 'dynamic-1', now: 1 });
@@ -35,7 +41,13 @@ describe('portForwardingAgentOps', () => {
     };
     const updated = updatePortForwardingRule([rule], [host], 'rule-1', { localPort: 8081 });
     assert.equal(updated.ok, true);
-    if (updated.ok) assert.equal(updated.value.rule.id, 'rule-1');
+    if (updated.ok) {
+      assert.equal(updated.value.rule.id, 'rule-1');
+      assert.equal(updated.value.rule.status, 'inactive');
+    }
+    const relabeled = updatePortForwardingRule([rule], [host], 'rule-1', { label: 'Renamed' });
+    assert.equal(relabeled.ok, true);
+    if (relabeled.ok) assert.equal(relabeled.value.rule.status, 'active');
     const duplicated = duplicatePortForwardingRule([rule], 'rule-1', { id: 'rule-2', now: 20 });
     assert.equal(duplicated.ok, true);
     if (duplicated.ok) {

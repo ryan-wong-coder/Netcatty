@@ -24,8 +24,12 @@ function buildRule(
   const localPort = parsePort(source.localPort ?? existing?.localPort, 'localPort');
   if ('error' in localPort) return { ok: false, error: localPort.error };
   const hostId = source.hostId === undefined ? existing?.hostId : String(source.hostId).trim();
-  if (!hostId || !hosts.some((host) => host.id === hostId)) {
+  const host = hosts.find((candidate) => candidate.id === hostId);
+  if (!hostId || !host) {
     return { ok: false, error: `Host "${hostId || ''}" was not found.` };
+  }
+  if (host.protocol === 'serial') {
+    return { ok: false, error: `Host "${hostId}" does not support port forwarding.` };
   }
   const remoteHost = source.remoteHost === undefined ? existing?.remoteHost : String(source.remoteHost).trim();
   let remotePort: number | undefined;
@@ -86,9 +90,20 @@ export function updatePortForwardingRule(
   if (!existing) return { ok: false, error: `Port forwarding rule "${ruleId}" was not found.` };
   const built = buildRule(source, hosts, existing);
   if ('error' in built) return { ok: false, error: built.error };
+  const connectionChanged = (
+    existing.type !== built.value.type
+    || existing.localPort !== built.value.localPort
+    || existing.remoteHost !== built.value.remoteHost
+    || existing.remotePort !== built.value.remotePort
+    || existing.bindAddress !== built.value.bindAddress
+    || existing.hostId !== built.value.hostId
+  );
+  const updatedRule = connectionChanged
+    ? { ...built.value, status: 'inactive' as const, error: undefined }
+    : built.value;
   return {
     ok: true,
-    value: { rules: rules.map((rule) => rule.id === ruleId ? built.value : rule), rule: built.value },
+    value: { rules: rules.map((rule) => rule.id === ruleId ? updatedRule : rule), rule: updatedRule },
   };
 }
 
