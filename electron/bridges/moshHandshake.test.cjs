@@ -102,13 +102,18 @@ test("createMoshConnectSniffer.flush recovers ConPTY CSI after an unterminated C
 test("buildSshHandshakeCommand mirrors stock mosh SSH PTY startup", () => {
   const got = buildSshHandshakeCommand({ host: "example.com", username: "alice" });
   assert.equal(got.command, "ssh");
-  assert.deepEqual(got.args, [
-    "-n",
-    "-tt",
-    "alice@example.com",
-    "--",
-    "LC_ALL='en_US.UTF-8' mosh-server new -s",
-  ]);
+  assert.deepEqual(got.args.slice(0, 4), ["-n", "-tt", "alice@example.com", "--"]);
+  assert.match(got.args.at(-1), /^sh -c /);
+  assert.match(got.args.at(-1), /exec env LC_ALL=.*en_US\.UTF-8.*mosh-server new -s/);
+});
+
+test("buildSshHandshakeCommand reports the exact server address selected by SSH", () => {
+  const got = buildSshHandshakeCommand({ host: "multi-address.example", username: "alice" });
+  const remoteCommand = got.args.at(-1);
+
+  assert.match(remoteCommand, /SSH_CONNECTION/);
+  assert.match(remoteCommand, /MOSH IP/);
+  assert.match(remoteCommand, /\$3/);
 });
 
 test("buildSshHandshakeCommand passes a non-default port via -p", () => {
@@ -122,7 +127,8 @@ test("buildSshHandshakeCommand interpolates lang and moshServer overrides", () =
     lang: "zh_CN.UTF-8",
     moshServer: "/opt/mosh/bin/mosh-server new -s -c 256",
   });
-  assert.equal(got.args.at(-1), "LC_ALL='zh_CN.UTF-8' /opt/mosh/bin/mosh-server new -s -c 256");
+  assert.match(got.args.at(-1), /zh_CN\.UTF-8/);
+  assert.match(got.args.at(-1), /\/opt\/mosh\/bin\/mosh-server new -s -c 256/);
 });
 
 test("buildSshHandshakeCommand shell-quotes lang values", () => {
@@ -130,7 +136,10 @@ test("buildSshHandshakeCommand shell-quotes lang values", () => {
     host: "h",
     lang: "C; touch /tmp/netcatty-owned",
   });
-  assert.equal(got.args.at(-1), "LC_ALL='C; touch /tmp/netcatty-owned' mosh-server new -s");
+  assert.match(
+    got.args.at(-1),
+    /LC_ALL='\\''C; touch \/tmp\/netcatty-owned'\\'' mosh-server new -s/,
+  );
 });
 
 test("buildMoshServerCommand treats custom server input as a path", () => {
@@ -248,8 +257,14 @@ test("createMoshConnectSniffer trims its ring buffer so old data doesn't accumul
 
 test("buildMoshClientEnv injects MOSH_KEY without mutating the input env", () => {
   const base = { LANG: "C", PATH: "/x" };
-  const env = buildMoshClientEnv({ baseEnv: base, key: "deadbeef", lang: "C" });
+  const env = buildMoshClientEnv({
+    baseEnv: base,
+    key: "deadbeef",
+    lang: "C",
+    fallbackHost: "public.example",
+  });
   assert.equal(env.MOSH_KEY, "deadbeef");
+  assert.equal(env.MOSH_FALLBACK_HOST, "public.example");
   assert.equal(env.PATH, "/x");
   assert.equal(base.MOSH_KEY, undefined, "input env should not be mutated");
 });

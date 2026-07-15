@@ -134,6 +134,19 @@ test("startMoshSession handshake path returns the same shape as the legacy path"
   assert.deepEqual(result, { sessionId: "mosh-test-session" });
 });
 
+test("startMoshSession keeps the original hostname as a UDP fallback", async (t) => {
+  const h = makeHarness(t);
+  await h.bridge.startMoshSession(h.event, h.options, { moshClientLookup: h.lookupOpts });
+
+  h.spawns[0].emitData(
+    "MOSH IP 203.0.113.8\r\nMOSH CONNECT 60002 ABCDEFGHIJKLMNOPQRSTUV==\r\n",
+  );
+  h.spawns[0].emitExit({ exitCode: 0, signal: 0 });
+
+  assert.equal(h.spawns[1].args[0], "203.0.113.8");
+  assert.equal(h.spawns[1].opts.env.MOSH_FALLBACK_HOST, "example.com");
+});
+
 test("startMoshSession uses bundled mosh-client even when PATH contains another client", async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-mosh-session-path-"));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));

@@ -182,7 +182,7 @@ function parseMoshConnect(buffer) {
 /**
  * Build the argv for the ssh bootstrap command.
  *
- *   ssh -n -tt [-p port] [user@]host -- LC_ALL=... mosh-server new -s [...]
+ *   ssh -n -tt [-p port] [user@]host -- sh -c '<report SSH address; run mosh-server>'
  *
  * `-tt` mirrors the stock Mosh wrapper. Besides supporting password / 2FA
  * prompts, it makes mosh-server drain the CONNECT line before its launcher
@@ -214,13 +214,18 @@ function buildSshHandshakeCommand(opts) {
   const target = opts.username ? `${opts.username}@${opts.host}` : opts.host;
   args.push(target);
   args.push("--");
-  // Quote the remote command minimally — ssh runs it through the
-  // remote shell so simple "command arg arg" works without shell
-  // metacharacters from us. mosh-server prints the magic CONNECT line
-  // and otherwise stays silent.
+  // Match stock mosh's remote-address handoff. A hostname can resolve to
+  // several IPv4/IPv6 addresses, and resolving it again for UDP may select a
+  // different endpoint from the one SSH actually reached. SSH_CONNECTION's
+  // third field is the server address of this exact SSH connection.
+  // Invoke POSIX sh explicitly because the account's login shell may not be
+  // sh-compatible. The sniffer validates and hides the MOSH IP marker.
   const lang = opts.lang || "en_US.UTF-8";
   const moshServer = opts.moshServer || "mosh-server new -s";
-  args.push(`LC_ALL=${shellQuote(lang)} ${moshServer}`);
+  const remoteScript = "if [ -n \"$SSH_CONNECTION\" ]; then "
+    + "set -- $SSH_CONNECTION; printf '\\nMOSH IP %s\\n' \"$3\"; fi; "
+    + `exec env LC_ALL=${shellQuote(lang)} ${moshServer}`;
+  args.push(`sh -c ${shellQuote(remoteScript)}`);
   return { command: "ssh", args };
 }
 
@@ -381,8 +386,9 @@ function createMoshConnectSniffer() {
  * shared with mosh-server, and we preserve TERM + LANG so the local
  * terminfo lookups pick the right entry.
  */
-function buildMoshClientEnv({ baseEnv, key, lang }) {
+function buildMoshClientEnv({ baseEnv, key, lang, fallbackHost }) {
   const env = { ...(baseEnv || {}), MOSH_KEY: key };
+  if (fallbackHost) env.MOSH_FALLBACK_HOST = fallbackHost;
   if (lang && !env.LANG) env.LANG = lang;
   if (!env.TERM) env.TERM = "xterm-256color";
   return env;

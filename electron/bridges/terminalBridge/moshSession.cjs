@@ -609,6 +609,9 @@ function createMoshSessionApi(ctx) {
         baseEnv: { ...buildTerminalProcessEnv(process.env), ...optionsEnv, TERM: "xterm-256color" },
         key: parsed.key,
         lang,
+        fallbackHost: parsed.host && parsed.host !== options.hostname
+          ? options.hostname
+          : undefined,
       });
       // Netcatty owns the terminal buffer. Keeping MoshCatty on the primary
       // screen preserves scrollback and lets renderer features such as keyword
