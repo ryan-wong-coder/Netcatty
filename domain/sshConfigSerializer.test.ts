@@ -115,7 +115,12 @@ test("serializeHostsToSshConfig rejects ProxyJump separator injection", () => {
   const badUsernameJump = makeHost({
     id: "jump",
     hostname: "jump.example.com",
-    username: "root@attacker.example",
+    username: "root,attacker",
+  });
+  const emailUsernameJump = makeHost({
+    id: "jump",
+    hostname: "jump.example.com",
+    username: "alice@example.com",
   });
 
   assert.throws(
@@ -125,5 +130,9 @@ test("serializeHostsToSshConfig rejects ProxyJump separator injection", () => {
   assert.throws(
     () => serializeHostsToSshConfig([target], [target, badUsernameJump]),
     /ProxyJump separator/i,
+  );
+  assert.match(
+    serializeHostsToSshConfig([target], [target, emailUsernameJump]),
+    /ProxyJump alice@example\.com@jump\.example\.com/,
   );
 });

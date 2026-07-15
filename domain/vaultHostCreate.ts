@@ -3,14 +3,18 @@ import { sanitizeHost } from './host';
 
 const DEFAULT_SSH_PORT = 22;
 const UNSAFE_SSH_CONFIG_VALUE = /[\r\n\0]/;
-const UNSAFE_SSH_ENDPOINT_COMPONENT = /[\s,@#]/;
+const UNSAFE_SSH_JUMP_HOSTNAME = /[\s,@#]/;
+const UNSAFE_SSH_JUMP_USERNAME = /[\s,#]/;
 const UNSAFE_SSH_HOST_ALIAS = /[*?!,[\]@#]/;
 
 const isSafeSshConfigValue = (value: string): boolean =>
   !UNSAFE_SSH_CONFIG_VALUE.test(value);
 
-const isSafeSshEndpointComponent = (value: string): boolean =>
-  !UNSAFE_SSH_ENDPOINT_COMPONENT.test(value);
+const isSafeSshJumpHostname = (value: string): boolean =>
+  !UNSAFE_SSH_JUMP_HOSTNAME.test(value);
+
+const isSafeSshJumpUsername = (value: string): boolean =>
+  !UNSAFE_SSH_JUMP_USERNAME.test(value);
 
 const isSafeSshHostAlias = (value: string): boolean =>
   !UNSAFE_SSH_HOST_ALIAS.test(value.replace(/\s/g, ''));
@@ -153,9 +157,6 @@ export function buildVaultHostFromDraft(
   if (!isSafeSshConfigValue(hostname)) {
     return { ok: false, error: 'hostname must not contain line breaks or null bytes.' };
   }
-  if (!isSafeSshEndpointComponent(hostname)) {
-    return { ok: false, error: 'hostname contains characters that are unsafe in SSH connection settings.' };
-  }
 
   const protocol = normalizeProtocol(draft.protocol) ?? 'ssh';
   const port = parsePort(draft.port) ?? (protocol === 'telnet' ? 23 : DEFAULT_SSH_PORT);
@@ -167,14 +168,8 @@ export function buildVaultHostFromDraft(
   if (!isSafeSshConfigValue(label)) {
     return { ok: false, error: 'label must not contain line breaks or null bytes.' };
   }
-  if (!isSafeSshHostAlias(label)) {
-    return { ok: false, error: 'label contains characters that are unsafe in SSH host aliases.' };
-  }
   if (!isSafeSshConfigValue(username)) {
     return { ok: false, error: 'username must not contain line breaks or null bytes.' };
-  }
-  if (username && !isSafeSshEndpointComponent(username)) {
-    return { ok: false, error: 'username contains characters that are unsafe in SSH connection settings.' };
   }
   const savePasswordInput = firstProvided(draft as Record<string, unknown>, ['savePassword']);
   const savePassword = savePasswordInput.provided
@@ -264,9 +259,6 @@ export function applyVaultHostUpdate(
     if (!isSafeSshConfigValue(label.value)) {
       return { ok: false, error: 'label must not contain line breaks or null bytes.' };
     }
-    if (!isSafeSshHostAlias(label.value)) {
-      return { ok: false, error: 'label contains characters that are unsafe in SSH host aliases.' };
-    }
     updated.label = label.value.trim();
   }
   if (hostname.provided) {
@@ -275,9 +267,6 @@ export function applyVaultHostUpdate(
     }
     if (!isSafeSshConfigValue(hostname.value)) {
       return { ok: false, error: 'hostname must not contain line breaks or null bytes.' };
-    }
-    if (!isSafeSshEndpointComponent(hostname.value.trim())) {
-      return { ok: false, error: 'hostname contains characters that are unsafe in SSH connection settings.' };
     }
     updated.hostname = hostname.value.trim();
   }
@@ -325,9 +314,6 @@ export function applyVaultHostUpdate(
     }
     if (!isSafeSshConfigValue(username.value)) {
       return { ok: false, error: 'username must not contain line breaks or null bytes.' };
-    }
-    if (username.value.trim() && !isSafeSshEndpointComponent(username.value.trim())) {
-      return { ok: false, error: 'username contains characters that are unsafe in SSH connection settings.' };
     }
     updated.username = username.value.trim();
     if (selectedIdentityId) {
@@ -448,12 +434,32 @@ export function applyVaultHostUpdate(
       .sort((a, b) => b.groupName.length - a.groupName.length)[0];
     const canBeManaged = !updated.protocol || updated.protocol === 'ssh';
     if (targetManagedSource && canBeManaged) {
+      if (!isSafeSshHostAlias(updated.label)) {
+        return { ok: false, error: 'label contains characters that are unsafe in SSH host aliases.' };
+      }
       if (label.provided || current.managedSourceId !== targetManagedSource.id) {
         updated.label = updated.label.replace(/\s/g, '');
       }
       updated.managedSourceId = targetManagedSource.id;
     } else if (options.managedSources.length > 0 || !canBeManaged) {
       updated.managedSourceId = undefined;
+    }
+
+    const managedSourceIds = new Set(options.managedSources.map((sourceInfo) => sourceInfo.id));
+    const isManagedJumpHost = existingHosts.some((candidate) => (
+      candidate.id !== current.id
+      && candidate.managedSourceId
+      && managedSourceIds.has(candidate.managedSourceId)
+      && (!candidate.protocol || candidate.protocol === 'ssh')
+      && candidate.hostChain?.hostIds?.includes(current.id)
+    ));
+    if (isManagedJumpHost) {
+      if (!isSafeSshJumpHostname(updated.hostname)) {
+        return { ok: false, error: 'hostname contains characters that are unsafe for an SSH jump host.' };
+      }
+      if (updated.username && !isSafeSshJumpUsername(updated.username)) {
+        return { ok: false, error: 'username contains characters that are unsafe for an SSH jump host.' };
+      }
     }
   }
 

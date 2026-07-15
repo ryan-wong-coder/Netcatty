@@ -84,17 +84,19 @@ test('buildVaultHostFromDraft rejects SSH config line injection', () => {
   }
 });
 
-test('buildVaultHostFromDraft rejects SSH pattern and ProxyJump separators', () => {
-  for (const draft of [
-    { hostname: 'host.example.com', label: '*' },
-    { hostname: 'first.example.com,second.example.com' },
-    { hostname: 'host.example.com', username: 'user@attacker.example' },
-  ]) {
-    const built = buildVaultHostFromDraft(draft);
-    assert.equal(built.ok, false);
-    if (built.ok) continue;
-    assert.match(built.error, /unsafe in SSH/i);
-  }
+test('buildVaultHostFromDraft allows direct and Telnet usernames containing at signs', () => {
+  const direct = buildVaultHostFromDraft({
+    hostname: 'host.example.com',
+    username: 'alice@example.com',
+  });
+  const telnet = buildVaultHostFromDraft({
+    hostname: 'telnet.example.com',
+    username: 'alice@example.com',
+    protocol: 'telnet',
+  });
+
+  assert.equal(direct.ok, true);
+  assert.equal(telnet.ok, true);
 });
 
 test('parseVaultHostDraftsInput accepts JSON array strings', () => {
@@ -244,26 +246,77 @@ test('applyVaultHostUpdate rejects SSH config line injection', () => {
   }
 });
 
-test('applyVaultHostUpdate rejects SSH pattern and ProxyJump separators', () => {
-  const existing: Host = {
-    id: 'host-1',
-    label: 'host',
-    hostname: 'host.example.com',
+test('applyVaultHostUpdate limits SSH syntax checks to managed aliases and active jump hosts', () => {
+  const managedSource: ManagedSource = {
+    id: 'source-1',
+    type: 'ssh_config',
+    filePath: '~/.ssh/config',
+    groupName: 'managed',
+    lastSyncedAt: 1,
+  };
+  const jump: Host = {
+    id: 'jump',
+    label: 'jump',
+    hostname: 'jump.example.com',
     username: 'root',
     tags: [],
     os: 'linux',
   };
+  const managedTarget: Host = {
+    id: 'target',
+    label: 'target',
+    hostname: 'target.example.com',
+    username: 'root',
+    group: 'managed',
+    managedSourceId: managedSource.id,
+    hostChain: { hostIds: [jump.id] },
+    tags: [],
+    os: 'linux',
+  };
+  const options = { managedSources: [managedSource] };
 
-  for (const patch of [
+  const directUsername = applyVaultHostUpdate(
+    [jump],
+    [],
+    jump.id,
+    { username: 'alice@example.com' },
+  );
+  const badAlias = applyVaultHostUpdate(
+    [managedTarget],
+    [],
+    managedTarget.id,
     { label: '*' },
+    options,
+  );
+  const badJumpHostname = applyVaultHostUpdate(
+    [jump, managedTarget],
+    [],
+    jump.id,
     { hostname: 'first.example.com,second.example.com' },
-    { username: 'user@attacker.example' },
-  ]) {
-    const result = applyVaultHostUpdate([existing], [], existing.id, patch);
-    assert.equal(result.ok, false);
-    if (result.ok) continue;
-    assert.match(result.error, /unsafe in SSH/i);
-  }
+    options,
+  );
+  const badJumpUsername = applyVaultHostUpdate(
+    [jump, managedTarget],
+    [],
+    jump.id,
+    { username: 'user,attacker' },
+    options,
+  );
+  const emailJumpUsername = applyVaultHostUpdate(
+    [jump, managedTarget],
+    [],
+    jump.id,
+    { username: 'alice@example.com' },
+    options,
+  );
+
+  assert.equal(directUsername.ok, true);
+  assert.equal(badAlias.ok, false);
+  assert.equal(badJumpHostname.ok, false);
+  assert.equal(badJumpUsername.ok, false);
+  assert.equal(emailJumpUsername.ok, true);
+  if (!directUsername.ok) return;
+  assert.equal(directUsername.updatedHost.username, 'alice@example.com');
 });
 
 test('applyVaultHostUpdate clears only the local key path when another identity is selected', () => {

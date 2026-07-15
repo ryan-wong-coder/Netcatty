@@ -5,7 +5,8 @@ const DEFAULT_SSH_PORT = 22;
 const MANAGED_BLOCK_BEGIN = "# BEGIN NETCATTY MANAGED - DO NOT EDIT THIS BLOCK";
 const MANAGED_BLOCK_END = "# END NETCATTY MANAGED";
 const UNSAFE_SSH_CONFIG_VALUE = /[\r\n\0]/;
-const UNSAFE_SSH_PROXY_JUMP_COMPONENT = /[\s,@#]/;
+const UNSAFE_SSH_PROXY_JUMP_HOSTNAME = /[\s,@#]/;
+const UNSAFE_SSH_PROXY_JUMP_USERNAME = /[\s,#]/;
 const UNSAFE_SSH_HOST_ALIAS = /[*?!,[\]@#]/;
 
 const assertSafeSshConfigValue = (value: string, field: string): void => {
@@ -21,9 +22,17 @@ const assertSafeSshHostAlias = (value: string): void => {
   }
 };
 
-const assertSafeProxyJumpComponent = (value: string, field: string): void => {
+const assertSafeProxyJumpHostname = (value: string): void => {
+  assertSafeSshConfigValue(value, "Jump host hostname");
+  if (UNSAFE_SSH_PROXY_JUMP_HOSTNAME.test(value)) {
+    throw new Error("Jump host hostname contains SSH ProxyJump separator characters.");
+  }
+};
+
+const assertSafeProxyJumpUsername = (value: string): void => {
+  const field = "Jump host username";
   assertSafeSshConfigValue(value, field);
-  if (UNSAFE_SSH_PROXY_JUMP_COMPONENT.test(value)) {
+  if (UNSAFE_SSH_PROXY_JUMP_USERNAME.test(value)) {
     throw new Error(`${field} contains SSH ProxyJump separator characters.`);
   }
 };
@@ -46,7 +55,7 @@ const serializeJumpHost = (host: Host, managedHostIds: Set<string>): string => {
   assertSafeSshConfigValue(host.label, "Jump host label");
   assertSafeSshConfigValue(host.hostname, "Jump host hostname");
   if (host.username) {
-    assertSafeProxyJumpComponent(host.username, "Jump host username");
+    assertSafeProxyJumpUsername(host.username);
   }
   let result = "";
   if (host.username) {
@@ -63,7 +72,7 @@ const serializeJumpHost = (host: Host, managedHostIds: Set<string>): string => {
   } else {
     // Jump host is outside managed config, use hostname directly
     hostPart = host.hostname;
-    assertSafeProxyJumpComponent(hostPart, "Jump host hostname");
+    assertSafeProxyJumpHostname(hostPart);
   }
 
   // For IPv6 addresses, always wrap in brackets to disambiguate colons
