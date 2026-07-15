@@ -2,6 +2,10 @@ import type { Host, HostProtocol, Identity, ManagedSource } from './models';
 import { sanitizeHost } from './host';
 
 const DEFAULT_SSH_PORT = 22;
+const UNSAFE_SSH_CONFIG_VALUE = /[\r\n\0]/;
+
+const isSafeSshConfigValue = (value: string): boolean =>
+  !UNSAFE_SSH_CONFIG_VALUE.test(value);
 
 export type VaultHostDraftProtocol = Exclude<HostProtocol, 'mosh' | 'et' | 'serial'>;
 
@@ -138,6 +142,9 @@ export function buildVaultHostFromDraft(
   if (!hostname) {
     return { ok: false, error: 'hostname is required.' };
   }
+  if (!isSafeSshConfigValue(hostname)) {
+    return { ok: false, error: 'hostname must not contain line breaks or null bytes.' };
+  }
 
   const protocol = normalizeProtocol(draft.protocol) ?? 'ssh';
   const port = parsePort(draft.port) ?? (protocol === 'telnet' ? 23 : DEFAULT_SSH_PORT);
@@ -146,6 +153,12 @@ export function buildVaultHostFromDraft(
     ? rawLabel.trim()
     : hostname;
   const username = typeof draft.username === 'string' ? draft.username.trim() : '';
+  if (!isSafeSshConfigValue(label)) {
+    return { ok: false, error: 'label must not contain line breaks or null bytes.' };
+  }
+  if (!isSafeSshConfigValue(username)) {
+    return { ok: false, error: 'username must not contain line breaks or null bytes.' };
+  }
   const savePasswordInput = firstProvided(draft as Record<string, unknown>, ['savePassword']);
   const savePassword = savePasswordInput.provided
     ? parseBoolean(savePasswordInput.value)
@@ -157,6 +170,9 @@ export function buildVaultHostFromDraft(
     ? draft.password
     : undefined;
   const keyPath = parseKeyPath(draft);
+  if (keyPath && !isSafeSshConfigValue(keyPath)) {
+    return { ok: false, error: 'keyPath must not contain line breaks or null bytes.' };
+  }
   const tags = parseTags(draft.tags);
   if (!tags.ok) return tags;
   const notes = typeof draft.notes === 'string' && draft.notes.trim() ? draft.notes.trim() : undefined;
@@ -228,11 +244,17 @@ export function applyVaultHostUpdate(
     if (typeof label.value !== 'string' || !label.value.trim()) {
       return { ok: false, error: 'label must not be empty.' };
     }
+    if (!isSafeSshConfigValue(label.value)) {
+      return { ok: false, error: 'label must not contain line breaks or null bytes.' };
+    }
     updated.label = label.value.trim();
   }
   if (hostname.provided) {
     if (typeof hostname.value !== 'string' || !hostname.value.trim()) {
       return { ok: false, error: 'hostname must not be empty.' };
+    }
+    if (!isSafeSshConfigValue(hostname.value)) {
+      return { ok: false, error: 'hostname must not contain line breaks or null bytes.' };
     }
     updated.hostname = hostname.value.trim();
   }
@@ -278,9 +300,26 @@ export function applyVaultHostUpdate(
     if (typeof username.value !== 'string') {
       return { ok: false, error: 'username must be a string.' };
     }
+    if (!isSafeSshConfigValue(username.value)) {
+      return { ok: false, error: 'username must not contain line breaks or null bytes.' };
+    }
     updated.username = username.value.trim();
     if (selectedIdentityId) {
       updated.identityId = '';
+      if (selectedIdentity?.authMethod === 'password') {
+        if (updated.savePassword === false) {
+          updated.authMethod = 'auto';
+        } else {
+          updated.password = selectedIdentity.password;
+          updated.authMethod = 'password';
+        }
+        updated.authPolicyVersion = 1;
+      } else if (selectedIdentity?.keyId) {
+        updated.identityFileId = selectedIdentity.keyId;
+        updated.authMethod = selectedIdentity.authMethod;
+        updated.authPolicyVersion = 1;
+        updated.useSshAgent = false;
+      }
     }
   }
   if (savePassword.provided && updated.savePassword === false && !username.provided && selectedIdentity) {
@@ -342,6 +381,9 @@ export function applyVaultHostUpdate(
       return { ok: false, error: 'keyPath must be a string.' };
     }
     const nextKeyPath = keyPath.value.trim();
+    if (!isSafeSshConfigValue(nextKeyPath)) {
+      return { ok: false, error: 'keyPath must not contain line breaks or null bytes.' };
+    }
     updated.identityFilePaths = nextKeyPath ? [nextKeyPath] : [];
     if (nextKeyPath) {
       updated.identityFileId = undefined;

@@ -80,3 +80,18 @@ test("serializeHostsToSshConfig preserves an enabled default agent setting", () 
   assert.match(config, /IdentityAgent \$\{SSH_AUTH_SOCK\}/);
   assert.equal(imported.hosts[0]?.useSshAgent, true);
 });
+
+test("serializeHostsToSshConfig rejects line injection in serialized fields", () => {
+  const maliciousValues: Partial<Host>[] = [
+    { username: "root\nProxyCommand /tmp/run" },
+    { identityFilePaths: ["~/.ssh/id\rProxyCommand /tmp/run"] },
+    { hostname: "host.example.com\0ProxyCommand /tmp/run" },
+  ];
+
+  for (const overrides of maliciousValues) {
+    assert.throws(
+      () => serializeHostsToSshConfig([makeHost(overrides)]),
+      /line breaks or null bytes/i,
+    );
+  }
+});

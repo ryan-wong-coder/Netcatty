@@ -4,6 +4,13 @@ import { hasMacKeychainAgentDirectives } from "./sshAuth";
 const DEFAULT_SSH_PORT = 22;
 const MANAGED_BLOCK_BEGIN = "# BEGIN NETCATTY MANAGED - DO NOT EDIT THIS BLOCK";
 const MANAGED_BLOCK_END = "# END NETCATTY MANAGED";
+const UNSAFE_SSH_CONFIG_VALUE = /[\r\n\0]/;
+
+const assertSafeSshConfigValue = (value: string, field: string): void => {
+  if (UNSAFE_SSH_CONFIG_VALUE.test(value)) {
+    throw new Error(`${field} must not contain line breaks or null bytes.`);
+  }
+};
 
 /**
  * Check if a string is an IPv6 address
@@ -20,6 +27,9 @@ const isIPv6 = (hostname: string): boolean => {
  * @param managedHostIds - Set of host IDs that have Host blocks in the managed config
  */
 const serializeJumpHost = (host: Host, managedHostIds: Set<string>): string => {
+  assertSafeSshConfigValue(host.label, "Jump host label");
+  assertSafeSshConfigValue(host.hostname, "Jump host hostname");
+  assertSafeSshConfigValue(host.username, "Jump host username");
   let result = "";
   if (host.username) {
     result += `${host.username}@`;
@@ -97,6 +107,10 @@ export const serializeHostsToSshConfig = (hosts: Host[], allHosts?: Host[]): str
   for (const host of hosts) {
     if (host.protocol && host.protocol !== "ssh") continue;
 
+    assertSafeSshConfigValue(host.label, "Host label");
+    assertSafeSshConfigValue(host.hostname, "Host hostname");
+    assertSafeSshConfigValue(host.username, "Host username");
+
     const lines: string[] = [];
     // Sanitize alias by removing spaces (SSH config doesn't allow spaces in Host patterns)
     const alias = (host.label?.replace(/\s/g, '') || host.hostname);
@@ -121,6 +135,7 @@ export const serializeHostsToSshConfig = (hosts: Host[], allHosts?: Host[]): str
     // Serialize IdentityFile paths
     if (host.identityFilePaths && host.identityFilePaths.length > 0) {
       for (const keyPath of host.identityFilePaths) {
+        assertSafeSshConfigValue(keyPath, "IdentityFile path");
         // Quote paths that contain spaces
         const formatted = keyPath.includes(" ") ? `"${keyPath}"` : keyPath;
         lines.push(`    IdentityFile ${formatted}`);
@@ -145,6 +160,7 @@ export const serializeHostsToSshConfig = (hosts: Host[], allHosts?: Host[]): str
     }
 
     if (serializedIdentityAgent !== undefined) {
+      assertSafeSshConfigValue(serializedIdentityAgent, "IdentityAgent");
       const formatted = serializedIdentityAgent.includes(" ") ? `"${serializedIdentityAgent}"` : serializedIdentityAgent;
       lines.push(`    IdentityAgent ${formatted}`);
     }
@@ -154,6 +170,7 @@ export const serializeHostsToSshConfig = (hosts: Host[], allHosts?: Host[]): str
     }
 
     if (host.addKeysToAgent !== undefined) {
+      assertSafeSshConfigValue(host.addKeysToAgent, "AddKeysToAgent");
       lines.push(`    AddKeysToAgent ${host.addKeysToAgent}`);
     }
 

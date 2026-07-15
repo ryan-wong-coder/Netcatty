@@ -71,6 +71,19 @@ test('buildVaultHostFromDraft rejects an invalid password-saving option', () => 
   assert.match(built.error, /true or false/i);
 });
 
+test('buildVaultHostFromDraft rejects SSH config line injection', () => {
+  for (const draft of [
+    { hostname: 'host.example.com', username: 'root\nProxyCommand /tmp/run' },
+    { hostname: 'host.example.com', keyPath: '~/.ssh/id\rProxyCommand /tmp/run' },
+    { hostname: 'host.example.com\0ProxyCommand /tmp/run' },
+  ]) {
+    const built = buildVaultHostFromDraft(draft);
+    assert.equal(built.ok, false);
+    if (built.ok) continue;
+    assert.match(built.error, /line breaks or null bytes/i);
+  }
+});
+
 test('parseVaultHostDraftsInput accepts JSON array strings', () => {
   const parsed = parseVaultHostDraftsInput(JSON.stringify([
     { hostname: '10.0.0.1', username: 'root' },
@@ -193,6 +206,29 @@ test('applyVaultHostUpdate rejects malformed JSON tag strings', () => {
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.match(result.error, /valid JSON array/i);
+});
+
+test('applyVaultHostUpdate rejects SSH config line injection', () => {
+  const existing: Host = {
+    id: 'host-1',
+    label: 'host',
+    hostname: 'host.example.com',
+    username: 'root',
+    tags: [],
+    os: 'linux',
+  };
+
+  for (const patch of [
+    { username: 'root\nProxyCommand /tmp/run' },
+    { keyPath: '~/.ssh/id\rProxyCommand /tmp/run' },
+    { hostname: 'host.example.com\0ProxyCommand /tmp/run' },
+    { label: 'host\nProxyCommand /tmp/run' },
+  ]) {
+    const result = applyVaultHostUpdate([existing], [], existing.id, patch);
+    assert.equal(result.ok, false);
+    if (result.ok) continue;
+    assert.match(result.error, /line breaks or null bytes/i);
+  }
 });
 
 test('applyVaultHostUpdate clears only the local key path when another identity is selected', () => {
@@ -585,6 +621,14 @@ test('applyVaultHostUpdate can re-enable saved passwords after clearing one', ()
 });
 
 test('applyVaultHostUpdate detaches direct and inherited identities when changing username', () => {
+  const identity: Identity = {
+    id: 'identity-1',
+    label: 'shared key',
+    username: 'old-user',
+    authMethod: 'key',
+    keyId: 'key-1',
+    created: 1,
+  };
   const directIdentityHost: Host = {
     id: 'direct-host',
     label: 'direct host',
@@ -608,13 +652,17 @@ test('applyVaultHostUpdate detaches direct and inherited identities when changin
     [],
     directIdentityHost.id,
     { username: 'new-user' },
+    { identities: [identity] },
   );
   const inheritedResult = applyVaultHostUpdate(
     [inheritedIdentityHost],
     [],
     inheritedIdentityHost.id,
     { username: 'new-user' },
-    { resolveEffectiveHost: (host) => ({ ...host, identityId: 'identity-from-group' }) },
+    {
+      identities: [identity],
+      resolveEffectiveHost: (host) => ({ ...host, identityId: identity.id }),
+    },
   );
 
   assert.equal(directResult.ok, true);
@@ -622,8 +670,97 @@ test('applyVaultHostUpdate detaches direct and inherited identities when changin
   if (!directResult.ok || !inheritedResult.ok) return;
   assert.equal(directResult.updatedHost.username, 'new-user');
   assert.equal(directResult.updatedHost.identityId, '');
+  assert.equal(directResult.updatedHost.identityFileId, identity.keyId);
+  assert.equal(directResult.updatedHost.authMethod, 'key');
   assert.equal(inheritedResult.updatedHost.username, 'new-user');
   assert.equal(inheritedResult.updatedHost.identityId, '');
+  assert.equal(inheritedResult.updatedHost.identityFileId, identity.keyId);
+  assert.equal(inheritedResult.updatedHost.authMethod, 'key');
+});
+
+test('applyVaultHostUpdate keeps inherited key auth across sequential password and username updates', () => {
+  const identity: Identity = {
+    id: 'identity-1',
+    label: 'shared key',
+    username: 'deploy',
+    authMethod: 'key',
+    keyId: 'key-1',
+    created: 1,
+  };
+  const existing: Host = {
+    id: 'host-1',
+    label: 'host',
+    hostname: 'host.example.com',
+    username: '',
+    group: 'prod',
+    tags: [],
+    os: 'linux',
+  };
+  const resolveEffectiveHost = (host: Host): Host => applyGroupDefaults(host, {
+    identityId: identity.id,
+    username: identity.username,
+    authMethod: identity.authMethod,
+    identityFileId: identity.keyId,
+  });
+
+  const first = applyVaultHostUpdate(
+    [existing],
+    [],
+    existing.id,
+    { password: 'fallback-one' },
+    { identities: [identity], resolveEffectiveHost },
+  );
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  const second = applyVaultHostUpdate(
+    [first.updatedHost],
+    [],
+    existing.id,
+    { username: 'ops', password: 'fallback-two' },
+    { identities: [identity], resolveEffectiveHost },
+  );
+
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.updatedHost.username, 'ops');
+  assert.equal(second.updatedHost.identityId, '');
+  assert.equal(second.updatedHost.identityFileId, identity.keyId);
+  assert.equal(second.updatedHost.authMethod, 'key');
+});
+
+test('applyVaultHostUpdate preserves a password identity credential when changing username', () => {
+  const identity: Identity = {
+    id: 'identity-1',
+    label: 'shared password',
+    username: 'deploy',
+    authMethod: 'password',
+    password: 'shared-secret',
+    created: 1,
+  };
+  const existing: Host = {
+    id: 'host-1',
+    label: 'host',
+    hostname: 'host.example.com',
+    username: 'deploy',
+    identityId: identity.id,
+    tags: [],
+    os: 'linux',
+  };
+
+  const result = applyVaultHostUpdate(
+    [existing],
+    [],
+    existing.id,
+    { username: 'ops' },
+    { identities: [identity] },
+  );
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.updatedHost.username, 'ops');
+  assert.equal(result.updatedHost.identityId, '');
+  assert.equal(result.updatedHost.password, identity.password);
+  assert.equal(result.updatedHost.authMethod, 'password');
 });
 
 test('applyVaultHostUpdate validates passwords against the destination group', () => {
