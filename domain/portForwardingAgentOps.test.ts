@@ -48,11 +48,17 @@ describe('portForwardingAgentOps', () => {
     const relabeled = updatePortForwardingRule([rule], [host], 'rule-1', { label: 'Renamed' });
     assert.equal(relabeled.ok, true);
     if (relabeled.ok) assert.equal(relabeled.value.rule.status, 'active');
-    const duplicated = duplicatePortForwardingRule([rule], 'rule-1', { id: 'rule-2', now: 20 });
+    const duplicated = duplicatePortForwardingRule([rule], [host], 'rule-1', { id: 'rule-2', now: 20 });
     assert.equal(duplicated.ok, true);
     if (duplicated.ok) {
       assert.equal(duplicated.value.rule.status, 'inactive');
       assert.equal(duplicated.value.rule.createdAt, 20);
     }
+    const serialHost: Host = { ...host, protocol: 'serial' };
+    const rejectedDuplicate = duplicatePortForwardingRule(
+      [rule], [serialHost], 'rule-1', { id: 'rule-3', now: 30 },
+    );
+    assert.equal(rejectedDuplicate.ok, false);
+    if (!rejectedDuplicate.ok) assert.match(rejectedDuplicate.error, /does not support port forwarding/i);
   });
 });

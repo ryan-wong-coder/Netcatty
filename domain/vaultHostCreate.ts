@@ -474,7 +474,12 @@ export function applyVaultHostUpdate(
       ...(lineMode !== undefined ? { lineMode } : {}),
     };
   }
-  if (updated.protocol === 'serial' && !updated.serialConfig) {
+  if (
+    protocol.provided
+    && current.protocol !== 'serial'
+    && updated.protocol === 'serial'
+    && !updated.serialConfig
+  ) {
     return { ok: false, error: 'serialConfig is required when protocol is serial.' };
   }
 

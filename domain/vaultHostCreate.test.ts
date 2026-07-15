@@ -298,6 +298,18 @@ test('applyVaultHostUpdate requires serial settings when switching to serial', (
   }
 });
 
+test('applyVaultHostUpdate keeps legacy serial hosts editable without serialConfig', () => {
+  const legacySerial: Host = {
+    id: 'serial', label: 'Old serial', hostname: '/dev/ttyUSB0', username: '',
+    port: 115200, protocol: 'serial', tags: [], os: 'linux',
+  };
+
+  const result = applyVaultHostUpdate([legacySerial], [], legacySerial.id, { label: 'Renamed serial' });
+
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.updatedHost.label, 'Renamed serial');
+});
+
 test('applyVaultHostUpdate applies and clears advanced connection settings', () => {
   const host: Host = {
     id: 'host-1', label: 'host', hostname: 'host.example.com', username: 'root',

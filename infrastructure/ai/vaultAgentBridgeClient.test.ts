@@ -649,7 +649,15 @@ describe('handleVaultAgentOp vault management gaps', () => {
       bindAddress: '127.0.0.1', remoteHost: '127.0.0.1', remotePort: 80,
       hostId: host.id, status: 'active', createdAt: 1,
     };
-    const deps = createDeps({ hosts: [host], portForwardingRules: [rule] });
+    let stopCalls = 0;
+    const deps = createDeps({
+      hosts: [host],
+      portForwardingRules: [rule],
+      stopTunnel: async () => {
+        stopCalls += 1;
+        return { success: true };
+      },
+    });
 
     const result = await handleVaultAgentOp('portforward.rules.update', {
       ruleId: rule.id,
@@ -657,8 +665,31 @@ describe('handleVaultAgentOp vault management gaps', () => {
     }, deps);
 
     assert.equal(result.ok, true);
+    assert.equal(stopCalls, 1);
     assert.equal((result as { rule?: { status?: string } }).rule?.status, 'inactive');
     assert.equal(deps.getPortForwardingRules()[0]?.status, 'inactive');
+  });
+
+  it('keeps a running forwarding rule unchanged when stopping its old tunnel fails', async () => {
+    const rule: PortForwardingRule = {
+      id: 'rule-1', label: 'Web', type: 'local', localPort: 8080,
+      bindAddress: '127.0.0.1', remoteHost: '127.0.0.1', remotePort: 80,
+      hostId: host.id, status: 'active', createdAt: 1,
+    };
+    const deps = createDeps({
+      hosts: [host],
+      portForwardingRules: [rule],
+      stopTunnel: async () => ({ success: false, error: 'stop failed' }),
+    });
+
+    const result = await handleVaultAgentOp('portforward.rules.update', {
+      ruleId: rule.id,
+      localPort: 8081,
+    }, deps);
+
+    assert.equal(result.ok, false);
+    assert.equal(deps.getPortForwardingRules()[0]?.localPort, 8080);
+    assert.equal(deps.getPortForwardingRules()[0]?.status, 'active');
   });
 
   it('manages groups and applies reusable defaults without exposing secrets', async () => {

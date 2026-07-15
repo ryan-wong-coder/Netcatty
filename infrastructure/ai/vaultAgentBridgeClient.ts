@@ -49,6 +49,7 @@ import { netcattyBridge } from '../services/netcattyBridge';
 import {
   createPortForwardingRule,
   duplicatePortForwardingRule,
+  hasPortForwardingConnectionChanged,
   updatePortForwardingRule,
 } from '../../domain/portForwardingAgentOps';
 import { deleteGroup, upsertGroup } from '../../domain/vaultGroupAgentOps';
@@ -1033,14 +1034,26 @@ export async function handleVaultAgentOp(
     }
     case 'portforward.rules.update': {
       const ruleId = String(params.ruleId || '');
-      const result = updatePortForwardingRule(deps.getPortForwardingRules(), deps.getHosts(), ruleId, params);
+      const currentRules = deps.getPortForwardingRules();
+      const existingRule = currentRules.find((entry) => entry.id === ruleId);
+      const result = updatePortForwardingRule(currentRules, deps.getHosts(), ruleId, params);
       if (!result.ok) return result;
+      if (
+        existingRule
+        && existingRule.status !== 'inactive'
+        && hasPortForwardingConnectionChanged(existingRule, result.value.rule)
+      ) {
+        const stopped = await deps.stopTunnel(ruleId);
+        if (!stopped.success) {
+          return { ok: false, error: stopped.error || 'Failed to stop port forwarding tunnel.' };
+        }
+      }
       deps.updatePortForwardingRules(result.value.rules);
       return { ok: true, rule: sanitizePortForwardRuleForAgent(result.value.rule) };
     }
     case 'portforward.rules.duplicate': {
       const ruleId = String(params.ruleId || '');
-      const result = duplicatePortForwardingRule(deps.getPortForwardingRules(), ruleId, {
+      const result = duplicatePortForwardingRule(deps.getPortForwardingRules(), deps.getHosts(), ruleId, {
         id: crypto.randomUUID(), now: Date.now(),
       });
       if (!result.ok) return result;

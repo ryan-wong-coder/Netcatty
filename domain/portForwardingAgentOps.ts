@@ -4,6 +4,18 @@ import { getNextVaultOrder } from './vaultOrder';
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 type NewRuleValues = { id: string; now: number };
 
+export const hasPortForwardingConnectionChanged = (
+  existing: PortForwardingRule,
+  updated: PortForwardingRule,
+): boolean => (
+  existing.type !== updated.type
+  || existing.localPort !== updated.localPort
+  || existing.remoteHost !== updated.remoteHost
+  || existing.remotePort !== updated.remotePort
+  || existing.bindAddress !== updated.bindAddress
+  || existing.hostId !== updated.hostId
+);
+
 const parsePort = (value: unknown, name: string): Result<number> => {
   const parsed = typeof value === 'number' ? value : Number(String(value ?? ''));
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535
@@ -90,14 +102,7 @@ export function updatePortForwardingRule(
   if (!existing) return { ok: false, error: `Port forwarding rule "${ruleId}" was not found.` };
   const built = buildRule(source, hosts, existing);
   if ('error' in built) return { ok: false, error: built.error };
-  const connectionChanged = (
-    existing.type !== built.value.type
-    || existing.localPort !== built.value.localPort
-    || existing.remoteHost !== built.value.remoteHost
-    || existing.remotePort !== built.value.remotePort
-    || existing.bindAddress !== built.value.bindAddress
-    || existing.hostId !== built.value.hostId
-  );
+  const connectionChanged = hasPortForwardingConnectionChanged(existing, built.value);
   const updatedRule = connectionChanged
     ? { ...built.value, status: 'inactive' as const, error: undefined }
     : built.value;
@@ -109,13 +114,16 @@ export function updatePortForwardingRule(
 
 export function duplicatePortForwardingRule(
   rules: PortForwardingRule[],
+  hosts: Host[],
   ruleId: string,
   newRule: NewRuleValues,
 ): Result<{ rules: PortForwardingRule[]; rule: PortForwardingRule }> {
   const existing = rules.find((rule) => rule.id === ruleId);
   if (!existing) return { ok: false, error: `Port forwarding rule "${ruleId}" was not found.` };
+  const validated = buildRule({}, hosts, existing);
+  if ('error' in validated) return { ok: false, error: validated.error };
   const rule: PortForwardingRule = {
-    ...existing,
+    ...validated.value,
     id: newRule.id,
     label: `${existing.label} (Copy)`,
     status: 'inactive',
