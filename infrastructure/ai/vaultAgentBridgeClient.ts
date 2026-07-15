@@ -480,12 +480,12 @@ export async function handleVaultAgentOp(
         return { ok: false, error: 'Host open is not available in this window.' };
       }
 
-      const opened = deps.openHost(host);
+      const effectiveHost = deps.resolveEffectiveHost(host);
+      const opened = deps.openHost(effectiveHost);
       if (!opened.ok) {
         return { ok: false, error: opened.error };
       }
 
-      const effectiveHost = deps.resolveEffectiveHost(opened.host);
       const chatSessionId = typeof params.chatSessionId === 'string'
         ? params.chatSessionId
         : undefined;

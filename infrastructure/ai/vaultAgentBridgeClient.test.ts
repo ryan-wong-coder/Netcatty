@@ -306,6 +306,37 @@ describe('handleVaultAgentOp vault hosts', () => {
     assert.equal(openedHost?.hostname, 'new.example.com');
   });
 
+  it('opens a host with group defaults changed by the immediately preceding request', async () => {
+    const groupedHost: Host = {
+      id: 'grouped-host', label: 'Grouped', hostname: 'grouped.example.com',
+      username: 'root', group: 'production', tags: [], os: 'linux',
+    };
+    let openedHost: Host | undefined;
+    let deps: VaultAgentApiDeps;
+    deps = createDeps({
+      hosts: [groupedHost],
+      customGroups: ['production'],
+      groupConfigs: [{ path: 'production', username: 'old-user' }],
+      resolveEffectiveHost: (hostToResolve) => ({
+        ...hostToResolve,
+        username: deps.getGroupConfigs().find((config) => config.path === hostToResolve.group)?.username
+          ?? hostToResolve.username,
+      }),
+      openHost: (hostToOpen) => {
+        openedHost = hostToOpen;
+        return { ok: true, sessionId: `session-${hostToOpen.id}`, host: hostToOpen };
+      },
+    });
+
+    assert.equal((await handleVaultAgentOp('group.update', {
+      path: 'production',
+      defaults: '{"username":"new-user"}',
+    }, deps)).ok, true);
+    assert.equal((await handleVaultAgentOp('host.open', { hostId: groupedHost.id }, deps)).ok, true);
+
+    assert.equal(openedHost?.username, 'new-user');
+  });
+
   it('host.open fails for missing host ids', async () => {
     const result = await handleVaultAgentOp(
       'host.open',

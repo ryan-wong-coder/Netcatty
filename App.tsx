@@ -1028,7 +1028,7 @@ function App({ settings }: { settings: SettingsState }) {
   ), [createWorkspaceFromTargets, resolveEffectiveHost]);
 
   // Wrapper to connect to host with logging
-  const handleConnectToHost = useCallback((host: Host) => {
+  const handleConnectToHost = useCallback((host: Host, alreadyEffective = false) => {
     if (host.ephemeral) {
       setEphemeralHosts((previous) => {
         const existingIndex = previous.findIndex((candidate) => candidate.id === host.id);
@@ -1036,11 +1036,23 @@ function App({ settings }: { settings: SettingsState }) {
         return previous.map((candidate, index) => index === existingIndex ? host : candidate);
       });
     }
-    return handleConnectToHostImpl(() => ({ addConnectionLog, connectToHost, host, identities, keys, resolveEffectiveHost, resolveHostAuth, systemInfoRef }), host);
+    const effectiveHostResolver = alreadyEffective
+      ? (candidate: Host) => candidate
+      : resolveEffectiveHost;
+    return handleConnectToHostImpl(() => ({
+      addConnectionLog,
+      connectToHost,
+      host,
+      identities,
+      keys,
+      resolveEffectiveHost: effectiveHostResolver,
+      resolveHostAuth,
+      systemInfoRef,
+    }), host);
   }, [addConnectionLog, connectToHost, resolveEffectiveHost, identities, keys]);
 
   const openHostForVaultAgent = useCallback((host: Host) => {
-    const sessionId = handleConnectToHost(host);
+    const sessionId = handleConnectToHost(host, true);
     if (!sessionId) {
       return { ok: false as const, error: `Failed to open host "${host.id}".` };
     }
