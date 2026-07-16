@@ -877,6 +877,12 @@ export async function downgradeConvergentSyncImpl(
           materializedPayload: verifiedPayload,
           state: canonical,
         });
+        // The convergent baseline above is removed after a successful
+        // downgrade. Seed the legacy three-way base and remote anchor from the
+        // exact verified v1 file before that cleanup, so the first legacy sync
+        // cannot compare a post-downgrade edit against pre-migration metadata.
+        await this.commitRemoteInspection(provider, verifiedFile, verifiedPayload);
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
         results.set(provider, {
           success: true,
           provider,

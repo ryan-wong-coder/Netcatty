@@ -130,6 +130,11 @@ function manager(
   let currentReplica = replica;
   const events: unknown[] = [];
   const completedDowngrades: boolean[] = [];
+  const legacyCommits: Array<{
+    provider: CloudProvider;
+    remoteFile: SyncedFile;
+    payload: SyncPayload;
+  }> = [];
   const providerConnections = Object.fromEntries(
     (['github', 'google', 'onedrive', 'webdav', 's3'] as CloudProvider[]).map((provider) => [
       provider,
@@ -161,6 +166,7 @@ function manager(
     persisted,
     events,
     completedDowngrades,
+    legacyCommits,
     getConnectedAdapter: async (provider: CloudProvider) => adapters[provider],
     loadConvergentReplica: async () => ({ schemaVersion: 2 as const, state: currentReplica, updatedAt: NOW }),
     saveConvergentReplica: async (record: { state: ConvergentSyncStateV2 }) => {
@@ -170,6 +176,13 @@ function manager(
     loadConvergentProviderBaseline: async (provider: CloudProvider) => baselines[provider] ?? null,
     saveConvergentProviderBaseline: async (baseline: ConvergentProviderBaselineV2) => {
       baselines[baseline.provider] = baseline;
+    },
+    commitRemoteInspection: async (
+      provider: CloudProvider,
+      remoteFile: SyncedFile,
+      incoming: SyncPayload,
+    ) => {
+      legacyCommits.push({ provider, remoteFile, payload: incoming });
     },
     completeConvergentSyncDowngrade: (confirmed: boolean) => {
       completedDowngrades.push(confirmed);
@@ -773,6 +786,7 @@ test('explicit downgrade replaces v2 only after a verified legacy write', async 
     const completeDowngrade = subject.completeConvergentSyncDowngrade;
     subject.completeConvergentSyncDowngrade = (confirmed: boolean) => {
       assert.equal(lockHeld, true);
+      assert.equal(subject.legacyCommits.length, 1);
       completeDowngrade(confirmed);
     };
     let appliedPayload: SyncPayload | null = null;
@@ -794,6 +808,10 @@ test('explicit downgrade replaces v2 only after a verified legacy write', async 
     const verified = await EncryptionService.decryptPayload(github.remote!, 'pw');
     assert.equal(verified.convergentSync, undefined);
     assert.equal(verified.hosts[0]?.label, 'local');
+    assert.equal(subject.legacyCommits.length, 1);
+    assert.equal(subject.legacyCommits[0]?.provider, 'github');
+    assert.equal(subject.legacyCommits[0]?.remoteFile, github.remote);
+    assert.equal(subject.legacyCommits[0]?.payload.hosts[0]?.label, 'local');
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
