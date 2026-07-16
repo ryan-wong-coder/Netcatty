@@ -26,6 +26,14 @@ export interface PreparedConvergentMigration {
   providerBaselines: ConvergentProviderBaselineV2[];
 }
 
+interface LegacyProviderBaselineSeed {
+  provider: CloudProvider;
+  remoteVersion: number;
+  remoteUpdatedAt: number;
+  remoteDeviceId: string;
+  materializedPayload: SyncPayload;
+}
+
 function selectLocalTrustedBaseline(baselines: SyncPayload[]): SyncPayload | null {
   if (baselines.length === 0) return null;
   const first = baselines[0];
@@ -49,6 +57,7 @@ export async function prepareConvergentSyncMigration(
     .sort();
   const baselineByProvider = new Map<CloudProvider, SyncPayload | null>();
   const providerBaselines: ConvergentProviderBaselineV2[] = [];
+  const legacyBaselineSeeds: LegacyProviderBaselineSeed[] = [];
   const inputs: ConvergentMigrationProviderInput[] = await Promise.all(
     providers.map(async (provider): Promise<ConvergentMigrationProviderInput> => {
       try {
@@ -68,6 +77,14 @@ export async function prepareConvergentSyncMigration(
             remoteDeviceId: remote.remoteFile.meta.deviceId,
             materializedPayload: stripConvergentSyncEnvelope(remote.payload),
             state: remoteState,
+          });
+        } else {
+          legacyBaselineSeeds.push({
+            provider,
+            remoteVersion: remote.remoteFile.meta.version,
+            remoteUpdatedAt: remote.remoteFile.meta.updatedAt,
+            remoteDeviceId: remote.remoteFile.meta.deviceId,
+            materializedPayload: stripConvergentSyncEnvelope(remote.payload),
           });
         }
         return {
@@ -89,15 +106,28 @@ export async function prepareConvergentSyncMigration(
   const localTrustedBaseline = selectLocalTrustedBaseline(
     [...baselineByProvider.values()].filter((value): value is SyncPayload => value !== null),
   );
+  const plan = planConvergentSyncMigration({
+    localPayload: stripConvergentSyncEnvelope(localPayload),
+    localTrustedBaseline,
+    providers: inputs,
+    deviceId: manager.getState().deviceId,
+    now,
+  });
+  if (plan.state) {
+    for (const seed of legacyBaselineSeeds) {
+      providerBaselines.push({
+        schemaVersion: 2,
+        ...seed,
+        // The canonical migration state already incorporates this exact v1
+        // remote. Keeping its original materialized snapshot lets a later
+        // legacy write become a field diff without blocking the first v2 upload.
+        state: plan.state,
+      });
+    }
+  }
   return {
     providerBaselines: providerBaselines.sort((left, right) => left.provider.localeCompare(right.provider)),
-    plan: planConvergentSyncMigration({
-      localPayload: stripConvergentSyncEnvelope(localPayload),
-      localTrustedBaseline,
-      providers: inputs,
-      deviceId: manager.getState().deviceId,
-      now,
-    }),
+    plan,
   };
 }
 

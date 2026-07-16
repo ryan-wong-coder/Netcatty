@@ -350,6 +350,39 @@ test('legacy cloud writes without a trusted provider baseline fail closed', asyn
   }
 });
 
+test('a migration-seeded v1 baseline allows the first sync to publish v2', async () => {
+  const encryption = installEncryptionDouble();
+  try {
+    const legacyPayload = payload('legacy');
+    const replica = createConvergentSyncStateFromPayload(legacyPayload, 'local-device', NOW);
+    const github = adapter(encryption.register(legacyPayload, 7, 'legacy-device'));
+    const baseline: ConvergentProviderBaselineV2 = {
+      schemaVersion: 2,
+      provider: 'github',
+      remoteVersion: 7,
+      remoteUpdatedAt: NOW,
+      remoteDeviceId: 'legacy-device',
+      materializedPayload: legacyPayload,
+      state: replica,
+    };
+    const subject = manager(replica, { github }, { github: baseline });
+
+    const results = await syncConvergentProvidersUnlockedImpl.call(
+      subject,
+      legacyPayload,
+      { jitter: async () => {}, now: () => NOW + 10 },
+    );
+
+    assert.equal(results.get('github')?.success, true);
+    assert.equal(github.uploads > 0, true);
+    assert.equal(github.remote?.meta.syncSchemaVersion, 2);
+    const uploaded = await EncryptionService.decryptPayload(github.remote!, 'pw');
+    assert.ok(validateConvergentSyncPayload(github.remote!.meta, uploaded));
+  } finally {
+    encryption.restore();
+  }
+});
+
 test('provider order cannot change the joined materialized result', async () => {
   const encryption = installEncryptionDouble();
   try {

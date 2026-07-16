@@ -19,7 +19,10 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 const { planConvergentSyncMigration } = await import('../domain/convergentSync/index.ts');
 const { getConvergentSyncLocalConfig } = await import('../infrastructure/services/convergentSyncConfig.ts');
-const { initializePreparedConvergentMigration } = await import('./convergentSyncMigration.ts');
+const {
+  initializePreparedConvergentMigration,
+  prepareConvergentSyncMigration,
+} = await import('./convergentSyncMigration.ts');
 
 function payload(): SyncPayload {
   return {
@@ -33,6 +36,60 @@ function payload(): SyncPayload {
 
 test.beforeEach(() => {
   localStorageValues.clear();
+});
+
+test('preparation seeds a trusted baseline for an unchanged v1 provider', async () => {
+  const remotePayload: SyncPayload = {
+    ...payload(),
+    hosts: [{
+      id: 'host-1',
+      label: 'Legacy host',
+      hostname: 'legacy.example.com',
+      port: 22,
+      username: 'root',
+      tags: [],
+      os: 'linux',
+    }],
+  };
+  const manager = {
+    isUnlocked: () => true,
+    getAllProviders: () => ({
+      github: { provider: 'github', status: 'connected' },
+    }),
+    loadConvergentProviderBaseline: async () => null,
+    loadSyncBase: async () => null,
+    downloadFromProvider: async () => ({
+      provider: 'github',
+      payload: remotePayload,
+      remoteFile: {
+        meta: {
+          version: 7,
+          updatedAt: NOW - 1,
+          deviceId: 'legacy-device',
+          deviceName: 'Legacy device',
+          appVersion: '1.0.0',
+          iv: '',
+          salt: '',
+          algorithm: 'AES-256-GCM',
+          kdf: 'PBKDF2',
+          kdfIterations: 1,
+        },
+        payload: 'ciphertext',
+      },
+    }),
+    getState: () => ({ deviceId: 'local-device' }),
+  } as unknown as CloudSyncManager;
+
+  const prepared = await prepareConvergentSyncMigration(payload(), manager, NOW);
+
+  assert.equal(prepared.plan.preview.canInitialize, true);
+  assert.equal(prepared.providerBaselines.length, 1);
+  const baseline = prepared.providerBaselines[0]!;
+  assert.equal(baseline.provider, 'github');
+  assert.equal(baseline.remoteVersion, 7);
+  assert.equal(baseline.remoteDeviceId, 'legacy-device');
+  assert.deepEqual(baseline.materializedPayload, remotePayload);
+  assert.deepEqual(baseline.state, prepared.plan.state);
 });
 
 test('initialization applies the protected preview before persisting and enabling the replica', async () => {
