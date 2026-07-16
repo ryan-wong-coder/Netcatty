@@ -6,7 +6,7 @@
  * Uses useSyncExternalStore for real-time state synchronization across all components.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
   type CloudProvider,
   type SecurityState,
@@ -38,8 +38,11 @@ import { netcattyBridge } from '../../infrastructure/services/netcattyBridge';
 import type { DeviceFlowState } from '../../infrastructure/services/adapters/GitHubAdapter';
 import {
   getConvergentSyncLocalConfig,
+  getConvergentSyncLocalConfigSnapshot,
   pauseConvergentSync,
+  refreshConvergentSyncLocalConfigSnapshot,
   setConvergentSyncLocalConfig,
+  subscribeConvergentSyncLocalConfig,
   type ConvergentSyncLocalConfig,
 } from '../../infrastructure/services/convergentSyncConfig';
 
@@ -234,8 +237,10 @@ export const useCloudSync = (): CloudSyncHook => {
   const activeOAuthProviderRef = useRef<'google' | 'onedrive' | null>(null);
   const activeGitHubAuthAbortRef = useRef<AbortController | null>(null);
   const activeGitHubAuthAttemptIdRef = useRef<number | null>(null);
-  const [convergentSyncConfig, setConvergentSyncConfigState] = useState(
-    getConvergentSyncLocalConfig,
+  const convergentSyncConfig = useSyncExternalStore(
+    subscribeConvergentSyncLocalConfig,
+    getConvergentSyncLocalConfigSnapshot,
+    getConvergentSyncLocalConfigSnapshot,
   );
 
   // Auto-unlock: if a master key exists, retrieve the persisted password (Electron safeStorage)
@@ -764,9 +769,7 @@ export const useCloudSync = (): CloudSyncHook => {
   }, [ensureUnlocked]);
 
   const refreshConvergentSyncConfig = useCallback(() => {
-    const next = getConvergentSyncLocalConfig();
-    setConvergentSyncConfigState(next);
-    return next;
+    return refreshConvergentSyncLocalConfigSnapshot();
   }, []);
 
   const setConvergentSyncEnabled = useCallback((enabled: boolean) => {
@@ -774,7 +777,6 @@ export const useCloudSync = (): CloudSyncHook => {
     const next = enabled
       ? setConvergentSyncLocalConfig({ enabled: true, initialized: current.initialized })
       : pauseConvergentSync();
-    setConvergentSyncConfigState(next);
     return next;
   }, []);
 

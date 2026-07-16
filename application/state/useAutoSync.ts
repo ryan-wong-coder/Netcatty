@@ -34,6 +34,7 @@ import {
   LOCAL_STORAGE_ADAPTER_CHANGED_EVENT,
   localStorageAdapter,
 } from '../../infrastructure/persistence/localStorageAdapter';
+import { getConvergentSyncLocalConfig } from '../../infrastructure/services/convergentSyncConfig';
 import { notify } from '../notification';
 import {
   getRuntimeRemoteCheckIntervalMs,
@@ -137,6 +138,8 @@ export const useAutoSync = (config: AutoSyncConfig) => {
     tRef.current = t;
   }, [t]);
   const sync = useCloudSync();
+  const convergentSyncPaused = sync.convergentSyncConfig.initialized
+    && !sync.convergentSyncConfig.enabled;
   const { onApplyPayload } = config;
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSyncedDataRef = useRef<string>('');
@@ -241,7 +244,11 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // Sync now handler - get fresh state directly from manager
   const syncNow = useCallback(async (options?: SyncNowOptions): Promise<boolean> => {
     if (!enabled) return false;
-    if (sync.convergentSyncConfig.initialized && !sync.convergentSyncConfig.enabled) {
+    // Read through the shared external store at the operation boundary too.
+    // This closes the small window between a Settings toggle and React
+    // committing the subscription update in this hook instance.
+    const currentConvergentConfig = getConvergentSyncLocalConfig();
+    if (currentConvergentConfig.initialized && !currentConvergentConfig.enabled) {
       return false;
     }
     const trigger: SyncTrigger = options?.trigger ?? 'auto';
@@ -464,7 +471,12 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   }, [getDataHash]);
 
   const refreshPendingLocalSync = useCallback(async () => {
-    if (!enabled || !sync.hasAnyConnectedProvider || !sync.isUnlocked) {
+    if (
+      !enabled
+      || convergentSyncPaused
+      || !sync.hasAnyConnectedProvider
+      || !sync.isUnlocked
+    ) {
       manager.setPendingLocalSync(false);
       return;
     }
@@ -478,7 +490,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       appliedSkipHash: skipNextSyncHashRef.current,
     });
     manager.setPendingLocalSync(hashDecision === 'sync');
-  }, [enabled, sync.hasAnyConnectedProvider, sync.isUnlocked]);
+  }, [convergentSyncPaused, enabled, sync.hasAnyConnectedProvider, sync.isUnlocked]);
 
   const refreshPendingLocalSyncRef = useRef(refreshPendingLocalSync);
   useEffect(() => {
@@ -498,6 +510,10 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // Check remote version and pull if newer (on startup)
   const checkRemoteVersion = useCallback(async (options?: RemoteVersionCheckOptions) => {
     if (!enabled) {
+      return;
+    }
+    const currentConvergentConfig = getConvergentSyncLocalConfig();
+    if (currentConvergentConfig.initialized && !currentConvergentConfig.enabled) {
       return;
     }
     if (checkRemoteInFlightRef.current) {
@@ -760,6 +776,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // Debounced auto-sync when data changes
   useEffect(() => {
     if (!enabled) return;
+    if (convergentSyncPaused) return;
     // Skip if not ready
     if (!sync.hasAnyConnectedProvider || !sync.autoSyncEnabled || !sync.isUnlocked) {
       return;
@@ -868,6 +885,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
     config.settingsVersion,
     enabled,
     bookmarksVersion,
+    convergentSyncPaused,
     syncableSettingsStorageVersion,
   ]);
 
@@ -894,6 +912,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // outage (network blip, provider rate-limit) self-heal.
   useEffect(() => {
     if (!enabled) return;
+    if (convergentSyncPaused) return;
     if (
       !sync.hasAnyConnectedProvider ||
       !sync.isUnlocked ||
@@ -948,10 +967,12 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       cancelled = true;
       if (timerId) clearTimeout(timerId);
     };
-  }, [enabled, sync.hasAnyConnectedProvider, sync.isUnlocked, config.startupReady]);
+  }, [convergentSyncPaused, enabled, sync.hasAnyConnectedProvider, sync.isUnlocked, config.startupReady]);
 
   const runRuntimeRemoteCheck = useCallback(async (options?: { force?: boolean }) => {
     if (!enabled) return;
+    const currentConvergentConfig = getConvergentSyncLocalConfig();
+    if (currentConvergentConfig.initialized && !currentConvergentConfig.enabled) return;
     const now = Date.now();
     const minIntervalMs = getRuntimeRemoteCheckIntervalMs(sync.autoSyncInterval);
     if (!shouldRunRuntimeRemoteCheck({
@@ -987,6 +1008,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // this device edits anything locally.
   useEffect(() => {
     if (!enabled) return;
+    if (convergentSyncPaused) return;
     if (!sync.hasAnyConnectedProvider || !sync.autoSyncEnabled || !sync.isUnlocked) {
       return;
     }
@@ -998,6 +1020,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
 
     return () => window.clearInterval(timerId);
   }, [
+    convergentSyncPaused,
     enabled,
     runRuntimeRemoteCheck,
     sync.autoSyncEnabled,

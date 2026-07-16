@@ -17,9 +17,14 @@ const {
   getConvergentSyncLocalConfig,
   markConvergentSyncInitialized,
   pauseConvergentSync,
+  refreshConvergentSyncLocalConfigSnapshot,
+  subscribeConvergentSyncLocalConfig,
 } = await import('./convergentSyncConfig.ts');
 
-test.beforeEach(() => values.clear());
+test.beforeEach(() => {
+  values.clear();
+  refreshConvergentSyncLocalConfigSnapshot();
+});
 
 test('pausing an initialized replica preserves its initialized metadata', () => {
   markConvergentSyncInitialized();
@@ -36,4 +41,27 @@ test('downgrade state cannot be cleared without explicit confirmation', () => {
   assert.deepEqual(getConvergentSyncLocalConfig(), { enabled: true, initialized: true });
   clearConvergentSyncLocalConfigAfterDowngrade(true);
   assert.deepEqual(getConvergentSyncLocalConfig(), { enabled: false, initialized: false });
+});
+
+test('config changes notify every hook instance through the shared store', () => {
+  const snapshots: Array<{ enabled: boolean; initialized: boolean }> = [];
+  const unsubscribeFirst = subscribeConvergentSyncLocalConfig(() => {
+    snapshots.push(getConvergentSyncLocalConfig());
+  });
+  const unsubscribeSecond = subscribeConvergentSyncLocalConfig(() => {
+    snapshots.push(getConvergentSyncLocalConfig());
+  });
+
+  markConvergentSyncInitialized();
+  pauseConvergentSync();
+
+  assert.deepEqual(snapshots, [
+    { enabled: true, initialized: true },
+    { enabled: true, initialized: true },
+    { enabled: false, initialized: true },
+    { enabled: false, initialized: true },
+  ]);
+
+  unsubscribeFirst();
+  unsubscribeSecond();
 });
