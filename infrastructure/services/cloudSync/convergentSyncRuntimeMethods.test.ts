@@ -23,6 +23,7 @@ import { EncryptionService } from '../EncryptionService.ts';
 import type { CloudAdapter } from '../adapters/index.ts';
 import {
   downgradeConvergentSyncImpl,
+  previewConvergentRecoveryImpl,
   resolveConvergentConflictAndSyncImpl,
   syncAllProvidersConvergentlyImpl,
   syncConvergentProvidersUnlockedImpl,
@@ -280,6 +281,41 @@ test('an unchanged convergent check verifies without uploading or returning a pa
     assert.equal(github.uploads, 0);
     assert.equal(github.remote?.meta.version, 3);
   } finally {
+    encryption.restore();
+  }
+});
+
+test('recovery preview joins providers without persisting or uploading state', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const basePayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
+    const githubState = remoteState(base, basePayload, payload('remote-label'), 'github-device', NOW + 1);
+    const googleState = remoteState(base, basePayload, payload('base', 'remote-user'), 'google-device', NOW + 2);
+    const github = adapter(encryption.register(withConvergentSyncEnvelope(githubState, { syncedAt: NOW }), 2));
+    const google = adapter(encryption.register(withConvergentSyncEnvelope(googleState, { syncedAt: NOW }), 2));
+    const subject = manager(base, { github, google });
+
+    const preview = await previewConvergentRecoveryImpl.call(subject);
+
+    assert.equal(preview?.hosts[0]?.label, 'remote-label');
+    assert.equal(preview?.hosts[0]?.username, 'remote-user');
+    assert.equal(subject.persisted.length, 0);
+    assert.equal(github.uploads, 0);
+    assert.equal(google.uploads, 0);
+    assert.equal(subject.events.length, 0);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
     encryption.restore();
   }
 });
@@ -1097,10 +1133,10 @@ test('downgrade preserves concurrent provider candidates and blocks legacy write
     );
 
     assert.equal([...results.values()].every((result) => !result.success), true);
-    assert.equal(appliedPayload?.hosts[0]?.label, 'google-edit');
-    assert.equal(subject.state.convergentConflicts.length, 1);
+    assert.equal(appliedPayload, null);
+    assert.equal(subject.state.convergentConflicts.length, 0);
     assert.equal(subject.state.syncState, 'CONFLICT');
-    assert.equal(subject.persisted.length, 1);
+    assert.equal(subject.persisted.length, 0);
     assert.equal(github.uploads, 0);
     assert.equal(google.uploads, 0);
     assert.deepEqual(subject.completedDowngrades, []);

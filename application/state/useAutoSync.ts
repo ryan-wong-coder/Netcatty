@@ -17,11 +17,15 @@ import {
 } from '../../domain/credentials';
 import { isProviderReadyForSync, type CloudProvider, type SyncPayload } from '../../domain/sync';
 import { mergeSyncPayloads } from '../../domain/syncMerge';
-import { resolveCloudSyncConflictAction } from '../../domain/syncStrategy';
+import {
+  resolveCloudSyncConflictAction,
+  type CloudSyncConflictAction,
+} from '../../domain/syncStrategy';
 import {
   SYNCABLE_SETTING_STORAGE_KEYS,
   collectCloudSyncableSettings,
   getEffectivePortForwardingRulesForSync,
+  hasCloudSyncEntityData,
   hasMeaningfulCloudSyncData,
   sanitizePortForwardingRulesForSync,
   shouldPromptCloudVaultRecovery,
@@ -124,6 +128,7 @@ type SyncTrigger = 'auto' | 'manual';
 interface SyncNowOptions {
   trigger?: SyncTrigger;
   notifyOnFailure?: boolean;
+  conflictActionOverride?: CloudSyncConflictAction;
 }
 
 interface RemoteVersionCheckOptions {
@@ -338,7 +343,10 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       const dataHash = await getDataHash();
       const payload = await buildPayload();
       const encryptedCredentialPaths = findSyncPayloadEncryptedCredentialPaths(payload);
-      if (encryptedCredentialPaths.length > 0) {
+      if (
+        encryptedCredentialPaths.length > 0
+        && options?.conflictActionOverride !== 'download-remote'
+      ) {
         console.warn('[AutoSync] Blocked: encrypted credential placeholders found at:', encryptedCredentialPaths.join(', '));
         throw new Error(t('sync.credentialsUnavailable'));
       }
@@ -354,7 +362,10 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       // checkRemoteVersion below: if inspect transiently errors we still
       // let auto-sync run, trusting this guard to refuse if local is
       // truly empty rather than letting an empty state clobber remote.
-      if (!hasMeaningfulCloudSyncData(payload)) {
+      if (
+        !hasMeaningfulCloudSyncData(payload)
+        && options?.conflictActionOverride !== 'download-remote'
+      ) {
         if (trigger === 'auto') {
           console.warn('[AutoSync] Blocked: refusing to auto-sync an empty vault to cloud');
           return false;
@@ -362,7 +373,12 @@ export const useAutoSync = (config: AutoSyncConfig) => {
         throw new Error(t('sync.autoSync.emptyVaultManual'));
       }
 
-      const results = await sync.syncNow(payload);
+      const results = await sync.syncNow(
+        payload,
+        options?.conflictActionOverride
+          ? { conflictActionOverride: options.conflictActionOverride }
+          : undefined,
+      );
 
       // Apply merged payloads first (before checking for failures) so local
       // state gets updated even when some providers failed
@@ -560,12 +576,53 @@ export const useAutoSync = (config: AutoSyncConfig) => {
     let startupConsistent = false;
     let markCurrentDataSynced = true;
     let inspectedRemoteChange = false;
+    const requestEmptyVaultRecovery = async (remotePayload: SyncPayload) => {
+      const userAction = await new Promise<'restore' | 'keep-empty'>((resolve) => {
+        emptyVaultResolveRef.current = resolve;
+        setEmptyVaultConflict({
+          remotePayload,
+          hostCount: remotePayload.hosts?.length ?? 0,
+          keyCount: remotePayload.keys?.length ?? 0,
+          proxyProfileCount: remotePayload.proxyProfiles?.length ?? 0,
+          snippetCount: remotePayload.snippets?.length ?? 0,
+          noteCount: remotePayload.notes?.length ?? 0,
+        });
+      });
+      setEmptyVaultConflict(null);
+      emptyVaultResolveRef.current = null;
+      return userAction;
+    };
     try {
       if (currentConvergentConfig.initialized && currentConvergentConfig.enabled) {
         // A v2 remote check must join the provider replicas through the CRDT
         // runtime. Inspecting the materialized v1 snapshot here would discard
         // retained candidates and could turn the deterministic winner into a
         // local write that silently resolves a real field conflict.
+        const localPayload = await buildPayloadRef.current();
+        if (!hasCloudSyncEntityData(localPayload)) {
+          const recoveryPayload = await manager.previewConvergentRecovery();
+          if (recoveryPayload && shouldPromptCloudVaultRecovery(localPayload, recoveryPayload)) {
+            const userAction = await requestEmptyVaultRecovery(recoveryPayload);
+            if (userAction === 'restore') {
+              const restored = await syncNowRef.current({
+                notifyOnFailure,
+                conflictActionOverride: 'download-remote',
+              });
+              if (restored) {
+                notify.success(
+                  tRef.current('sync.autoSync.restoredMessage'),
+                  tRef.current('sync.autoSync.restoredTitle'),
+                );
+              }
+            } else {
+              notify.info(
+                tRef.current('sync.autoSync.keptLocalMessage'),
+                tRef.current('sync.autoSync.keptLocalTitle'),
+              );
+            }
+            return;
+          }
+        }
         await syncNowRef.current({ notifyOnFailure });
         return;
       }
@@ -590,19 +647,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       // means the user's data was lost (update, storage corruption, etc.).
       // Pause and ask the user what to do instead of silently merging.
       if (shouldPromptCloudVaultRecovery(localPayload, remotePayload)) {
-        const userAction = await new Promise<'restore' | 'keep-empty'>((resolve) => {
-          emptyVaultResolveRef.current = resolve;
-          setEmptyVaultConflict({
-            remotePayload,
-            hostCount: remotePayload.hosts?.length ?? 0,
-            keyCount: remotePayload.keys?.length ?? 0,
-            proxyProfileCount: remotePayload.proxyProfiles?.length ?? 0,
-            snippetCount: remotePayload.snippets?.length ?? 0,
-            noteCount: remotePayload.notes?.length ?? 0,
-          });
-        });
-        setEmptyVaultConflict(null);
-        emptyVaultResolveRef.current = null;
+        const userAction = await requestEmptyVaultRecovery(remotePayload);
 
         if (userAction === 'restore') {
           // Apply remote FIRST; only commit anchor/base after the UI-side

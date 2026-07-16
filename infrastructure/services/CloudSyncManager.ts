@@ -130,6 +130,7 @@ import {
 } from './cloudSync/convergentSyncStorageMethods';
 import {
   downgradeConvergentSyncImpl,
+  previewConvergentRecoveryImpl,
   resolveConvergentConflictAndSyncImpl,
   syncConvergentProvidersUnlockedImpl,
   withConvergentSyncWebLock,
@@ -904,6 +905,10 @@ export class CloudSyncManager {
       candidateDot,
       applyPayload,
     );
+  }
+
+  async previewConvergentRecovery(): Promise<SyncPayload | null> {
+    return previewConvergentRecoveryImpl.call(this);
   }
 
   async downgradeConvergentSync(

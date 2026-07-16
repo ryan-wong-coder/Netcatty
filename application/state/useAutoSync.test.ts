@@ -95,6 +95,39 @@ test("enabled convergent remote checks use the CRDT runtime before legacy inspec
   );
 });
 
+test("enabled convergent startup checks preview empty-vault recovery before syncing", () => {
+  const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
+  const convergentGuardIndex = source.indexOf(
+    "if (currentConvergentConfig.initialized && currentConvergentConfig.enabled)",
+  );
+  const previewIndex = source.indexOf("manager.previewConvergentRecovery()", convergentGuardIndex);
+  const recoveryPromptIndex = source.indexOf(
+    "requestEmptyVaultRecovery(recoveryPayload)",
+    previewIndex,
+  );
+  const cloudWinsIndex = source.indexOf(
+    "conflictActionOverride: 'download-remote'",
+    recoveryPromptIndex,
+  );
+  const normalSyncIndex = source.indexOf(
+    "await syncNowRef.current({ notifyOnFailure })",
+    cloudWinsIndex,
+  );
+
+  assert.notEqual(convergentGuardIndex, -1);
+  assert.notEqual(previewIndex, -1);
+  assert.notEqual(recoveryPromptIndex, -1);
+  assert.notEqual(cloudWinsIndex, -1);
+  assert.notEqual(normalSyncIndex, -1);
+  assert.ok(
+    convergentGuardIndex < previewIndex
+      && previewIndex < recoveryPromptIndex
+      && recoveryPromptIndex < cloudWinsIndex
+      && cloudWinsIndex < normalSyncIndex,
+    "v2 startup must offer recovery and use cloud-wins before the normal CRDT sync path",
+  );
+});
+
 test("auto-sync skips only the exact remote-applied data hash", () => {
   const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
   const helperIndex = source.indexOf("const getSyncPayloadDataHash = (payload: SyncPayload): string");

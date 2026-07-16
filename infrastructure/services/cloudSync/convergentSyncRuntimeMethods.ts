@@ -223,10 +223,13 @@ async function runInitialDownloads(
   manager: any,
   providers: CloudProvider[],
   syncSecurityGeneration?: number,
+  announce = true,
 ): Promise<ProviderRuntime[]> {
   return Promise.all(providers.map(async (provider): Promise<ProviderRuntime> => {
-    manager.updateProviderStatus(provider, 'syncing');
-    manager.emit({ type: 'SYNC_STARTED', provider });
+    if (announce) {
+      manager.updateProviderStatus(provider, 'syncing');
+      manager.emit({ type: 'SYNC_STARTED', provider });
+    }
     try {
       const adapter = await manager.getConnectedAdapter(provider) as CloudAdapter;
       assertSyncSecurityGeneration(manager, syncSecurityGeneration);
@@ -613,6 +616,37 @@ export async function syncAllProvidersConvergentlyImpl(
   }
 }
 
+export async function previewConvergentRecoveryImpl(
+  this: any,
+): Promise<SyncPayload | null> {
+  return withConvergentSyncWebLock(async () => {
+    if (this.state.securityState !== 'UNLOCKED' || !this.masterPassword) {
+      throw new Error('Vault is locked');
+    }
+    const providers = connectedProviders(this);
+    if (providers.length === 0) return null;
+    const syncSecurityGeneration = getSyncSecurityGeneration(this);
+    const runtimes = await runInitialDownloads(
+      this,
+      providers,
+      syncSecurityGeneration,
+      false,
+    );
+    const failed = runtimes.find((runtime) => runtime.error || !runtime.adapter);
+    if (failed) {
+      const message = failed.error ?? 'provider adapter unavailable';
+      updateProviderFailure(this, failed.provider, message);
+      throw new Error(`Recovery preflight failed for ${failed.provider}: ${message}`);
+    }
+    const remoteStates = runtimes.flatMap((runtime) => (
+      runtime.verifiedState ? [runtime.verifiedState] : []
+    ));
+    if (remoteStates.length === 0) return null;
+    const [first, ...rest] = remoteStates;
+    return materializedPayload(mergeStates(first, rest), Date.now());
+  });
+}
+
 async function prepareConvergentConflictResolutionImpl(
   this: any,
   addressKey: string,
@@ -734,6 +768,22 @@ export async function downgradeConvergentSyncImpl(
       withLocalWrites,
       runtimes.flatMap((runtime) => runtime.verifiedState ? [runtime.verifiedState] : []),
     );
+    const conflicts = currentConflicts(canonical);
+    if (conflicts.length > 0) {
+      const message = `Resolve ${conflicts.length} convergent conflict(s) before downgrading`;
+      for (const provider of providers) {
+        results.set(provider, failedResult(provider, message));
+        this.updateProviderStatus(provider, 'connected');
+      }
+      this.state.syncState = 'CONFLICT';
+      this.state.lastError = message;
+      this.notifyStateChange();
+      if (providers.length === 0) {
+        throw new Error(message);
+      }
+      return results;
+    }
+
     const outgoing = materializedPayload(canonical, now);
     assertSyncSecurityGeneration(this, syncSecurityGeneration);
     let committed = false;
@@ -759,22 +809,6 @@ export async function downgradeConvergentSyncImpl(
       throw error;
     }
     assertSyncSecurityGeneration(this, syncSecurityGeneration);
-
-    const conflicts = currentConflicts(canonical);
-    if (conflicts.length > 0) {
-      const message = `Resolve ${conflicts.length} convergent conflict(s) before downgrading`;
-      for (const provider of providers) {
-        results.set(provider, failedResult(provider, message));
-        this.updateProviderStatus(provider, 'connected');
-      }
-      this.state.syncState = 'CONFLICT';
-      this.state.lastError = message;
-      this.notifyStateChange();
-      if (providers.length === 0) {
-        throw new Error(message);
-      }
-      return results;
-    }
 
     await Promise.all(runtimes.map(async (runtime) => {
       const { provider, adapter, latestRemote: before } = runtime;
