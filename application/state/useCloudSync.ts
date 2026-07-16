@@ -50,6 +50,17 @@ import {
 // Types
 // ============================================================================
 
+type ConvergentPayloadApplier = (
+  payload: SyncPayload,
+  commitReplica: () => Promise<void>,
+) => Promise<void>;
+
+interface CloudSyncRunOptions {
+  overrideShrink?: boolean;
+  conflictActionOverride?: CloudSyncConflictAction;
+  applyConvergentPayload?: ConvergentPayloadApplier;
+}
+
 export interface CloudSyncHook {
   // State
   securityState: SecurityState;
@@ -109,8 +120,12 @@ export interface CloudSyncHook {
   resetProviderStatus: (provider: CloudProvider) => void;
 
   // Sync Actions
-  syncNow: (payload: SyncPayload, opts?: { overrideShrink?: boolean; conflictActionOverride?: CloudSyncConflictAction }) => Promise<Map<CloudProvider, SyncResult>>;
-  syncToProvider: (provider: CloudProvider, payload: SyncPayload, opts?: { overrideShrink?: boolean }) => Promise<SyncResult>;
+  syncNow: (payload: SyncPayload, opts?: CloudSyncRunOptions) => Promise<Map<CloudProvider, SyncResult>>;
+  syncToProvider: (
+    provider: CloudProvider,
+    payload: SyncPayload,
+    opts?: Pick<CloudSyncRunOptions, 'overrideShrink' | 'applyConvergentPayload'>,
+  ) => Promise<SyncResult>;
   downloadFromProvider: (provider: CloudProvider) => Promise<RemoteSyncPayload | null>;
   commitRemoteInspection: (provider: CloudProvider, remoteFile: SyncedFile, payload: SyncPayload, opts?: { recordDownload?: boolean }) => Promise<void>;
   resolveConflict: (resolution: ConflictResolution) => Promise<RemoteSyncPayload | null>;
@@ -717,25 +732,16 @@ export const useCloudSync = (): CloudSyncHook => {
     throw new Error('Vault is locked');
   }, []);
 
-  const syncNowWithUnlock = useCallback(async (payload: SyncPayload, opts?: {
-    overrideShrink?: boolean;
-    conflictActionOverride?: CloudSyncConflictAction;
-    applyConvergentPayload?: (
-      payload: SyncPayload,
-      commitReplica: () => Promise<void>,
-    ) => Promise<void>;
-  }) => {
+  const syncNowWithUnlock = useCallback(async (payload: SyncPayload, opts?: CloudSyncRunOptions) => {
     await ensureUnlocked();
     return await manager.syncAllProviders(payload, opts);
   }, [ensureUnlocked]);
 
-  const syncToProviderWithUnlock = useCallback(async (provider: CloudProvider, payload: SyncPayload, opts?: {
-    overrideShrink?: boolean;
-    applyConvergentPayload?: (
-      payload: SyncPayload,
-      commitReplica: () => Promise<void>,
-    ) => Promise<void>;
-  }) => {
+  const syncToProviderWithUnlock = useCallback(async (
+    provider: CloudProvider,
+    payload: SyncPayload,
+    opts?: Pick<CloudSyncRunOptions, 'overrideShrink' | 'applyConvergentPayload'>,
+  ) => {
     await ensureUnlocked();
     return await manager.syncToProvider(provider, payload, opts);
   }, [ensureUnlocked]);

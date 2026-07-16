@@ -77,7 +77,7 @@ test("enabled convergent remote checks use the CRDT runtime before legacy inspec
     checkIndex,
   );
   const convergentSyncIndex = source.indexOf(
-    "await syncNowRef.current({ notifyOnFailure })",
+    "syncNowRef.current({ notifyOnFailure, allowEmptyConvergentSync })",
     convergentGuardIndex,
   );
   const legacyInspectionIndex = source.indexOf(
@@ -110,7 +110,7 @@ test("enabled convergent startup checks preview empty-vault recovery before sync
     recoveryPromptIndex,
   );
   const normalSyncIndex = source.indexOf(
-    "await syncNowRef.current({ notifyOnFailure })",
+    "syncNowRef.current({ notifyOnFailure, allowEmptyConvergentSync })",
     cloudWinsIndex,
   );
 
@@ -126,6 +126,29 @@ test("enabled convergent startup checks preview empty-vault recovery before sync
       && cloudWinsIndex < normalSyncIndex,
     "v2 startup must offer recovery and use cloud-wins before the normal CRDT sync path",
   );
+});
+
+test("empty v2 startup checks allow a validated empty sync to open the gate", () => {
+  const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
+  const convergentGuardIndex = source.indexOf(
+    "if (currentConvergentConfig.initialized && currentConvergentConfig.enabled)",
+  );
+  const replicaIndex = source.indexOf("manager.loadConvergentReplica()", convergentGuardIndex);
+  const emptyDecisionIndex = source.indexOf("allowEmptyConvergentSync = (", replicaIndex);
+  const syncIndex = source.indexOf(
+    "syncNowRef.current({ notifyOnFailure, allowEmptyConvergentSync })",
+    emptyDecisionIndex,
+  );
+  const guardIndex = source.indexOf(
+    "options?.allowEmptyConvergentSync !== true",
+    source.indexOf("const syncNow = useCallback"),
+  );
+
+  assert.notEqual(replicaIndex, -1);
+  assert.notEqual(emptyDecisionIndex, -1);
+  assert.notEqual(syncIndex, -1);
+  assert.notEqual(guardIndex, -1);
+  assert.ok(replicaIndex < emptyDecisionIndex && emptyDecisionIndex < syncIndex);
 });
 
 test("auto-sync skips only the exact remote-applied data hash", () => {

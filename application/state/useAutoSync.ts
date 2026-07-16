@@ -17,6 +17,7 @@ import {
 } from '../../domain/credentials';
 import { isProviderReadyForSync, type CloudProvider, type SyncPayload } from '../../domain/sync';
 import { mergeSyncPayloads } from '../../domain/syncMerge';
+import { materializeSyncPayloadFromConvergentState } from '../../domain/convergentSync';
 import {
   resolveCloudSyncConflictAction,
   type CloudSyncConflictAction,
@@ -133,6 +134,7 @@ interface SyncNowOptions {
   trigger?: SyncTrigger;
   notifyOnFailure?: boolean;
   conflictActionOverride?: CloudSyncConflictAction;
+  allowEmptyConvergentSync?: boolean;
 }
 
 interface RemoteVersionCheckOptions {
@@ -369,6 +371,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       if (
         !hasMeaningfulCloudSyncData(payload)
         && options?.conflictActionOverride !== 'download-remote'
+        && options?.allowEmptyConvergentSync !== true
       ) {
         if (trigger === 'auto') {
           console.warn('[AutoSync] Blocked: refusing to auto-sync an empty vault to cloud');
@@ -606,8 +609,9 @@ export const useAutoSync = (config: AutoSyncConfig) => {
         // retained candidates and could turn the deterministic winner into a
         // local write that silently resolves a real field conflict.
         const localPayload = await buildPayloadRef.current();
+        let recoveryPayload: SyncPayload | null = null;
         if (!hasCloudSyncEntityData(localPayload)) {
-          const recoveryPayload = await manager.previewConvergentRecovery();
+          recoveryPayload = await manager.previewConvergentRecovery();
           if (recoveryPayload && shouldPromptCloudVaultRecovery(localPayload, recoveryPayload)) {
             const userAction = await requestEmptyVaultRecovery(recoveryPayload);
             if (userAction === 'restore') {
@@ -630,7 +634,18 @@ export const useAutoSync = (config: AutoSyncConfig) => {
             return;
           }
         }
-        await syncNowRef.current({ notifyOnFailure });
+        let allowEmptyConvergentSync = false;
+        if (!hasMeaningfulCloudSyncData(localPayload)) {
+          const replica = await manager.loadConvergentReplica();
+          const replicaPayload = replica
+            ? materializeSyncPayloadFromConvergentState(replica.state, { syncedAt: Date.now() })
+            : null;
+          allowEmptyConvergentSync = (
+            (!recoveryPayload || !hasMeaningfulCloudSyncData(recoveryPayload))
+            && (!replicaPayload || !hasMeaningfulCloudSyncData(replicaPayload))
+          );
+        }
+        await syncNowRef.current({ notifyOnFailure, allowEmptyConvergentSync });
         return;
       }
 
