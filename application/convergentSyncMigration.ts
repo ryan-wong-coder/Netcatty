@@ -21,6 +21,7 @@ import { applyProtectedSyncPayload } from './localVaultBackups';
 export interface PreparedConvergentMigration {
   plan: ConvergentMigrationPlan;
   providerBaselines: ConvergentProviderBaselineV2[];
+  localSnapshot: SyncPayload;
 }
 
 interface LegacyProviderBaselineSeed {
@@ -103,8 +104,11 @@ export async function prepareConvergentSyncMigration(
   const localTrustedBaseline = selectLocalTrustedBaseline(
     [...baselineByProvider.values()].filter((value): value is SyncPayload => value !== null),
   );
+  const localSnapshot = JSON.parse(JSON.stringify(
+    stripConvergentSyncEnvelope(localPayload),
+  )) as SyncPayload;
   const plan = planConvergentSyncMigration({
-    localPayload: stripConvergentSyncEnvelope(localPayload),
+    localPayload: localSnapshot,
     localTrustedBaseline,
     providers: inputs,
     deviceId: manager.getState().deviceId,
@@ -124,12 +128,14 @@ export async function prepareConvergentSyncMigration(
   }
   return {
     providerBaselines: providerBaselines.sort((left, right) => left.provider.localeCompare(right.provider)),
+    localSnapshot,
     plan,
   };
 }
 
 export async function initializePreparedConvergentMigration(options: {
   prepared: PreparedConvergentMigration;
+  buildCurrentPayload: () => SyncPayload | Promise<SyncPayload>;
   buildPreApplyPayload: () => SyncPayload;
   applyPayload: (payload: SyncPayload) => void | Promise<void>;
   translateProtectiveBackupFailure: (message: string) => string;
@@ -150,17 +156,25 @@ export async function initializePreparedConvergentMigration(options: {
   await manager.withConvergentSyncLock(() => runProtectedApply({
     buildPreApplyPayload: options.buildPreApplyPayload,
     translateProtectiveBackupFailure: options.translateProtectiveBackupFailure,
-    applyPayload: async () => {
-      await options.applyPayload(prepared.plan.payload as SyncPayload);
-      for (const baseline of prepared.providerBaselines) {
-        await manager.saveConvergentProviderBaseline(baseline);
+    prepareApply: async () => {
+      const currentPayload = stripConvergentSyncEnvelope(await options.buildCurrentPayload());
+      if (!cloudSyncPayloadsEqual(prepared.localSnapshot, currentPayload)) {
+        throw new Error(
+          'Local sync data changed after the migration preview. Review the updated migration before enabling convergent sync.',
+        );
       }
-      await manager.saveConvergentReplica({
-        schemaVersion: 2,
-        state: prepared.plan.state as NonNullable<ConvergentMigrationPlan['state']>,
-        updatedAt: now,
-      });
-      markConvergentSyncInitialized();
+      return async () => {
+        await options.applyPayload(prepared.plan.payload as SyncPayload);
+        for (const baseline of prepared.providerBaselines) {
+          await manager.saveConvergentProviderBaseline(baseline);
+        }
+        await manager.saveConvergentReplica({
+          schemaVersion: 2,
+          state: prepared.plan.state as NonNullable<ConvergentMigrationPlan['state']>,
+          updatedAt: now,
+        });
+        markConvergentSyncInitialized();
+      };
     },
   }));
   return prepared.plan.preview;

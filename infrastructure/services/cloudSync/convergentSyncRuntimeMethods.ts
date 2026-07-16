@@ -611,7 +611,18 @@ export async function resolveConvergentConflictAndSyncImpl(
       throw new Error('Convergent conflict apply completed without committing its replica');
     }
     const results = await syncConvergentProvidersUnlockedImpl.call(this, prepared.payload);
-    return { payload: prepared.payload, results };
+    const finalReplica = await this.loadConvergentReplica();
+    if (!finalReplica) {
+      throw new Error('Convergent sync replica disappeared after conflict propagation');
+    }
+    const finalPayload = materializedPayload(finalReplica.state, Date.now());
+    if (!cloudSyncPayloadsEqual(prepared.payload, finalPayload)) {
+      // Propagation can discover a concurrent provider write. Apply the final
+      // canonical materialization before releasing the same Web Lock so no
+      // window can turn the stale pre-propagation vault into a new CRDT write.
+      await applyPayload(finalPayload, async () => {});
+    }
+    return { payload: finalPayload, results };
   });
 }
 

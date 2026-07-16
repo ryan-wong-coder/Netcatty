@@ -84,14 +84,16 @@ downgrade confirmation.
 
 Local vault backups remain materialized snapshots and never carry the active
 replica. Migration initialization uses the existing protected-apply transaction:
-it snapshots the live vault when the user confirms, creates a required encrypted
-safety backup, holds the cross-window restore barrier, applies the previewed
-materialized payload, persists the canonical replica, and only then marks v2
-initialized. Edits made while the preview was open are therefore recoverable.
-The sync manager must still be unlocked immediately before this transaction;
-otherwise initialization fails before any backup, sentinel, or local mutation.
-A crash or failure after mutation starts leaves the existing apply sentinel set
-so auto-sync cannot publish a partial migration.
+under the convergent Web Lock it rebuilds the current cloud-sync payload and
+compares it with the snapshot used for the preview. Any intervening local edit
+aborts initialization and requires a new preview. An unchanged vault gets a
+required encrypted safety backup, holds the cross-window restore barrier,
+applies the previewed materialized payload, persists the canonical replica, and
+only then marks v2 initialized. The sync manager must still be unlocked
+immediately before this transaction; otherwise initialization fails before any
+backup, sentinel, or local mutation. A crash or failure after mutation starts
+leaves the existing apply sentinel set so auto-sync cannot publish a partial
+migration.
 
 Before a local backup restore mutates local data, the restored snapshot is
 diffed against the current materialized replica and prepared as normal device
@@ -150,9 +152,12 @@ dots. Provider baselines advance only after read-back verification.
 Materialization exposes retained conflicts by register address. Choosing a
 candidate writes a new device value whose context observes every candidate;
 the resolution therefore dominates stale replicas and propagates through the
-normal provider state machine. Secret-bearing fields are detected from their
-address and nested field names. Their UI renders only “set” or “empty”; values
-are never formatted, logged, or inserted into DOM text.
+normal provider state machine. If propagation discovers additional concurrent
+provider writes, Netcatty applies the final canonical materialization locally
+before releasing the same Web Lock. Secret-bearing fields are detected from
+their address and nested field names, including objects nested inside atomic
+arrays. Their UI renders only “set” or “empty”; values are never formatted,
+logged, or inserted into DOM text.
 
 Explicit downgrade holds the same Web Lock and downloads every connected
 provider before writing anything. Netcatty joins those remote states with the

@@ -119,9 +119,10 @@ test('initialization applies the protected preview before persisting and enablin
   } as unknown as CloudSyncManager;
 
   await initializePreparedConvergentMigration({
-    prepared: { plan, providerBaselines: [] },
+    prepared: { plan, providerBaselines: [], localSnapshot: localPayload },
     manager,
     now: NOW,
+    buildCurrentPayload: () => localPayload,
     buildPreApplyPayload: () => {
       calls.push('snapshot');
       return liveLocalPayload;
@@ -133,13 +134,67 @@ test('initialization applies the protected preview before persisting and enablin
     },
     runProtectedApply: async (options) => {
       calls.push('protect');
+      if (!options.prepareApply) throw new Error('Expected prepared migration apply');
+      const apply = await options.prepareApply();
       assert.equal(options.buildPreApplyPayload(), liveLocalPayload);
-      await options.applyPayload();
+      await apply();
     },
   });
 
   assert.deepEqual(calls, ['lock', 'protect', 'snapshot', 'apply', 'replica']);
   assert.deepEqual(getConvergentSyncLocalConfig(), { enabled: true, initialized: true });
+});
+
+test('initialization rejects a stale preview before backup or apply', async () => {
+  const localPayload = payload();
+  const changedPayload: SyncPayload = {
+    ...payload(),
+    hosts: [{
+      id: 'host-after-preview',
+      label: 'Added after preview',
+      hostname: 'new.example.com',
+      port: 22,
+      username: 'root',
+      tags: [],
+      os: 'linux',
+    }],
+  };
+  const plan = planConvergentSyncMigration({
+    localPayload,
+    localTrustedBaseline: null,
+    providers: [],
+    deviceId: 'device-a',
+    now: NOW,
+  });
+  let protectedApplyEntered = false;
+  let applied = false;
+  const manager = {
+    isUnlocked: () => true,
+    withConvergentSyncLock: async (task: () => Promise<void>) => task(),
+  } as unknown as CloudSyncManager;
+
+  await assert.rejects(
+    () => initializePreparedConvergentMigration({
+      prepared: { plan, providerBaselines: [], localSnapshot: localPayload },
+      manager,
+      buildCurrentPayload: () => changedPayload,
+      buildPreApplyPayload: () => changedPayload,
+      translateProtectiveBackupFailure: (message) => message,
+      applyPayload: () => {
+        applied = true;
+      },
+      runProtectedApply: async (options) => {
+        protectedApplyEntered = true;
+        if (!options.prepareApply) throw new Error('Expected prepared migration apply');
+        await options.prepareApply();
+      },
+    }),
+    /changed after the migration preview/i,
+  );
+
+  assert.equal(protectedApplyEntered, true);
+  assert.equal(applied, false);
+  assert.deepEqual(getConvergentSyncLocalConfig(), { enabled: false, initialized: false });
 });
 
 test('blocked previews cannot enter the protected initialization transaction', async () => {
@@ -155,8 +210,9 @@ test('blocked previews cannot enter the protected initialization transaction', a
 
   await assert.rejects(
     () => initializePreparedConvergentMigration({
-      prepared: { plan, providerBaselines: [] },
+      prepared: { plan, providerBaselines: [], localSnapshot: localPayload },
       manager: {} as CloudSyncManager,
+      buildCurrentPayload: () => localPayload,
       buildPreApplyPayload: () => localPayload,
       translateProtectiveBackupFailure: (message) => message,
       applyPayload: () => {},
@@ -188,8 +244,9 @@ test('a locked manager cannot enter the protected initialization transaction', a
 
   await assert.rejects(
     () => initializePreparedConvergentMigration({
-      prepared: { plan, providerBaselines: [] },
+      prepared: { plan, providerBaselines: [], localSnapshot: localPayload },
       manager,
+      buildCurrentPayload: () => localPayload,
       buildPreApplyPayload: () => {
         snapshotBuilt = true;
         return localPayload;

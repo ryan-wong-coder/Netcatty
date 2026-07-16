@@ -312,6 +312,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         try {
             await initializePreparedConvergentMigration({
                 prepared: preparedConvergentMigration,
+                buildCurrentPayload: onBuildPayload,
                 buildPreApplyPayload: onBuildLocalPayload,
                 applyPayload: onApplyPayload,
                 translateProtectiveBackupFailure: (message) =>
@@ -330,7 +331,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         } finally {
             setConvergentBusy(false);
         }
-    }, [onApplyPayload, onBuildLocalPayload, preparedConvergentMigration, sync, t]);
+    }, [onApplyPayload, onBuildLocalPayload, onBuildPayload, preparedConvergentMigration, sync, t]);
 
     const handleResolveConvergentConflict = useCallback(async (
         addressKey: string,

@@ -849,13 +849,19 @@ test('conflict resolution and provider propagation share one Web Lock', async ()
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   try {
     let lockCalls = 0;
+    let lockHeld = false;
     Object.defineProperty(globalThis, 'navigator', {
       configurable: true,
       value: {
         locks: {
           request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => {
             lockCalls += 1;
-            return callback({});
+            lockHeld = true;
+            try {
+              return await callback({});
+            } finally {
+              lockHeld = false;
+            }
           },
         },
       },
@@ -870,13 +876,39 @@ test('conflict resolution and provider propagation share one Web Lock', async ()
     )!;
     const selected = conflict.candidates.find((candidate) => candidate.value === 'left')!;
     const github = adapter(encryption.register(withConvergentSyncEnvelope(conflicted, { syncedAt: NOW }), 2));
+    let injected = false;
+    github.afterUpload = (file, target) => {
+      if (injected) return;
+      injected = true;
+      const outgoingPayload = encryption.payloads.get(file.payload)!;
+      const outgoingState = validateConvergentSyncPayload(file.meta, outgoingPayload)!;
+      const outgoingMaterialized = materializeSyncPayloadFromConvergentState(
+        outgoingState,
+        { syncedAt: NOW },
+      );
+      const concurrent = remoteState(
+        outgoingState,
+        outgoingMaterialized,
+        payload('left', 'remote-user'),
+        'racing-device',
+        NOW + 20,
+      );
+      target.remote = encryption.register(
+        withConvergentSyncEnvelope(concurrent, { syncedAt: NOW + 20 }),
+        file.meta.version + 1,
+        'racing-device',
+      );
+    };
     const subject = manager(conflicted, { github });
+    const appliedPayloads: SyncPayload[] = [];
 
     const result = await resolveConvergentConflictAndSyncImpl.call(
       subject,
       JSON.stringify(['entity-field', 'hosts', 'host-1', 'label']),
       `${selected.dot.deviceId}:${selected.dot.counter}`,
-      async (_payload: SyncPayload, commitReplica: () => Promise<void>) => {
+      async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        assert.equal(lockHeld, true);
+        appliedPayloads.push(incoming);
         await commitReplica();
       },
     );
@@ -884,6 +916,10 @@ test('conflict resolution and provider propagation share one Web Lock', async ()
     assert.equal(lockCalls, 1);
     assert.equal(result.results.get('github')?.success, true);
     assert.equal(result.payload.hosts[0]?.label, 'left');
+    assert.equal(result.payload.hosts[0]?.username, 'remote-user');
+    assert.equal(appliedPayloads.length, 2);
+    assert.equal(appliedPayloads[0]?.hosts[0]?.username, 'root');
+    assert.equal(appliedPayloads[1]?.hosts[0]?.username, 'remote-user');
     assert.equal(subject.state.convergentConflicts.length, 0);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
