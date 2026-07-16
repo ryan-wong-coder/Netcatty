@@ -160,5 +160,8 @@ local replica, applies the joined payload behind a protective backup, and
 blocks downgrade until any newly discovered field conflicts are resolved. It
 then writes the joined materialized v1 snapshot to every provider, downloads it
 again, and verifies both the absence of v2 metadata and equality of cloud data.
-A partial downgrade keeps the joined local v2 state and refreshed provider
-baselines so the user can retry safely without losing remote-only dots.
+Only after every provider verifies does Netcatty clear the local replica,
+provider baselines, and experimental configuration, still inside the same Web
+Lock. A partial downgrade keeps the joined local v2 state and refreshed
+provider baselines so the user can retry safely without losing remote-only
+dots.

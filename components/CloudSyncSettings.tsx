@@ -31,7 +31,6 @@ import {
     type S3Config,
 } from '../domain/sync';
 import {
-    completeConvergentSyncDowngrade,
     initializePreparedConvergentMigration,
     prepareConvergentSyncMigration,
     type PreparedConvergentMigration,
@@ -366,7 +365,6 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
             );
             const failed = [...results.values()].find((result) => !result.success);
             if (failed) throw new Error(failed.error || t('sync.autoSync.syncFailed'));
-            completeConvergentSyncDowngrade(true);
             sync.refreshConvergentSyncConfig();
             setPreparedConvergentMigration(null);
             setConvergentPreview(null);

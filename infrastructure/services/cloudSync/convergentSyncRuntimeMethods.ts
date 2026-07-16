@@ -67,6 +67,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function updateProviderFailure(
+  manager: any,
+  provider: CloudProvider,
+  error: unknown,
+): string {
+  const message = errorMessage(error);
+  const reauthHandled = typeof manager.handleProviderReauthRequired === 'function'
+    && manager.handleProviderReauthRequired(provider, error);
+  if (!reauthHandled) manager.updateProviderStatus(provider, 'error', message);
+  return message;
+}
+
 function connectedProviders(manager: any): CloudProvider[] {
   return (Object.entries(manager.state.providers) as Array<[
     CloudProvider,
@@ -466,7 +478,7 @@ export async function syncConvergentProvidersUnlockedImpl(
       const message = runtime.error ?? `Provider did not converge after ${maxRounds} verification rounds`;
       runtime.error = message;
       results.set(runtime.provider, failedResult(runtime.provider, message));
-      this.updateProviderStatus(runtime.provider, 'error', message);
+      updateProviderFailure(this, runtime.provider, message);
       this.emit({ type: 'SYNC_ERROR', provider: runtime.provider, error: message });
       this.addSyncHistoryEntry({
         timestamp: now(),
@@ -539,7 +551,7 @@ export async function syncAllProvidersConvergentlyImpl(
     const results = new Map<CloudProvider, SyncResult>();
     for (const provider of connectedProviders(this)) {
       results.set(provider, failedResult(provider, message));
-      this.updateProviderStatus(provider, 'error', message);
+      updateProviderFailure(this, provider, error);
       this.emit({ type: 'SYNC_ERROR', provider, error: message });
     }
     this.state.syncState = 'ERROR';
@@ -630,7 +642,11 @@ export async function downgradeConvergentSyncImpl(
       const message = `Downgrade preflight failed for ${failedPreflight.provider}: ${failedPreflight.error ?? 'provider adapter unavailable'}`;
       for (const provider of providers) {
         results.set(provider, failedResult(provider, message));
-        this.updateProviderStatus(provider, 'error', message);
+        if (provider === failedPreflight.provider) {
+          updateProviderFailure(this, provider, failedPreflight.error ?? message);
+        } else {
+          this.updateProviderStatus(provider, 'error', message);
+        }
       }
       this.state.pendingLocalSync = true;
       this.state.syncState = 'ERROR';
@@ -725,12 +741,23 @@ export async function downgradeConvergentSyncImpl(
         });
         this.updateProviderStatus(provider, 'connected');
       } catch (error) {
-        const message = errorMessage(error);
+        const message = updateProviderFailure(this, provider, error);
         results.set(provider, failedResult(provider, message));
-        this.updateProviderStatus(provider, 'error', message);
       }
     }));
-    const failed = [...results.values()].find((result) => !result.success);
+    let failed = [...results.values()].find((result) => !result.success);
+    if (!failed) {
+      try {
+        this.completeConvergentSyncDowngrade(true);
+      } catch (error) {
+        const message = `Unable to finalize convergent downgrade: ${errorMessage(error)}`;
+        for (const provider of providers) {
+          results.set(provider, failedResult(provider, message));
+          this.updateProviderStatus(provider, 'error', message);
+        }
+        failed = results.get(providers[0]!);
+      }
+    }
     this.state.pendingLocalSync = Boolean(failed);
     this.state.syncState = failed ? 'ERROR' : 'IDLE';
     this.state.lastError = failed?.error ?? null;

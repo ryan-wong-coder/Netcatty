@@ -8,6 +8,7 @@ import type {
   SyncPayload,
   SyncedFile,
 } from '../../../domain/sync.ts';
+import { ONEDRIVE_REAUTH_REQUIRED_MARKER } from '../../../domain/sync.ts';
 import {
   applyLegacySyncPayload,
   cloudSyncPayloadsEqual,
@@ -83,6 +84,7 @@ interface MemoryAdapter extends CloudAdapter {
   uploads: number;
   remote: SyncedFile | null;
   failDownload?: boolean;
+  downloadError?: Error;
   afterUpload?: (file: SyncedFile, adapter: MemoryAdapter) => void;
 }
 
@@ -102,7 +104,7 @@ function adapter(initial: SyncedFile | null): MemoryAdapter {
       return `resource-${result.uploads}`;
     },
     download: async () => {
-      if (result.failDownload) throw new Error('provider unavailable');
+      if (result.failDownload) throw result.downloadError ?? new Error('provider unavailable');
       return result.remote;
     },
     deleteSync: async () => {},
@@ -119,6 +121,7 @@ function manager(
   const persisted: ConvergentSyncStateV2[] = [];
   let currentReplica = replica;
   const events: unknown[] = [];
+  const completedDowngrades: boolean[] = [];
   const providerConnections = Object.fromEntries(
     (['github', 'google', 'onedrive', 'webdav', 's3'] as CloudProvider[]).map((provider) => [
       provider,
@@ -149,6 +152,7 @@ function manager(
     },
     persisted,
     events,
+    completedDowngrades,
     getConnectedAdapter: async (provider: CloudProvider) => adapters[provider],
     loadConvergentReplica: async () => ({ schemaVersion: 2 as const, state: currentReplica, updatedAt: NOW }),
     saveConvergentReplica: async (record: { state: ConvergentSyncStateV2 }) => {
@@ -158,6 +162,9 @@ function manager(
     loadConvergentProviderBaseline: async (provider: CloudProvider) => baselines[provider] ?? null,
     saveConvergentProviderBaseline: async (baseline: ConvergentProviderBaselineV2) => {
       baselines[baseline.provider] = baseline;
+    },
+    completeConvergentSyncDowngrade: (confirmed: boolean) => {
+      completedDowngrades.push(confirmed);
     },
     updateProviderStatus(provider: CloudProvider, status: 'connected' | 'syncing' | 'error', error?: string) {
       this.state.providers[provider] = { ...this.state.providers[provider], status, ...(error ? { error } : {}) };
@@ -323,6 +330,61 @@ test('a failed provider does not roll back a provider that verified successfully
     assert.equal(results.get('google')?.success, false);
     assert.equal(subject.state.syncState, 'IDLE');
     assert.equal(subject.state.pendingLocalSync, true);
+  } finally {
+    encryption.restore();
+  }
+});
+
+test('convergent provider failures delegate expired OneDrive credentials to reauth handling', async () => {
+  const encryption = installEncryptionDouble();
+  try {
+    const localPayload = payload('local');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const onedrive = adapter(null);
+    onedrive.failDownload = true;
+    onedrive.downloadError = new Error(
+      `${ONEDRIVE_REAUTH_REQUIRED_MARKER}: OneDrive session expired, please reconnect.`,
+    );
+    const subject = manager(base, { onedrive });
+    subject.state.providers.onedrive = {
+      ...subject.state.providers.onedrive,
+      tokens: {
+        accessToken: 'expired-access',
+        refreshToken: 'expired-refresh',
+        tokenType: 'Bearer',
+      },
+    } as typeof subject.state.providers.onedrive;
+    let reauthCalls = 0;
+    (subject as typeof subject & {
+      handleProviderReauthRequired: (provider: CloudProvider, error: unknown) => boolean;
+    }).handleProviderReauthRequired = (provider, error) => {
+      if (
+        provider !== 'onedrive'
+        || !String(error).includes(ONEDRIVE_REAUTH_REQUIRED_MARKER)
+      ) return false;
+      reauthCalls += 1;
+      subject.state.providers.onedrive = {
+        provider: 'onedrive',
+        status: 'error',
+        error: 'OneDrive session expired, please reconnect.',
+      };
+      return true;
+    };
+
+    const results = await syncConvergentProvidersUnlockedImpl.call(
+      subject,
+      localPayload,
+      { maxRounds: 1, jitter: async () => {}, now: () => NOW + 10 },
+    );
+
+    assert.equal(results.get('onedrive')?.success, false);
+    assert.equal(reauthCalls, 1);
+    assert.equal('tokens' in subject.state.providers.onedrive, false);
+    assert.equal(subject.state.providers.onedrive.status, 'error');
+    assert.equal(
+      subject.state.providers.onedrive.error,
+      'OneDrive session expired, please reconnect.',
+    );
   } finally {
     encryption.restore();
   }
@@ -506,12 +568,24 @@ test('the production entry fails closed when another window owns the Web Lock', 
 test('explicit downgrade replaces v2 only after a verified legacy write', async () => {
   const encryption = installEncryptionDouble();
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  let lockHeld = false;
   try {
     Object.defineProperty(globalThis, 'navigator', {
       configurable: true,
       value: {
         locks: {
-          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+          request: async (
+            _name: string,
+            _options: unknown,
+            callback: (lock: object) => unknown,
+          ) => {
+            lockHeld = true;
+            try {
+              return await callback({});
+            } finally {
+              lockHeld = false;
+            }
+          },
         },
       },
     });
@@ -519,6 +593,11 @@ test('explicit downgrade replaces v2 only after a verified legacy write', async 
     const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
     const github = adapter(encryption.register(withConvergentSyncEnvelope(base, { syncedAt: NOW }), 2));
     const subject = manager(base, { github });
+    const completeDowngrade = subject.completeConvergentSyncDowngrade;
+    subject.completeConvergentSyncDowngrade = (confirmed: boolean) => {
+      assert.equal(lockHeld, true);
+      completeDowngrade(confirmed);
+    };
     let appliedPayload: SyncPayload | null = null;
 
     const results = await downgradeConvergentSyncImpl.call(
@@ -532,10 +611,51 @@ test('explicit downgrade replaces v2 only after a verified legacy write', async 
 
     assert.equal(results.get('github')?.success, true);
     assert.equal(appliedPayload?.hosts[0]?.label, 'local');
+    assert.deepEqual(subject.completedDowngrades, [true]);
     assert.equal(github.remote?.meta.syncSchemaVersion, undefined);
     const verified = await EncryptionService.decryptPayload(github.remote!, 'pw');
     assert.equal(verified.convergentSync, undefined);
     assert.equal(verified.hosts[0]?.label, 'local');
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    encryption.restore();
+  }
+});
+
+test('downgrade reports cleanup failure instead of releasing a successful result', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const localPayload = payload('local');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const github = adapter(encryption.register(withConvergentSyncEnvelope(base, { syncedAt: NOW }), 2));
+    const subject = manager(base, { github });
+    subject.completeConvergentSyncDowngrade = () => {
+      throw new Error('local cleanup failed');
+    };
+
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async (_incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        await commitReplica();
+      },
+    );
+
+    assert.equal(results.get('github')?.success, false);
+    assert.match(results.get('github')?.error ?? '', /local cleanup failed/);
+    assert.equal(github.uploads, 1);
+    assert.equal(subject.state.syncState, 'ERROR');
+    assert.equal(subject.state.pendingLocalSync, true);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
@@ -578,6 +698,7 @@ test('downgrade joins remote-only v2 edits before applying or writing v1', async
 
     assert.equal(results.get('github')?.success, true);
     assert.equal(appliedPayload?.hosts[0]?.label, 'remote-only');
+    assert.deepEqual(subject.completedDowngrades, [true]);
     assert.equal(github.remote?.meta.syncSchemaVersion, undefined);
     const verified = await EncryptionService.decryptPayload(github.remote!, 'pw');
     assert.equal(verified.hosts[0]?.label, 'remote-only');
@@ -626,6 +747,7 @@ test('downgrade preflight failure writes neither local state nor another provide
     assert.equal(subject.persisted.length, 0);
     assert.equal(github.uploads, 0);
     assert.equal(google.uploads, 0);
+    assert.deepEqual(subject.completedDowngrades, []);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
@@ -661,6 +783,7 @@ test('failed protected downgrade apply uploads nothing and exits syncing state',
     assert.equal(github.uploads, 0);
     assert.equal(subject.state.syncState, 'ERROR');
     assert.equal(subject.state.pendingLocalSync, true);
+    assert.deepEqual(subject.completedDowngrades, []);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
@@ -713,6 +836,7 @@ test('downgrade preserves concurrent provider candidates and blocks legacy write
     assert.equal(subject.persisted.length, 1);
     assert.equal(github.uploads, 0);
     assert.equal(google.uploads, 0);
+    assert.deepEqual(subject.completedDowngrades, []);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');

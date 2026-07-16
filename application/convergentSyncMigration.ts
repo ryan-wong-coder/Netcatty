@@ -15,10 +15,7 @@ import {
 } from '../domain/convergentSync';
 import { isProviderReadyForSync } from '../domain/sync';
 import { getCloudSyncManager, type CloudSyncManager } from '../infrastructure/services/CloudSyncManager';
-import {
-  clearConvergentSyncLocalConfigAfterDowngrade,
-  markConvergentSyncInitialized,
-} from '../infrastructure/services/convergentSyncConfig';
+import { markConvergentSyncInitialized } from '../infrastructure/services/convergentSyncConfig';
 import { applyProtectedSyncPayload } from './localVaultBackups';
 
 export interface PreparedConvergentMigration {
@@ -176,14 +173,4 @@ export async function prepareConvergentSyncDowngrade(
   const replica = await manager.loadConvergentReplica();
   if (!replica) throw new Error('No convergent sync replica is available to downgrade');
   return materializeSyncPayloadFromConvergentState(replica.state, { syncedAt: now });
-}
-
-/** Call only after PR3's provider integration has replaced every v2 cloud file with v1. */
-export function completeConvergentSyncDowngrade(
-  confirmed: boolean,
-  manager: CloudSyncManager = getCloudSyncManager(),
-): void {
-  if (!confirmed) throw new Error('Explicit confirmation is required to complete downgrade');
-  manager.clearConvergentSyncStorage(true);
-  clearConvergentSyncLocalConfigAfterDowngrade(true);
 }

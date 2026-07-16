@@ -36,6 +36,7 @@ import type { CloudSyncConflictAction, CloudSyncStrategy } from '../../domain/sy
 import { materializeConvergentSyncState } from '../../domain/convergentSync';
 import { type CloudAdapter } from './adapters';
 import type { DeviceFlowState } from './adapters/GitHubAdapter';
+import { clearConvergentSyncLocalConfigAfterDowngrade } from './convergentSyncConfig';
 
 
 import { type ShrinkFinding } from '../../domain/syncGuards';
@@ -920,6 +921,15 @@ export class CloudSyncManager {
 
   clearConvergentSyncStorage(confirmed = false): void {
     return clearConvergentSyncStorageImpl.call(this, confirmed);
+  }
+
+  private completeConvergentSyncDowngrade(confirmed: boolean): void {
+    if (!confirmed) throw new Error('Explicit confirmation is required to complete downgrade');
+    // This method is invoked by downgradeConvergentSyncImpl before it releases
+    // the cross-window Web Lock. Clear the replica first so a configuration
+    // persistence failure still cannot let another window re-upload v2 state.
+    this.clearConvergentSyncStorage(true);
+    clearConvergentSyncLocalConfigAfterDowngrade(true);
   }
 
   private async reencryptSyncStorage(
