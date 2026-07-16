@@ -5,16 +5,20 @@ import { readFileSync } from "node:fs";
 test("auto-sync establishes the initial data baseline before debouncing edits", () => {
   const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
   const baselineCommentIndex = source.indexOf("Establish the initial baseline immediately");
+  const baselineHelperIndex = source.indexOf("const establishInitialBaseline = () =>", baselineCommentIndex);
+  const initializedAssignmentIndex = source.indexOf("isInitializedRef.current = true;", baselineHelperIndex);
+  const hashReadIndex = source.indexOf("const currentHash = await getDataHash();", baselineHelperIndex);
   const initializationGuardIndex = source.indexOf("if (!isInitializedRef.current)", baselineCommentIndex);
-  const initializedAssignmentIndex = source.indexOf("isInitializedRef.current = true;", initializationGuardIndex);
-  const hashReadIndex = source.indexOf("const currentHash = await getDataHash();", initializationGuardIndex);
+  const baselineCallIndex = source.indexOf("establishInitialBaseline();", initializationGuardIndex);
   const debounceCommentIndex = source.indexOf("Debounce first, then build the expensive full-data hash", initializationGuardIndex);
   const debounceTimerIndex = source.indexOf("syncTimeoutRef.current = setTimeout", debounceCommentIndex);
 
   assert.notEqual(baselineCommentIndex, -1);
+  assert.notEqual(baselineHelperIndex, -1);
   assert.notEqual(initializationGuardIndex, -1);
   assert.notEqual(initializedAssignmentIndex, -1);
   assert.notEqual(hashReadIndex, -1);
+  assert.notEqual(baselineCallIndex, -1);
   assert.notEqual(debounceCommentIndex, -1);
   assert.notEqual(debounceTimerIndex, -1);
   assert.ok(
@@ -22,8 +26,46 @@ test("auto-sync establishes the initial data baseline before debouncing edits", 
     "initialization must be marked synchronously before reading the baseline hash",
   );
   assert.ok(
-    initializationGuardIndex < debounceTimerIndex,
+    baselineCallIndex < debounceTimerIndex,
     "the first baseline hash must be captured before scheduling the debounced auto-sync timer",
+  );
+});
+
+test("paused convergent sync captures a baseline before returning", () => {
+  const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
+  const effectIndex = source.indexOf("// Debounced auto-sync when data changes");
+  const pausedGuardIndex = source.indexOf("if (convergentSyncPaused)", effectIndex);
+  const initializationGuardIndex = source.indexOf("if (!isInitializedRef.current)", pausedGuardIndex);
+  const baselineCallIndex = source.indexOf("establishInitialBaseline();", initializationGuardIndex);
+  const pausedReturnIndex = source.indexOf("return () =>", baselineCallIndex);
+
+  assert.notEqual(pausedGuardIndex, -1);
+  assert.notEqual(initializationGuardIndex, -1);
+  assert.notEqual(baselineCallIndex, -1);
+  assert.notEqual(pausedReturnIndex, -1);
+  assert.ok(
+    pausedGuardIndex < initializationGuardIndex
+      && initializationGuardIndex < baselineCallIndex
+      && baselineCallIndex < pausedReturnIndex,
+    "paused mode must preserve the pre-edit baseline before suppressing network sync",
+  );
+});
+
+test("an unchanged remote check cannot absorb an existing paused-edit baseline", () => {
+  const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
+  const baselineSnapshotIndex = source.indexOf("const hadInitialBaseline = isInitializedRef.current");
+  const remoteChangeIndex = source.indexOf("inspectedRemoteChange = true", baselineSnapshotIndex);
+  const guardedUpdateIndex = source.indexOf(
+    "if (markCurrentDataSynced && (!hadInitialBaseline || inspectedRemoteChange))",
+    remoteChangeIndex,
+  );
+
+  assert.notEqual(baselineSnapshotIndex, -1);
+  assert.notEqual(remoteChangeIndex, -1);
+  assert.notEqual(guardedUpdateIndex, -1);
+  assert.ok(
+    baselineSnapshotIndex < remoteChangeIndex && remoteChangeIndex < guardedUpdateIndex,
+    "remote inspection must preserve an existing baseline unless it reconciled changed cloud data",
   );
 });
 

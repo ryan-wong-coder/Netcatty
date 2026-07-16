@@ -548,8 +548,10 @@ export const useAutoSync = (config: AutoSyncConfig) => {
     // Track whether the startup path completed in a state where the anchor/base
     // are consistent with the local vault. Only then should we latch
     // hasCheckedRemoteRef so that transient failures are retryable.
+    const hadInitialBaseline = isInitializedRef.current;
     let startupConsistent = false;
     let markCurrentDataSynced = true;
+    let inspectedRemoteChange = false;
     try {
       // Load base BEFORE observing the remote payload (commitRemoteInspection overwrites the base).
       const base = await manager.loadSyncBase(connectedProvider);
@@ -561,6 +563,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
         startupConsistent = true;
         return;
       }
+      inspectedRemoteChange = true;
 
       const remoteFile = inspection.remoteFile;
       const remotePayload = inspection.payload;
@@ -740,9 +743,9 @@ export const useAutoSync = (config: AutoSyncConfig) => {
         if (!isInitializedRef.current) {
           isInitializedRef.current = true;
         }
-        if (markCurrentDataSynced) {
+        if (markCurrentDataSynced && (!hadInitialBaseline || inspectedRemoteChange)) {
           lastSyncedDataRef.current = await getDataHashRef.current();
-        } else {
+        } else if (!markCurrentDataSynced) {
           lastSyncedDataRef.current = '';
         }
         hasCheckedRemoteRef.current = true;
@@ -776,7 +779,30 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // Debounced auto-sync when data changes
   useEffect(() => {
     if (!enabled) return;
-    if (convergentSyncPaused) return;
+
+    let cancelled = false;
+
+    // Establish the initial baseline immediately. If this were delayed by
+    // the debounce below, an edit made right after startup could become the
+    // baseline and never be pushed. A paused replica still captures this
+    // one-time baseline so edits made while paused remain pending on resume.
+    const establishInitialBaseline = () => {
+      isInitializedRef.current = true;
+      void (async () => {
+        const currentHash = await getDataHash();
+        if (cancelled) return;
+        lastSyncedDataRef.current = currentHash;
+      })();
+    };
+
+    if (convergentSyncPaused) {
+      if (!isInitializedRef.current) {
+        establishInitialBaseline();
+      }
+      return () => {
+        cancelled = true;
+      };
+    }
     // Skip if not ready
     if (!sync.hasAnyConnectedProvider || !sync.autoSyncEnabled || !sync.isUnlocked) {
       return;
@@ -790,21 +816,12 @@ export const useAutoSync = (config: AutoSyncConfig) => {
       return;
     }
 
-    let cancelled = false;
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
     }
 
-    // Establish the initial baseline immediately. If this were delayed by
-    // the debounce below, an edit made right after startup could become the
-    // baseline and never be pushed.
     if (!isInitializedRef.current) {
-      isInitializedRef.current = true;
-      void (async () => {
-        const currentHash = await getDataHash();
-        if (cancelled) return;
-        lastSyncedDataRef.current = currentHash;
-      })();
+      establishInitialBaseline();
       return () => {
         cancelled = true;
       };
