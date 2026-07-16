@@ -101,6 +101,15 @@ test('notes side panel forwards repeated open-note requests', () => {
   assert.match(slotsSource, /openNoteRequestId=\{openNoteRequest\?\.requestId \?\? null\}/);
 });
 
+test('system monitoring only pauses for hidden remote tabs when hibernation is enabled', () => {
+  const source = readFileSync(new URL('./terminalLayerSidePanelSlots.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /const systemSession = resolveSystemSidebarSession\(/);
+  assert.match(source, /shouldKeepTerminalBackgroundWorkActive\([\s\S]*systemHost\?\.protocol,[\s\S]*isTabActive/);
+  assert.doesNotMatch(source, /useSidePanelLiveSnapshotForTab\(tabId, keepSystemWorkActive\)/);
+  assert.match(source, /isVisible=\{keepSystemWorkActive\}/);
+});
+
 test('side panel tab bar and borders use inline resolved terminal theme colors', () => {
   const sectionSource = readFileSync(new URL('./TerminalLayerSidePanelSection.tsx', import.meta.url), 'utf8');
 

@@ -10,7 +10,10 @@ import { useStoredBoolean } from '../../application/state/useStoredBoolean';
 import { isSavedVaultHost } from '../../domain/ephemeralHosts';
 import { collectSessionIds, SplitDirection } from '../../domain/workspace';
 import { resolveSessionTabTitle } from '../../domain/sessionTabTitle';
-import { resolveTerminalHibernateEnabled } from '../../domain/terminalHibernate';
+import {
+  resolveTerminalHibernateEnabled,
+  resolveTerminalHibernateEnabledForProtocol,
+} from '../../domain/terminalHibernate';
 import { KeyBinding, TerminalSettings } from '../../domain/models';
 import { STORAGE_KEY_AI_SHOW_TERMINAL_SELECTION_ACTION } from '../../infrastructure/config/storageKeys';
 import { cn } from '../../lib/utils';
@@ -801,12 +804,13 @@ const getPaneWorkspaceRect = (props: Pick<TerminalPaneProps, 'session' | 'worksp
   return props.workspaceRectsById.get(workspaceId)?.[props.session.id] ?? null;
 };
 
-const getPaneRenderedWorkspaceRect = (props: Pick<TerminalPaneProps, 'session' | 'workspaceById' | 'workspaceRectsById' | 'terminalSettings'>): WorkspaceRect | null => {
+const getPaneRenderedWorkspaceRect = (props: Pick<TerminalPaneProps, 'session' | 'host' | 'workspaceById' | 'workspaceRectsById' | 'terminalSettings'>): WorkspaceRect | null => {
   const workspaceId = props.session.workspaceId;
   if (!workspaceId) return null;
   const workspace = props.workspaceById.get(workspaceId);
   if (!workspace) return null;
-  if (resolveTerminalHibernateEnabled(props.terminalSettings) && activeTabStore.getActiveTabId() !== workspaceId) {
+  if (resolveTerminalHibernateEnabledForProtocol(props.terminalSettings, props.host.protocol)
+    && activeTabStore.getActiveTabId() !== workspaceId) {
     return null;
   }
   if (workspace.viewMode === 'focus' && workspace.focusedSessionId === props.session.id) {
@@ -997,7 +1001,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = memo(({
   const inActiveWorkspace = !!activeWorkspaceId;
   const isFocusMode = paneState.mode === 'focus';
   const isSplitViewVisible = paneState.mode === 'split';
-  const hibernateHiddenTabs = resolveTerminalHibernateEnabled(terminalSettings);
+  const hibernateHiddenTabs = resolveTerminalHibernateEnabledForProtocol(terminalSettings, host.protocol);
   const layoutWorkspaceId = activeWorkspaceId ?? (!hibernateHiddenTabs ? session.workspaceId : undefined);
   const layoutWorkspace = layoutWorkspaceId ? workspaceById.get(layoutWorkspaceId) : undefined;
   const keepsWorkspacePresentation = !!layoutWorkspace;
@@ -1602,10 +1606,12 @@ const terminalPanesHostPropsAreEqual = (
 
   const activeTabId = activeTabStore.getActiveTabId();
   const activeWorkspace = activeTabId ? next.workspaceById.get(activeTabId) : undefined;
-  if (!activeWorkspace || activeWorkspace.viewMode === 'focus') return true;
 
   return prev.sessions.every((session) => {
-    if (session.workspaceId !== activeWorkspace.id) return true;
+    const isLocalTerminal = next.sessionHostsMap.get(session.id)?.protocol === 'local';
+    const isInVisibleSplitWorkspace = activeWorkspace?.viewMode !== 'focus'
+      && session.workspaceId === activeWorkspace?.id;
+    if (!isLocalTerminal && !isInVisibleSplitWorkspace) return true;
     return workspaceRectsEqual(
       getPaneWorkspaceRect({ session, workspaceRectsById: prev.workspaceRectsById }),
       getPaneWorkspaceRect({ session, workspaceRectsById: next.workspaceRectsById }),

@@ -13,7 +13,7 @@ const layerEffectsSource = readFileSync(new URL("../terminalLayer/useTerminalLay
 test("renderer activity follows the hibernate setting instead of active-tab visibility", () => {
   assert.match(
     terminalSource,
-    /const isRendererActive = isVisible \|\| !resolveTerminalHibernateEnabled\(terminalSettings\)/,
+    /const isRendererActive = isVisible \|\| !hibernateEnabled/,
   );
   assert.match(terminalSource, /isVisibleRef: isRendererActiveRef/);
   assert.match(terminalSource, /if \(!isRendererActiveRef\.current && !options\?\.allowHidden\)/);
@@ -24,20 +24,20 @@ test("renderer activity follows the hibernate setting instead of active-tab visi
 });
 
 test("inactive terminal surfaces remain painted and non-interactive without hibernate", () => {
-  assert.match(supportSource, /resolveTerminalHibernateEnabled\(terminalSettings\)/);
+  assert.match(supportSource, /resolveTerminalHibernateEnabledForProtocol\(terminalSettings, host\.protocol\)/);
   assert.match(supportSource, /inert=\{isVisible \? undefined : true\}/);
-  assert.match(viewSource, /resolveTerminalHibernateEnabled\(ctx\.terminalSettings\)/);
+  assert.match(viewSource, /ctx\.hibernateHiddenTabs/);
   assert.match(viewSource, /inert=\{ctx\.isTerminalLayerVisible \? undefined : true\}/);
 });
 
 test("background split workspaces keep their live geometry without hibernate", () => {
   assert.match(
     tabBridgeSource,
-    /keepHiddenWorkspacesLaidOut: !hibernateHiddenTabs/,
+    /shouldKeepHiddenWorkspaceLaidOut/,
   );
   assert.match(
     workspaceLayoutSource,
-    /if \(keepHiddenWorkspacesLaidOut\) \{[\s\S]*cachedSizeIsUsable[\s\S]*computeWorkspaceRects\(layoutWorkspace, layoutSize\)/,
+    /if \(shouldKeepHiddenWorkspaceLaidOut\(workspace\)\) \{[\s\S]*cachedSizeIsUsable[\s\S]*computeWorkspaceRects\(layoutWorkspace, layoutSize\)/,
   );
   assert.match(
     supportSource,
@@ -66,7 +66,11 @@ test("background split workspaces keep their live geometry without hibernate", (
   );
   assert.match(
     tabBridgeSource,
-    /shouldMeasureTerminalLayerLayout: shouldMeasureTerminalLayerLayout\(\{[\s\S]*hibernateHiddenTabs,[\s\S]*workspaceArea/,
+    /const keepHiddenLayoutActive = !hibernateHiddenTabs \|\| localWorkspaceIds\.size > 0/,
+  );
+  assert.match(
+    tabBridgeSource,
+    /shouldMeasureTerminalLayerLayout: shouldMeasureTerminalLayerLayout\(\{[\s\S]*keepHiddenLayoutActive,[\s\S]*workspaceArea/,
   );
   assert.doesNotMatch(tabBridgeSource, /isTerminalLayerRendererActive/);
 });

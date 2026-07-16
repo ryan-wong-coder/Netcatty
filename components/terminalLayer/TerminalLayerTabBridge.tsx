@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 import { useActiveTabId } from '../../application/state/activeTabStore';
 import { sessionCapabilitiesStore } from '../../application/state/sessionCapabilitiesStore';
@@ -49,6 +49,16 @@ export function TerminalLayerTabBridge({ stableRef }: { stableRef: StableRef }) 
   const isFocusMode = activeWorkspace?.viewMode === 'focus';
   const focusedSessionId = activeWorkspace?.focusedSessionId;
   const hibernateHiddenTabs = resolveTerminalHibernateEnabled(s.terminalSettings);
+  const localWorkspaceIds = useMemo(() => new Set(
+    sessions
+      .filter((session) => session.workspaceId && sessionHostsMap.get(session.id)?.protocol === 'local')
+      .map((session) => session.workspaceId as string),
+  ), [sessionHostsMap, sessions]);
+  const shouldKeepHiddenWorkspaceLaidOut = useCallback(
+    (workspace: Workspace) => !hibernateHiddenTabs || localWorkspaceIds.has(workspace.id),
+    [hibernateHiddenTabs, localWorkspaceIds],
+  );
+  const keepHiddenLayoutActive = !hibernateHiddenTabs || localWorkspaceIds.size > 0;
   const effectiveFocusedSessionId = useMemo((): string | null => {
     if (activeWorkspace) {
       if (focusedSessionId) return focusedSessionId;
@@ -83,7 +93,7 @@ export function TerminalLayerTabBridge({ stableRef }: { stableRef: StableRef }) 
     activeSession,
     activeWorkspace,
     isFocusMode,
-    keepHiddenWorkspacesLaidOut: !hibernateHiddenTabs,
+    shouldKeepHiddenWorkspaceLaidOut,
     onAddSessionToWorkspace: s.onAddSessionToWorkspace,
     onCreateWorkspaceFromSessions: s.onCreateWorkspaceFromSessions,
     onSetDraggingSessionId: s.onSetDraggingSessionId,
@@ -314,7 +324,7 @@ export function TerminalLayerTabBridge({ stableRef }: { stableRef: StableRef }) 
     isTerminalLayerVisible,
     shouldMeasureTerminalLayerLayout: shouldMeasureTerminalLayerLayout({
       isTerminalLayerVisible,
-      hibernateHiddenTabs,
+      keepHiddenLayoutActive,
       workspaceArea,
     }),
     lastSidePanelTabRef: s.lastSidePanelTabRef,
@@ -431,6 +441,7 @@ export function TerminalLayerTabBridge({ stableRef }: { stableRef: StableRef }) 
     History: s.History,
     historySessionId,
     HistorySidePanel: s.HistorySidePanel,
+    hibernateHiddenTabs,
     handleOsDetected: s.handleOsDetected,
     handlePendingTerminalSelectionConsumed: s.handlePendingTerminalSelectionConsumed,
     handlePendingUploadHandled: s.handlePendingUploadHandled,
@@ -608,6 +619,7 @@ export function TerminalLayerTabBridge({ stableRef }: { stableRef: StableRef }) 
     s.noteGroups,
     handleWorkspaceDrop,
     handleTerminalContextReaderChange,
+    hibernateHiddenTabs,
     historySessionId,
     isFocusMode,
     isSidePanelOpenForCurrentTab,
