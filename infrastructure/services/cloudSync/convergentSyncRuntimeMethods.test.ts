@@ -257,6 +257,33 @@ test('unordered provider join preserves independent offline edits and persists b
   }
 });
 
+test('an unchanged convergent check verifies without uploading or returning a payload apply', async () => {
+  const encryption = installEncryptionDouble();
+  try {
+    const localPayload = payload('unchanged');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const github = adapter(encryption.register(
+      withConvergentSyncEnvelope(base, { syncedAt: NOW }),
+      3,
+      'github-device',
+    ));
+    const subject = manager(base, { github });
+
+    const results = await syncConvergentProvidersUnlockedImpl.call(
+      subject,
+      localPayload,
+      { jitter: async () => {}, now: () => NOW + 10 },
+    );
+
+    assert.equal(results.get('github')?.success, true);
+    assert.equal(results.get('github')?.mergedPayload, undefined);
+    assert.equal(github.uploads, 0);
+    assert.equal(github.remote?.meta.version, 3);
+  } finally {
+    encryption.restore();
+  }
+});
+
 test('a concurrent provider write discovered during verification is rejoined and propagated', async () => {
   const encryption = installEncryptionDouble();
   try {
@@ -288,7 +315,7 @@ test('a concurrent provider write discovered during verification is rejoined and
 
     const results = await syncConvergentProvidersUnlockedImpl.call(
       subject,
-      basePayload,
+      payload('local-write'),
       { jitter: async () => {}, now: () => NOW + 30 },
     );
 
@@ -340,11 +367,12 @@ test('a failed provider does not roll back a provider that verified successfully
 test('total upload failure keeps downloaded remote edits out of the durable local replica', async () => {
   const encryption = installEncryptionDouble();
   try {
-    const localPayload = payload('base');
-    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const basePayload = payload('base');
+    const localPayload = payload('local-write');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
     const remote = remoteState(
       base,
-      localPayload,
+      basePayload,
       payload('base', 'remote-user'),
       'remote-device',
       NOW + 1,
@@ -368,6 +396,11 @@ test('total upload failure keeps downloaded remote edits out of the durable loca
       materializeSyncPayloadFromConvergentState(subject.persisted.at(-1)!, { syncedAt: NOW })
         .hosts[0]?.username,
       'root',
+    );
+    assert.equal(
+      materializeSyncPayloadFromConvergentState(subject.persisted.at(-1)!, { syncedAt: NOW })
+        .hosts[0]?.label,
+      'local-write',
     );
 
     github.failUpload = false;
@@ -549,7 +582,7 @@ test('preferLocal creates a causal write that dominates a remote edit', async ()
       { jitter: async () => {}, now: () => NOW + 10 },
     );
 
-    assert.equal(results.get('github')?.mergedPayload?.hosts[0]?.label, 'local-wins');
+    assert.equal(results.get('github')?.mergedPayload, undefined);
     assert.equal(results.get('github')?.convergentConflictCount, 0);
   } finally {
     encryption.restore();
@@ -1254,7 +1287,13 @@ test('one-shot shrink override produces causal deletions and verifies them', asy
     );
 
     assert.equal(results.get('github')?.success, true);
-    assert.equal(results.get('github')?.mergedPayload?.hosts.length, 0);
+    assert.equal(results.get('github')?.mergedPayload, undefined);
+    const verifiedPayload = await EncryptionService.decryptPayload(github.remote!, 'pw');
+    const verifiedState = validateConvergentSyncPayload(github.remote!.meta, verifiedPayload)!;
+    assert.equal(
+      materializeSyncPayloadFromConvergentState(verifiedState, { syncedAt: NOW }).hosts.length,
+      0,
+    );
     assert.equal(subject.state.syncState, 'IDLE');
     assert.equal(subject.state.lastShrinkFinding, undefined);
   } finally {

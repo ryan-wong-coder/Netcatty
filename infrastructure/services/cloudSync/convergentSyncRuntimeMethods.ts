@@ -406,13 +406,37 @@ export async function syncConvergentProvidersUnlockedImpl(
     canonical = mergeStates(canonical, preflight.flatMap((decoded) => decoded ? [decoded.state] : []));
 
     const expected = canonical;
-    const outgoingPayload = withConvergentSyncEnvelope(expected, { syncedAt: now() });
-    await Promise.all(usable.map(async (runtime) => {
+    const preflightVerified = new Map<CloudProvider, DecodedRemote>();
+    await Promise.all(usable.map(async (runtime, index) => {
       if (runtime.error) return;
+      const decoded = preflight[index];
+      if (
+        !decoded
+        || decoded.file.meta.syncSchemaVersion !== 2
+        || !versionVectorDominates(decoded.state.vector, expected.vector)
+      ) return;
+      try {
+        // The provider already contains the complete joined state. Treat the
+        // preflight read as verification instead of creating a new encrypted
+        // cloud revision for a no-op runtime check.
+        await markProviderVerified(this, runtime, decoded);
+        preflightVerified.set(runtime.provider, decoded);
+      } catch (error) {
+        runtime.error = errorMessage(error);
+      }
+    }));
+    const needsUpload = usable.some((runtime) => (
+      !runtime.error && !preflightVerified.has(runtime.provider)
+    ));
+    const outgoingPayload = needsUpload
+      ? withConvergentSyncEnvelope(expected, { syncedAt: now() })
+      : null;
+    await Promise.all(usable.map(async (runtime) => {
+      if (runtime.error || preflightVerified.has(runtime.provider)) return;
       try {
         const remoteVersion = runtime.latestRemote?.meta.version ?? this.state.localVersion;
         const file = await EncryptionService.encryptPayload(
-          outgoingPayload,
+          outgoingPayload!,
           this.masterPassword,
           this.state.deviceId,
           this.state.deviceName,
@@ -430,6 +454,8 @@ export async function syncConvergentProvidersUnlockedImpl(
 
     const verified = await Promise.all(usable.map(async (runtime) => {
       if (runtime.error) return null;
+      const preflightDecoded = preflightVerified.get(runtime.provider);
+      if (preflightDecoded) return preflightDecoded;
       try {
         const decoded = await downloadProviderState(this, runtime, syncSecurityGeneration);
         if (!decoded) throw new Error('Provider returned no file after upload');
@@ -473,6 +499,7 @@ export async function syncConvergentProvidersUnlockedImpl(
     hasSuccess ? canonical : durableBeforeVerification,
   );
   const mergedPayload = materializedPayload(canonical, now());
+  const localPayloadChanged = !cloudSyncPayloadsEqual(inputPayload, mergedPayload);
   for (const runtime of runtimes) {
     if (
       runtime.verifiedState
@@ -484,7 +511,7 @@ export async function syncConvergentProvidersUnlockedImpl(
         provider: runtime.provider,
         action: 'merge',
         version: runtime.verifiedFile?.meta.version ?? runtime.latestRemote?.meta.version,
-        mergedPayload,
+        ...(localPayloadChanged ? { mergedPayload } : {}),
         convergentConflicts: conflicts,
         convergentConflictCount: conflicts.length,
       };
