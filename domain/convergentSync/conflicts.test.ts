@@ -56,4 +56,14 @@ test('secret conflicts are identified from paths and nested candidate keys', () 
       selected: true,
     }],
   }), true);
+  assert.equal(isConvergentConflictSecret({
+    address: { kind: 'setting', path: ['ai', 'providers'] },
+    candidates: [{
+      dot: { deviceId: 'a', counter: 2 },
+      hlc: { wallTime: 2, logical: 0 },
+      tombstone: false,
+      value: [{ id: 'provider-1', credentials: { apiKey: 'nested-do-not-render' } }],
+      selected: true,
+    }],
+  }), true);
 });

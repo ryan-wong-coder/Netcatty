@@ -59,7 +59,8 @@ export function resolveConvergentFieldConflict(
 const SECRET_SEGMENT = /(?:password|passphrase|privatekey|secret|token|api[_-]?key|access[_-]?key)/i;
 
 function valueContainsSecretField(value: JsonValue | undefined): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((nested) => valueContainsSecretField(nested));
   return Object.entries(value).some(([key, nested]) =>
     SECRET_SEGMENT.test(key) || valueContainsSecretField(nested));
 }
