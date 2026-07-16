@@ -12,6 +12,7 @@ const DEFAULT_CONFIG: ConvergentSyncLocalConfig = {
 };
 
 export function getConvergentSyncLocalConfig(): ConvergentSyncLocalConfig {
+  if (typeof globalThis.localStorage === 'undefined') return DEFAULT_CONFIG;
   const stored = localStorageAdapter.read<Partial<ConvergentSyncLocalConfig>>(
     STORAGE_KEY_CONVERGENT_SYNC_CONFIG,
   );

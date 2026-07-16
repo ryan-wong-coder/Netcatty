@@ -6,7 +6,7 @@
  * Uses useSyncExternalStore for real-time state synchronization across all components.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   type CloudProvider,
   type SecurityState,
@@ -19,6 +19,7 @@ import {
   type SyncPayload,
   type SyncResult,
   type SyncHistoryEntry,
+  type ConvergentFieldConflict,
   type WebDAVConfig,
   type S3Config,
   formatLastSync,
@@ -35,6 +36,12 @@ import {
 import type { ShrinkFinding } from '../../domain/syncGuards';
 import { netcattyBridge } from '../../infrastructure/services/netcattyBridge';
 import type { DeviceFlowState } from '../../infrastructure/services/adapters/GitHubAdapter';
+import {
+  getConvergentSyncLocalConfig,
+  pauseConvergentSync,
+  setConvergentSyncLocalConfig,
+  type ConvergentSyncLocalConfig,
+} from '../../infrastructure/services/convergentSyncConfig';
 
 // ============================================================================
 // Types
@@ -59,6 +66,8 @@ export interface CloudSyncHook {
   remoteUpdatedAt: number;
   syncHistory: SyncHistoryEntry[];
   pendingLocalSync: boolean;
+  convergentConflicts: ConvergentFieldConflict[];
+  convergentSyncConfig: ConvergentSyncLocalConfig;
   pendingBrowserAuthProvider: 'google' | 'onedrive' | null;
   
   // Computed
@@ -102,6 +111,15 @@ export interface CloudSyncHook {
   downloadFromProvider: (provider: CloudProvider) => Promise<RemoteSyncPayload | null>;
   commitRemoteInspection: (provider: CloudProvider, remoteFile: SyncedFile, payload: SyncPayload, opts?: { recordDownload?: boolean }) => Promise<void>;
   resolveConflict: (resolution: ConflictResolution) => Promise<RemoteSyncPayload | null>;
+  resolveConvergentConflict: (
+    addressKey: string,
+    candidateDot: string,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
+  ) => Promise<{ payload: SyncPayload; results: Map<CloudProvider, SyncResult> }>;
+  downgradeConvergentSync: (confirmed: boolean) => Promise<Map<CloudProvider, SyncResult>>;
 
   // Gist Revision History
   getGistRevisionHistory: () => Promise<Array<{ version: string; date: Date }>>;
@@ -122,6 +140,8 @@ export interface CloudSyncHook {
   setAutoSync: (enabled: boolean, intervalMinutes?: number) => void;
   setDeviceName: (name: string) => void;
   setSyncStrategy: (strategy: CloudSyncStrategy) => void;
+  setConvergentSyncEnabled: (enabled: boolean) => ConvergentSyncLocalConfig;
+  refreshConvergentSyncConfig: () => ConvergentSyncLocalConfig;
 
   // Local Data Reset
   resetLocalVersion: () => void;
@@ -208,6 +228,9 @@ export const useCloudSync = (): CloudSyncHook => {
   const activeOAuthProviderRef = useRef<'google' | 'onedrive' | null>(null);
   const activeGitHubAuthAbortRef = useRef<AbortController | null>(null);
   const activeGitHubAuthAttemptIdRef = useRef<number | null>(null);
+  const [convergentSyncConfig, setConvergentSyncConfigState] = useState(
+    getConvergentSyncLocalConfig,
+  );
 
   // Auto-unlock: if a master key exists, retrieve the persisted password (Electron safeStorage)
   // and unlock silently so users don't have to manage a LOCKED state in the UI.
@@ -245,6 +268,14 @@ export const useCloudSync = (): CloudSyncHook => {
       }
     })();
   }, [state.securityState, state.masterKeyConfig]);
+
+  useEffect(() => {
+    if (state.securityState !== 'UNLOCKED') return;
+    if (!getConvergentSyncLocalConfig().initialized) return;
+    void manager.refreshConvergentConflicts().catch(() => {
+      // A missing/corrupt replica is surfaced by the next explicit sync.
+    });
+  }, [state.securityState]);
   
   // ========== Computed Values ==========
   
@@ -713,6 +744,38 @@ export const useCloudSync = (): CloudSyncHook => {
     await ensureUnlocked();
     return await manager.resolveConflict(resolution);
   }, [ensureUnlocked]);
+
+  const resolveConvergentConflictWithUnlock = useCallback(async (
+    addressKey: string,
+    candidateDot: string,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
+  ) => {
+    await ensureUnlocked();
+    return manager.resolveConvergentConflict(addressKey, candidateDot, applyPayload);
+  }, [ensureUnlocked]);
+
+  const refreshConvergentSyncConfig = useCallback(() => {
+    const next = getConvergentSyncLocalConfig();
+    setConvergentSyncConfigState(next);
+    return next;
+  }, []);
+
+  const setConvergentSyncEnabled = useCallback((enabled: boolean) => {
+    const current = getConvergentSyncLocalConfig();
+    const next = enabled
+      ? setConvergentSyncLocalConfig({ enabled: true, initialized: current.initialized })
+      : pauseConvergentSync();
+    setConvergentSyncConfigState(next);
+    return next;
+  }, []);
+
+  const downgradeConvergentSyncWithUnlock = useCallback(async (confirmed: boolean) => {
+    await ensureUnlocked();
+    return manager.downgradeConvergentSync(confirmed);
+  }, [ensureUnlocked]);
   
   return {
     // State
@@ -733,6 +796,8 @@ export const useCloudSync = (): CloudSyncHook => {
     remoteUpdatedAt: state.remoteUpdatedAt,
     syncHistory: state.syncHistory,
     pendingLocalSync: state.pendingLocalSync,
+    convergentConflicts: state.convergentConflicts,
+    convergentSyncConfig,
     pendingBrowserAuthProvider: pendingBrowserAuth?.provider ?? null,
     
     // Computed
@@ -765,6 +830,8 @@ export const useCloudSync = (): CloudSyncHook => {
     downloadFromProvider: downloadFromProviderWithUnlock,
     commitRemoteInspection: commitRemoteInspectionWithUnlock,
     resolveConflict: resolveConflictWithUnlock,
+    resolveConvergentConflict: resolveConvergentConflictWithUnlock,
+    downgradeConvergentSync: downgradeConvergentSyncWithUnlock,
 
     // Gist Revision History (#679)
     getGistRevisionHistory: manager.getGistRevisionHistory.bind(manager),
@@ -774,6 +841,8 @@ export const useCloudSync = (): CloudSyncHook => {
     setAutoSync,
     setDeviceName,
     setSyncStrategy,
+    setConvergentSyncEnabled,
+    refreshConvergentSyncConfig,
 
     // Local Data Reset
     resetLocalVersion: () => manager.resetLocalVersion(),

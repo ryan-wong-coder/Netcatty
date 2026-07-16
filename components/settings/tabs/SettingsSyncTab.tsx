@@ -66,6 +66,26 @@ export default function SettingsSyncTab(props: {
     [importDataFromString, importPortForwardingRules, onBuildLocalPayload, onSettingsApplied, t],
   );
 
+  const onApplyConvergentPayload = useCallback(
+    (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => applyProtectedSyncPayload({
+      buildPreApplyPayload: onBuildLocalPayload,
+      applyPayload: async () => {
+        await applySyncPayload(payload, {
+          importVaultData: importDataFromString,
+          importPortForwardingRules,
+          onSettingsApplied,
+        });
+        await commitReplica();
+      },
+      translateProtectiveBackupFailure: (message) =>
+        t("cloudSync.localBackups.protectiveBackupFailed", { message }),
+    }),
+    [importDataFromString, importPortForwardingRules, onBuildLocalPayload, onSettingsApplied, t],
+  );
+
   const onApplyLocalPayload = useCallback(
     (payload: SyncPayload) =>
       applyProtectedSyncPayload({
@@ -91,7 +111,9 @@ export default function SettingsSyncTab(props: {
     <SettingsTabContent value="sync">
       <CloudSyncSettings
         onBuildPayload={onBuildPayload}
+        onBuildLocalPayload={onBuildLocalPayload}
         onApplyPayload={onApplyPayload}
+        onApplyConvergentPayload={onApplyConvergentPayload}
         onApplyLocalPayload={onApplyLocalPayload}
         onClearLocalData={clearAllLocalData}
       />

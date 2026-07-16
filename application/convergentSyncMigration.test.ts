@@ -49,6 +49,10 @@ test('initialization applies the protected preview before persisting and enablin
   const calls: string[] = [];
   const manager = {
     isUnlocked: () => true,
+    withConvergentSyncLock: async (task: () => Promise<void>) => {
+      calls.push('lock');
+      return task();
+    },
     saveConvergentReplica: async () => {
       calls.push('replica');
     },
@@ -77,7 +81,7 @@ test('initialization applies the protected preview before persisting and enablin
     },
   });
 
-  assert.deepEqual(calls, ['protect', 'snapshot', 'apply', 'replica']);
+  assert.deepEqual(calls, ['lock', 'protect', 'snapshot', 'apply', 'replica']);
   assert.deepEqual(getConvergentSyncLocalConfig(), { enabled: true, initialized: true });
 });
 

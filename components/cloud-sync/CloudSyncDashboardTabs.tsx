@@ -1,6 +1,11 @@
 import React, { type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { Database, Github, History, Server, Trash2 } from 'lucide-react';
-import type { CloudProvider, SyncPayload } from '../../domain/sync';
+import type {
+  CloudProvider,
+  ConvergentFieldConflict,
+  ConvergentMigrationPreview,
+  SyncPayload,
+} from '../../domain/sync';
 import type { useCloudSync } from '../../application/state/useCloudSync';
 import { cleanOneDriveErrorMessage, isProviderReadyForSync } from '../../domain/sync';
 import { cn } from '../../lib/utils';
@@ -10,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { GoogleDriveIcon, OneDriveIcon, ProviderCard, Toggle } from './CloudSyncControls';
 import { LocalBackupsPanel } from './CloudSyncLocalBackupsPanel';
+import { ConvergentSyncPanel } from './ConvergentSyncPanel';
 
 type SyncController = ReturnType<typeof useCloudSync>;
 type Translate = (key: string, values?: Record<string, string | number>) => string;
@@ -32,6 +38,16 @@ interface CloudSyncDashboardTabsProps {
   onApplyPayload: (payload: SyncPayload) => void | Promise<void>;
   onApplyLocalPayload?: (payload: SyncPayload) => void | Promise<void>;
   setShowClearLocalDialog: Dispatch<SetStateAction<boolean>>;
+  convergentConfig: { enabled: boolean; initialized: boolean };
+  convergentPreview: ConvergentMigrationPreview | null;
+  convergentBusy: boolean;
+  convergentError: string | null;
+  convergentConflicts: ConvergentFieldConflict[];
+  onToggleConvergent: (enabled: boolean) => void | Promise<void>;
+  onConfirmConvergentMigration: () => void | Promise<void>;
+  onCancelConvergentMigration: () => void;
+  onResolveConvergentConflict: (addressKey: string, candidateDot: string) => void | Promise<void>;
+  onDowngradeConvergent: () => void | Promise<void>;
 }
 
 export const CloudSyncDashboardTabs: React.FC<CloudSyncDashboardTabsProps> = ({
@@ -51,7 +67,17 @@ export const CloudSyncDashboardTabs: React.FC<CloudSyncDashboardTabsProps> = ({
   handleSync,
   onApplyPayload,
   onApplyLocalPayload,
-  setShowClearLocalDialog
+  setShowClearLocalDialog,
+  convergentConfig,
+  convergentPreview,
+  convergentBusy,
+  convergentError,
+  convergentConflicts,
+  onToggleConvergent,
+  onConfirmConvergentMigration,
+  onCancelConvergentMigration,
+  onResolveConvergentConflict,
+  onDowngradeConvergent,
 }) => (
             <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'providers' | 'status')} className="space-y-4">
                 <TabsList className="grid w-full grid-cols-2">
@@ -164,6 +190,21 @@ export const CloudSyncDashboardTabs: React.FC<CloudSyncDashboardTabsProps> = ({
                 </TabsContent>
 
                 <TabsContent value="status" className="space-y-4">
+                    <ConvergentSyncPanel
+                        t={t}
+                        resolvedLocale={resolvedLocale}
+                        config={convergentConfig}
+                        preview={convergentPreview}
+                        busy={convergentBusy}
+                        error={convergentError}
+                        conflicts={convergentConflicts}
+                        onToggle={onToggleConvergent}
+                        onConfirmMigration={onConfirmConvergentMigration}
+                        onCancelMigration={onCancelConvergentMigration}
+                        onResolveConflict={onResolveConvergentConflict}
+                        onDowngrade={onDowngradeConvergent}
+                    />
+
                     <div className="p-4 rounded-lg border bg-card">
                         <div className="flex items-center justify-between">
                             <div>

@@ -90,6 +90,7 @@ export function loadInitialStateImpl(this: any): SyncManagerState {
       syncStrategy: normalizeCloudSyncStrategy(syncConfig?.syncStrategy ?? DEFAULT_CLOUD_SYNC_STRATEGY),
       syncHistory,
       pendingLocalSync: false,
+      convergentConflicts: [],
     };
   }
 

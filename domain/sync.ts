@@ -512,6 +512,10 @@ export interface SyncResult {
   shrinkBlocked?: boolean;
   /** The finding that triggered the shrink block or force-push */
   finding?: ShrinkFinding;
+  /** Field-level conflicts retained by convergent sync v2. */
+  convergentConflicts?: ConvergentFieldConflict[];
+  /** Number of retained v2 conflicts; duplicated for lightweight status views. */
+  convergentConflictCount?: number;
 }
 
 export interface RemoteSyncPayload {

@@ -30,8 +30,10 @@ import {
   type SyncedFile,
   type ConvergentProviderBaselineV2,
   type ConvergentReplicaRecordV2,
+  type ConvergentFieldConflict,
 } from '../../domain/sync';
 import type { CloudSyncConflictAction, CloudSyncStrategy } from '../../domain/syncStrategy';
+import { materializeConvergentSyncState } from '../../domain/convergentSync';
 import { type CloudAdapter } from './adapters';
 import type { DeviceFlowState } from './adapters/GitHubAdapter';
 
@@ -125,6 +127,11 @@ import {
   saveConvergentProviderBaselineImpl,
   saveConvergentReplicaImpl,
 } from './cloudSync/convergentSyncStorageMethods';
+import {
+  downgradeConvergentSyncImpl,
+  resolveConvergentConflictAndSyncImpl,
+  withConvergentSyncWebLock,
+} from './cloudSync/convergentSyncRuntimeMethods';
 
 // ============================================================================
 // Types
@@ -150,6 +157,8 @@ export interface SyncManagerState {
   syncHistory: SyncHistoryEntry[];
   /** True when local vault data differs from the last successful sync snapshot. */
   pendingLocalSync: boolean;
+  /** Current field-level conflicts retained by convergent sync v2. */
+  convergentConflicts: ConvergentFieldConflict[];
   /** Last shrink finding that put us into BLOCKED state, retained until
    * a sync actually succeeds (SYNC_COMPLETED with result.success) or
    * `clearShrinkBlockedState()` is called. Renderer hydrates the banner
@@ -341,6 +350,7 @@ export class CloudSyncManager {
         s3: { ...this.state.providers.s3 },
       },
       syncHistory: [...this.state.syncHistory],
+      convergentConflicts: [...this.state.convergentConflicts],
       currentConflict: this.state.currentConflict ? { ...this.state.currentConflict } : null,
     };
     this.stateChangeListeners.forEach(cb => cb());
@@ -851,11 +861,21 @@ export class CloudSyncManager {
   }
 
   async saveConvergentReplica(record: ConvergentReplicaRecordV2): Promise<void> {
-    return saveConvergentReplicaImpl.call(this, record);
+    await saveConvergentReplicaImpl.call(this, record);
+    this.state.convergentConflicts = materializeConvergentSyncState(record.state).conflicts;
+    this.notifyStateChange();
   }
 
   async loadConvergentReplica(): Promise<ConvergentReplicaRecordV2 | null> {
     return loadConvergentReplicaImpl.call(this);
+  }
+
+  async refreshConvergentConflicts(): Promise<void> {
+    const replica = await this.loadConvergentReplica();
+    this.state.convergentConflicts = replica
+      ? materializeConvergentSyncState(replica.state).conflicts
+      : [];
+    this.notifyStateChange();
   }
 
   async saveConvergentProviderBaseline(baseline: ConvergentProviderBaselineV2): Promise<void> {
@@ -866,6 +886,30 @@ export class CloudSyncManager {
     provider: CloudProvider,
   ): Promise<ConvergentProviderBaselineV2 | null> {
     return loadConvergentProviderBaselineImpl.call(this, provider);
+  }
+
+  async resolveConvergentConflict(
+    addressKey: string,
+    candidateDot: string,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
+  ): Promise<{ payload: SyncPayload; results: Map<CloudProvider, SyncResult> }> {
+    return resolveConvergentConflictAndSyncImpl.call(
+      this,
+      addressKey,
+      candidateDot,
+      applyPayload,
+    );
+  }
+
+  async downgradeConvergentSync(confirmed = false): Promise<Map<CloudProvider, SyncResult>> {
+    return downgradeConvergentSyncImpl.call(this, confirmed);
+  }
+
+  async withConvergentSyncLock<T>(task: () => Promise<T>): Promise<T> {
+    return withConvergentSyncWebLock(task);
   }
 
   clearConvergentSyncStorage(confirmed = false): void {

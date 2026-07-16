@@ -1,4 +1,5 @@
 export * from './clock';
+export * from './conflicts';
 export * from './json';
 export * from './legacy';
 export * from './migration';

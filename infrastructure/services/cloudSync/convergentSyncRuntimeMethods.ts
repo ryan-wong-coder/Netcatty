@@ -1,0 +1,671 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import packageJson from '../../../package.json';
+import {
+  isProviderReadyForSync,
+  type CloudProvider,
+  type ConvergentFieldConflict,
+  type ConvergentProviderBaselineV2,
+  type ConvergentSyncStateV2,
+  type SyncPayload,
+  type SyncResult,
+  type SyncedFile,
+} from '../../../domain/sync';
+import {
+  applyLegacySyncPayload,
+  cloudSyncPayloadsEqual,
+  convergentConflictAddressKey,
+  materializeConvergentSyncState,
+  materializeSyncPayloadFromConvergentState,
+  mergeConvergentSyncStates,
+  resolveConvergentFieldConflict,
+  stripConvergentSyncEnvelope,
+  validateConvergentSyncPayload,
+  versionVectorDominates,
+  versionVectorsEqual,
+  withConvergentSyncEnvelope,
+} from '../../../domain/convergentSync';
+import type { CloudSyncStrategy } from '../../../domain/syncStrategy';
+import type { CloudSyncConflictAction } from '../../../domain/syncStrategy';
+import { detectSuspiciousShrink } from '../../../domain/syncGuards';
+import { EncryptionService } from '../EncryptionService';
+import type { CloudAdapter } from '../adapters';
+
+const CONVERGENT_SYNC_LOCK = 'netcatty-convergent-sync-v2';
+const MAX_VERIFY_ROUNDS = 3;
+const MAX_JITTER_MS = 180;
+
+interface ProviderRuntime {
+  provider: CloudProvider;
+  adapter: CloudAdapter;
+  latestRemote: SyncedFile | null;
+  verifiedState?: ConvergentSyncStateV2;
+  verifiedFile?: SyncedFile;
+  resourceId?: string;
+  error?: string;
+}
+
+interface DecodedRemote {
+  payload: SyncPayload;
+  state: ConvergentSyncStateV2;
+  file: SyncedFile;
+}
+
+function assertSyncSecurityGeneration(manager: any, generation?: number): void {
+  if (typeof manager.assertSyncSecurityGeneration === 'function') {
+    manager.assertSyncSecurityGeneration(generation);
+  }
+}
+
+function getSyncSecurityGeneration(manager: any): number | undefined {
+  return typeof manager.getSyncSecurityGeneration === 'function'
+    ? manager.getSyncSecurityGeneration()
+    : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function connectedProviders(manager: any): CloudProvider[] {
+  return (Object.entries(manager.state.providers) as Array<[
+    CloudProvider,
+    Parameters<typeof isProviderReadyForSync>[0],
+  ]>)
+    .filter(([, connection]) => isProviderReadyForSync(connection))
+    .map(([provider]) => provider)
+    .sort();
+}
+
+function syntheticLegacyDeviceId(provider: CloudProvider, file: SyncedFile): string {
+  return `legacy:${provider}:${file.meta.deviceId}`;
+}
+
+async function decodeRemote(
+  manager: any,
+  provider: CloudProvider,
+  file: SyncedFile,
+  syncSecurityGeneration?: number,
+): Promise<DecodedRemote> {
+  const payload = await EncryptionService.decryptPayload(file, manager.masterPassword);
+  assertSyncSecurityGeneration(manager, syncSecurityGeneration);
+  const state = validateConvergentSyncPayload(file.meta, payload);
+  if (state) return { payload, state, file };
+
+  const baseline = await manager.loadConvergentProviderBaseline(provider) as
+    | ConvergentProviderBaselineV2
+    | null;
+  assertSyncSecurityGeneration(manager, syncSecurityGeneration);
+  if (!baseline) {
+    throw new Error(
+      `Legacy cloud data from ${provider} has no trusted convergent baseline. Upgrade the old device or choose a version manually.`,
+    );
+  }
+
+  const legacyPayload = stripConvergentSyncEnvelope(payload);
+  const convertedState = cloudSyncPayloadsEqual(baseline.materializedPayload, legacyPayload)
+    ? baseline.state
+    : applyLegacySyncPayload(
+        baseline.state,
+        baseline.materializedPayload,
+        legacyPayload,
+        syntheticLegacyDeviceId(provider, file),
+        file.meta.updatedAt,
+      );
+  return { payload, state: convertedState, file };
+}
+
+function mergeStates(
+  initial: ConvergentSyncStateV2,
+  states: Iterable<ConvergentSyncStateV2>,
+): ConvergentSyncStateV2 {
+  let merged = initial;
+  for (const state of states) merged = mergeConvergentSyncStates(merged, state);
+  return merged;
+}
+
+function materializedPayload(state: ConvergentSyncStateV2, now: number): SyncPayload {
+  return materializeSyncPayloadFromConvergentState(state, { syncedAt: now });
+}
+
+function currentConflicts(state: ConvergentSyncStateV2): ConvergentFieldConflict[] {
+  return materializeConvergentSyncState(state).conflicts;
+}
+
+async function persistReplica(manager: any, state: ConvergentSyncStateV2, now: number): Promise<void> {
+  await manager.saveConvergentReplica({ schemaVersion: 2, state, updatedAt: now });
+}
+
+function updateConflictState(manager: any, state: ConvergentSyncStateV2): ConvergentFieldConflict[] {
+  const conflicts = currentConflicts(state);
+  manager.state.convergentConflicts = conflicts;
+  return conflicts;
+}
+
+async function fullJitter(round: number): Promise<void> {
+  const ceiling = Math.min(MAX_JITTER_MS, 30 * (2 ** round));
+  const delay = Math.floor(Math.random() * (ceiling + 1));
+  if (delay <= 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, delay));
+}
+
+async function downloadProviderState(
+  manager: any,
+  runtime: ProviderRuntime,
+  syncSecurityGeneration?: number,
+): Promise<DecodedRemote | null> {
+  const file = await runtime.adapter.download();
+  assertSyncSecurityGeneration(manager, syncSecurityGeneration);
+  runtime.latestRemote = file;
+  return file
+    ? decodeRemote(manager, runtime.provider, file, syncSecurityGeneration)
+    : null;
+}
+
+async function saveVerifiedBaseline(
+  manager: any,
+  runtime: ProviderRuntime,
+  decoded: DecodedRemote,
+): Promise<void> {
+  await manager.saveConvergentProviderBaseline({
+    schemaVersion: 2,
+    provider: runtime.provider,
+    remoteVersion: decoded.file.meta.version,
+    remoteUpdatedAt: decoded.file.meta.updatedAt,
+    remoteDeviceId: decoded.file.meta.deviceId,
+    materializedPayload: stripConvergentSyncEnvelope(decoded.payload),
+    state: decoded.state,
+  });
+}
+
+async function markProviderVerified(
+  manager: any,
+  runtime: ProviderRuntime,
+  decoded: DecodedRemote,
+): Promise<void> {
+  runtime.verifiedState = decoded.state;
+  runtime.verifiedFile = decoded.file;
+  runtime.error = undefined;
+  await saveVerifiedBaseline(manager, runtime, decoded);
+
+  const connection = manager.state.providers[runtime.provider];
+  manager.state.providers[runtime.provider] = {
+    ...connection,
+    resourceId: runtime.resourceId || connection.resourceId,
+    lastSync: Date.now(),
+    lastSyncVersion: decoded.file.meta.version,
+  };
+  manager.state.remoteVersion = Math.max(manager.state.remoteVersion, decoded.file.meta.version);
+  manager.state.remoteUpdatedAt = Math.max(manager.state.remoteUpdatedAt, decoded.file.meta.updatedAt);
+  if (typeof manager.saveProviderConnection === 'function') {
+    await manager.saveProviderConnection(runtime.provider, manager.state.providers[runtime.provider]);
+  }
+  manager.updateProviderStatus(runtime.provider, 'connected');
+}
+
+function failedResult(provider: CloudProvider, error: string): SyncResult {
+  return { success: false, provider, action: 'none', error };
+}
+
+async function runInitialDownloads(
+  manager: any,
+  providers: CloudProvider[],
+  syncSecurityGeneration?: number,
+): Promise<ProviderRuntime[]> {
+  return Promise.all(providers.map(async (provider): Promise<ProviderRuntime> => {
+    manager.updateProviderStatus(provider, 'syncing');
+    manager.emit({ type: 'SYNC_STARTED', provider });
+    try {
+      const adapter = await manager.getConnectedAdapter(provider) as CloudAdapter;
+      assertSyncSecurityGeneration(manager, syncSecurityGeneration);
+      const runtime: ProviderRuntime = { provider, adapter, latestRemote: null };
+      try {
+        const decoded = await downloadProviderState(manager, runtime, syncSecurityGeneration);
+        if (decoded) runtime.verifiedState = decoded.state;
+      } catch (error) {
+        runtime.error = errorMessage(error);
+      }
+      return runtime;
+    } catch (error) {
+      return {
+        provider,
+        adapter: undefined as unknown as CloudAdapter,
+        latestRemote: null,
+        error: errorMessage(error),
+      };
+    }
+  }));
+}
+
+function prepareLocalState(
+  strategy: CloudSyncStrategy,
+  replica: ConvergentSyncStateV2,
+  localPayload: SyncPayload,
+  remoteStates: ConvergentSyncStateV2[],
+  deviceId: string,
+  now: number,
+): ConvergentSyncStateV2 {
+  const localBaseline = materializedPayload(replica, now);
+  if (strategy === 'preferCloud' && remoteStates.length > 0) {
+    const [first, ...rest] = remoteStates;
+    return mergeStates(first, rest);
+  }
+  if (strategy === 'preferLocal') {
+    const joined = mergeStates(replica, remoteStates);
+    return applyLegacySyncPayload(
+      joined,
+      localBaseline,
+      stripConvergentSyncEnvelope(localPayload),
+      deviceId,
+      now,
+    );
+  }
+  const withLocalWrites = applyLegacySyncPayload(
+    replica,
+    localBaseline,
+    stripConvergentSyncEnvelope(localPayload),
+    deviceId,
+    now,
+  );
+  return mergeStates(withLocalWrites, remoteStates);
+}
+
+/**
+ * The unlocked implementation is exported for deterministic integration
+ * tests. Production callers must use `syncAllProvidersConvergentlyImpl`, which
+ * holds the cross-window Web Lock.
+ */
+export async function syncConvergentProvidersUnlockedImpl(
+  this: any,
+  inputPayload: SyncPayload,
+  options: {
+    maxRounds?: number;
+    now?: () => number;
+    jitter?: (round: number) => Promise<void>;
+    strategyOverride?: CloudSyncStrategy;
+    overrideShrink?: boolean;
+  } = {},
+): Promise<Map<CloudProvider, SyncResult>> {
+  const results = new Map<CloudProvider, SyncResult>();
+  const providers = connectedProviders(this);
+  if (providers.length === 0) return results;
+  if (this.state.securityState !== 'UNLOCKED' || !this.masterPassword) {
+    for (const provider of providers) results.set(provider, failedResult(provider, 'Vault is locked'));
+    return results;
+  }
+
+  const now = options.now ?? Date.now;
+  const jitter = options.jitter ?? fullJitter;
+  const maxRounds = options.maxRounds ?? MAX_VERIFY_ROUNDS;
+  const syncSecurityGeneration = getSyncSecurityGeneration(this);
+  this.state.syncState = 'SYNCING';
+  this.state.lastError = null;
+  this.state.currentConflict = null;
+
+  const replica = await this.loadConvergentReplica();
+  if (!replica) {
+    const message = 'Convergent sync is initialized but its local replica is missing';
+    this.state.syncState = 'ERROR';
+    this.state.lastError = message;
+    for (const provider of providers) results.set(provider, failedResult(provider, message));
+    this.notifyStateChange();
+    return results;
+  }
+
+  const strategy = options.strategyOverride ?? this.state.syncStrategy;
+  const replicaPayload = materializedPayload(replica.state, now());
+  if (strategy !== 'preferCloud') {
+    const finding = detectSuspiciousShrink(
+      stripConvergentSyncEnvelope(inputPayload),
+      replicaPayload,
+      null,
+    );
+    if (finding.suspicious && !options.overrideShrink) {
+      this.state.syncState = 'BLOCKED';
+      this.state.lastShrinkFinding = finding;
+      for (const provider of providers) {
+        this.updateProviderStatus(provider, 'error', 'Sync blocked: would delete too much');
+        this.emit({ type: 'SYNC_BLOCKED_SHRINK', provider, finding });
+        results.set(provider, {
+          success: false,
+          provider,
+          action: 'none',
+          shrinkBlocked: true,
+          finding,
+        });
+      }
+      this.notifyStateChange();
+      return results;
+    }
+    if (finding.suspicious) {
+      for (const provider of providers) {
+        this.emit({ type: 'SYNC_FORCED', provider, finding });
+      }
+    }
+  }
+
+  const runtimes = await runInitialDownloads(this, providers, syncSecurityGeneration);
+  // Adapter acquisition failures are terminal for this cycle. Download,
+  // decrypt, and verification failures remain retryable in later rounds.
+  const usable = runtimes.filter((runtime) => Boolean(runtime.adapter));
+  let canonical = prepareLocalState(
+    strategy,
+    replica.state,
+    inputPayload,
+    usable.flatMap((runtime) => runtime.verifiedState ? [runtime.verifiedState] : []),
+    this.state.deviceId,
+    now(),
+  );
+
+  // Local durability precedes every network write. A crash can therefore
+  // retry from the same causal state without regenerating dots.
+  await persistReplica(this, canonical, now());
+  updateConflictState(this, canonical);
+
+  for (let round = 0; round < maxRounds && usable.length > 0; round += 1) {
+    if (round > 0) await jitter(round);
+
+    const preflight = await Promise.all(usable.map(async (runtime) => {
+      try {
+        const decoded = await downloadProviderState(this, runtime, syncSecurityGeneration);
+        runtime.error = undefined;
+        return decoded;
+      } catch (error) {
+        runtime.error = errorMessage(error);
+        return null;
+      }
+    }));
+    canonical = mergeStates(canonical, preflight.flatMap((decoded) => decoded ? [decoded.state] : []));
+    await persistReplica(this, canonical, now());
+
+    const expected = canonical;
+    const outgoingPayload = withConvergentSyncEnvelope(expected, { syncedAt: now() });
+    await Promise.all(usable.map(async (runtime) => {
+      if (runtime.error) return;
+      try {
+        const remoteVersion = runtime.latestRemote?.meta.version ?? this.state.localVersion;
+        const file = await EncryptionService.encryptPayload(
+          outgoingPayload,
+          this.masterPassword,
+          this.state.deviceId,
+          this.state.deviceName,
+          packageJson.version,
+          remoteVersion,
+        );
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        runtime.resourceId = await runtime.adapter.upload(file);
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        runtime.latestRemote = file;
+      } catch (error) {
+        runtime.error = errorMessage(error);
+      }
+    }));
+
+    const verified = await Promise.all(usable.map(async (runtime) => {
+      if (runtime.error) return null;
+      try {
+        const decoded = await downloadProviderState(this, runtime, syncSecurityGeneration);
+        if (!decoded) throw new Error('Provider returned no file after upload');
+        if (!versionVectorDominates(decoded.state.vector, expected.vector)) {
+          throw new Error('Remote verification did not retain the expected convergent state');
+        }
+        await markProviderVerified(this, runtime, decoded);
+        return decoded;
+      } catch (error) {
+        runtime.error = errorMessage(error);
+        return null;
+      }
+    }));
+
+    canonical = mergeStates(canonical, verified.flatMap((decoded) => decoded ? [decoded.state] : []));
+    await persistReplica(this, canonical, now());
+    updateConflictState(this, canonical);
+
+    const activeVerified = usable.filter((runtime) => runtime.verifiedState && !runtime.error);
+    if (
+      activeVerified.length === usable.length
+      && activeVerified.every((runtime) => versionVectorDominates(
+        runtime.verifiedState!.vector,
+        canonical.vector,
+      ))
+      && versionVectorsEqual(expected.vector, canonical.vector)
+    ) break;
+  }
+
+  const conflicts = updateConflictState(this, canonical);
+  const mergedPayload = materializedPayload(canonical, now());
+  let hasSuccess = false;
+  for (const runtime of runtimes) {
+    if (
+      runtime.verifiedState
+      && !runtime.error
+      && versionVectorDominates(runtime.verifiedState.vector, canonical.vector)
+    ) {
+      hasSuccess = true;
+      const result: SyncResult = {
+        success: true,
+        provider: runtime.provider,
+        action: 'merge',
+        version: runtime.verifiedFile?.meta.version ?? runtime.latestRemote?.meta.version,
+        mergedPayload,
+        convergentConflicts: conflicts,
+        convergentConflictCount: conflicts.length,
+      };
+      results.set(runtime.provider, result);
+      this.emit({ type: 'SYNC_COMPLETED', provider: runtime.provider, result });
+      this.addSyncHistoryEntry({
+        timestamp: now(),
+        provider: runtime.provider,
+        action: 'merge',
+        success: true,
+        localVersion: result.version ?? this.state.localVersion,
+        remoteVersion: result.version,
+        deviceName: this.state.deviceName,
+      });
+    } else {
+      const message = runtime.error ?? `Provider did not converge after ${maxRounds} verification rounds`;
+      runtime.error = message;
+      results.set(runtime.provider, failedResult(runtime.provider, message));
+      this.updateProviderStatus(runtime.provider, 'error', message);
+      this.emit({ type: 'SYNC_ERROR', provider: runtime.provider, error: message });
+      this.addSyncHistoryEntry({
+        timestamp: now(),
+        provider: runtime.provider,
+        action: 'merge',
+        success: false,
+        localVersion: this.state.localVersion,
+        deviceName: this.state.deviceName,
+        error: message,
+      });
+    }
+  }
+
+  this.state.localVersion = Math.max(
+    this.state.localVersion,
+    ...runtimes.map((runtime) => runtime.verifiedFile?.meta.version ?? 0),
+  );
+  this.state.localUpdatedAt = now();
+  this.state.pendingLocalSync = !runtimes.every((runtime) => results.get(runtime.provider)?.success);
+  if (hasSuccess) this.exitBlockedState();
+  this.state.syncState = hasSuccess ? 'IDLE' : 'ERROR';
+  this.state.lastError = hasSuccess
+    ? null
+    : runtimes.find((runtime) => runtime.error)?.error ?? 'Convergent sync failed';
+  if (hasSuccess) {
+    this.state.lastShrinkFinding = undefined;
+  }
+  this.saveSyncConfig();
+  this.notifyStateChange();
+  return results;
+}
+
+export async function withConvergentSyncWebLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks) {
+    throw new Error('Convergent sync requires the Web Locks API to prevent concurrent window writes');
+  }
+  return locks.request(
+    CONVERGENT_SYNC_LOCK,
+    { mode: 'exclusive', ifAvailable: true },
+    async (lock) => {
+      if (!lock) throw new Error('Convergent sync is already running in another window');
+      return task();
+    },
+  );
+}
+
+export async function syncAllProvidersConvergentlyImpl(
+  this: any,
+  inputPayload: SyncPayload,
+  opts: {
+    conflictActionOverride?: CloudSyncConflictAction;
+    overrideShrink?: boolean;
+  } = {},
+): Promise<Map<CloudProvider, SyncResult>> {
+  try {
+    const strategyOverride = opts.conflictActionOverride === 'upload-local'
+      ? 'preferLocal'
+      : opts.conflictActionOverride === 'download-remote'
+        ? 'preferCloud'
+        : undefined;
+    return await withConvergentSyncWebLock(
+      () => syncConvergentProvidersUnlockedImpl.call(this, inputPayload, {
+        strategyOverride,
+        overrideShrink: opts.overrideShrink,
+      }),
+    );
+  } catch (error) {
+    const message = errorMessage(error);
+    const results = new Map<CloudProvider, SyncResult>();
+    for (const provider of connectedProviders(this)) {
+      results.set(provider, failedResult(provider, message));
+      this.updateProviderStatus(provider, 'error', message);
+      this.emit({ type: 'SYNC_ERROR', provider, error: message });
+    }
+    this.state.syncState = 'ERROR';
+    this.state.lastError = message;
+    this.notifyStateChange();
+    return results;
+  }
+}
+
+async function prepareConvergentConflictResolutionImpl(
+  this: any,
+  addressKey: string,
+  candidateDot: string,
+  now = Date.now(),
+): Promise<{ state: ConvergentSyncStateV2; payload: SyncPayload; now: number }> {
+  const replica = await this.loadConvergentReplica();
+  if (!replica) throw new Error('Convergent sync replica is unavailable');
+  const conflict = currentConflicts(replica.state).find(
+    (entry) => convergentConflictAddressKey(entry.address) === addressKey,
+  );
+  if (!conflict) throw new Error('The convergent conflict no longer exists');
+  const resolved = resolveConvergentFieldConflict(
+    replica.state,
+    conflict,
+    candidateDot,
+    this.state.deviceId,
+    now,
+  );
+  return { state: resolved, payload: materializedPayload(resolved, now), now };
+}
+
+export async function resolveConvergentConflictAndSyncImpl(
+  this: any,
+  addressKey: string,
+  candidateDot: string,
+  applyPayload: (
+    payload: SyncPayload,
+    commitReplica: () => Promise<void>,
+  ) => Promise<void>,
+): Promise<{ payload: SyncPayload; results: Map<CloudProvider, SyncResult> }> {
+  return withConvergentSyncWebLock(async () => {
+    const prepared = await prepareConvergentConflictResolutionImpl.call(
+      this,
+      addressKey,
+      candidateDot,
+    );
+    let committed = false;
+    await applyPayload(prepared.payload, async () => {
+      if (committed) return;
+      await persistReplica(this, prepared.state, prepared.now);
+      updateConflictState(this, prepared.state);
+      this.state.pendingLocalSync = true;
+      this.notifyStateChange();
+      committed = true;
+    });
+    if (!committed) {
+      throw new Error('Convergent conflict apply completed without committing its replica');
+    }
+    const results = await syncConvergentProvidersUnlockedImpl.call(this, prepared.payload);
+    return { payload: prepared.payload, results };
+  });
+}
+
+export async function downgradeConvergentSyncImpl(
+  this: any,
+  confirmed: boolean,
+): Promise<Map<CloudProvider, SyncResult>> {
+  if (!confirmed) throw new Error('Explicit confirmation is required to downgrade convergent sync');
+  return withConvergentSyncWebLock(async () => {
+    const syncSecurityGeneration = getSyncSecurityGeneration(this);
+    assertSyncSecurityGeneration(this, syncSecurityGeneration);
+    const providers = connectedProviders(this);
+    if (providers.length === 0) {
+      throw new Error('Connect every provider containing convergent data before downgrading');
+    }
+    const replica = await this.loadConvergentReplica();
+    if (!replica) throw new Error('Convergent sync replica is unavailable');
+    const outgoing = materializedPayload(replica.state, Date.now());
+    const results = new Map<CloudProvider, SyncResult>();
+    await Promise.all(providers.map(async (provider) => {
+      try {
+        const adapter = await this.getConnectedAdapter(provider) as CloudAdapter;
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        const before = await adapter.download();
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        const remoteSchema = (before?.meta as { syncSchemaVersion?: unknown } | undefined)
+          ?.syncSchemaVersion;
+        if (remoteSchema !== undefined && remoteSchema !== 2) {
+          throw new Error(`Cannot downgrade unsupported sync schema version: ${String(remoteSchema)}`);
+        }
+        const file = await EncryptionService.encryptPayload(
+          outgoing,
+          this.masterPassword,
+          this.state.deviceId,
+          this.state.deviceName,
+          packageJson.version,
+          before?.meta.version ?? this.state.localVersion,
+        );
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        await adapter.upload(file);
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        const verifiedFile = await adapter.download();
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        if (!verifiedFile) throw new Error('Provider returned no file after downgrade');
+        const verifiedPayload = await EncryptionService.decryptPayload(verifiedFile, this.masterPassword);
+        assertSyncSecurityGeneration(this, syncSecurityGeneration);
+        if (validateConvergentSyncPayload(verifiedFile.meta, verifiedPayload) !== null) {
+          throw new Error('Provider still contains convergent metadata after downgrade');
+        }
+        if (!cloudSyncPayloadsEqual(outgoing, verifiedPayload)) {
+          throw new Error('Provider payload changed while verifying downgrade');
+        }
+        results.set(provider, {
+          success: true,
+          provider,
+          action: 'upload',
+          version: verifiedFile.meta.version,
+        });
+        this.updateProviderStatus(provider, 'connected');
+      } catch (error) {
+        const message = errorMessage(error);
+        results.set(provider, failedResult(provider, message));
+        this.updateProviderStatus(provider, 'error', message);
+      }
+    }));
+    this.notifyStateChange();
+    return results;
+  });
+}

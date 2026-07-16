@@ -8,6 +8,8 @@ import { summarizeSyncChanges, withSyncReliabilityMeta } from '../../../domain/s
 import { detectSuspiciousShrink, type ShrinkFinding } from '../../../domain/syncGuards';
 import { resolveCloudSyncConflictAction } from '../../../domain/syncStrategy';
 import { assertConvergentSyncWriteCompatible } from '../../../domain/convergentSync';
+import { getConvergentSyncLocalConfig } from '../convergentSyncConfig';
+import { syncAllProvidersConvergentlyImpl } from './convergentSyncRuntimeMethods';
 import type { CloudAdapter } from '../adapters';
 import type GitHubAdapter from '../adapters/GitHubAdapter';
 import type {
@@ -268,6 +270,27 @@ export async function syncToProviderImpl(this: any,
   payload: SyncPayload,
   opts: { overrideShrink?: boolean } = {},
 ): Promise<SyncResult> {
+    const convergentConfig = getConvergentSyncLocalConfig();
+    if (convergentConfig.initialized) {
+      if (!convergentConfig.enabled) {
+        return {
+          success: false,
+          provider,
+          action: 'none',
+          error: 'Convergent sync is paused on this device',
+        };
+      }
+      const results = await syncAllProvidersConvergentlyImpl.call(this, payload, {
+        overrideShrink: opts.overrideShrink,
+      });
+      return results.get(provider) ?? {
+        success: false,
+        provider,
+        action: 'none',
+        error: 'Provider is not available for convergent sync',
+      };
+    }
+
     if (this.state.securityState !== 'UNLOCKED') {
       return {
         success: false,

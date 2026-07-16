@@ -1,7 +1,6 @@
 # Convergent Sync Protocol and Migration
 
-Status: experimental protocol layer; provider state-machine integration and UI
-remain in the final follow-up PR.
+Status: experimental end-to-end implementation.
 
 Issue: [#2245](https://github.com/binaricat/Netcatty/issues/2245)
 
@@ -112,10 +111,51 @@ In-memory entities are normalized with the same JSON serialization semantics
 as encrypted sync payloads before validation, so optional `undefined` model
 fields are omitted instead of preventing migration.
 
-## Follow-up boundary
+## Provider convergence state machine
 
-This change deliberately does not replace the current provider loop. The final
-PR will enable unordered provider joins, Web Locks serialization, local-first
-replica persistence, three-round read-merge-write-verify uploads, conflict
-resolution UI, secret masking, localized migration controls, and explicit cloud
-downgrade propagation.
+An initialized device holds one canonical replica shared by every provider.
+Each sync acquires an exclusive Web Lock; environments without Web Locks fail
+closed so two renderer windows cannot allocate and upload competing local
+states. Disabling the experimental switch pauses the v2 path and never falls
+through to the legacy writer.
+
+The runtime downloads every connected provider before choosing an outgoing
+state. `smartMerge` joins local writes and all remote branches, `preferLocal`
+joins first and then creates causal local writes that dominate the joined
+registers, and `preferCloud` adopts the unordered remote join. The canonical
+replica is encrypted and persisted before any provider upload.
+Before `smartMerge` or `preferLocal` turns a local snapshot into writes, the
+existing suspicious-shrink guard compares it with the materialized replica.
+Mass deletion is blocked before dots are allocated or persisted unless the
+user performs the existing one-shot force operation.
+
+Providers then run at most three read-merge-write-verify rounds. Every round:
+
+1. downloads and joins any state that appeared since the initial read;
+2. persists the expanded canonical replica;
+3. uploads the same expected vector to available providers;
+4. reads each provider back and accepts the write only when the returned vector
+   dominates the expected vector;
+5. joins verified remote supersets and repeats when they contain new concurrent
+   state.
+
+The retry delay uses short full jitter. One unavailable provider remains an
+error and leaves local sync pending, but it does not roll back providers that
+verified successfully. Because the canonical state is durable before network
+I/O, application restart retries the same causal writes instead of regenerating
+dots. Provider baselines advance only after read-back verification.
+
+## Conflict resolution and downgrade
+
+Materialization exposes retained conflicts by register address. Choosing a
+candidate writes a new device value whose context observes every candidate;
+the resolution therefore dominates stale replicas and propagates through the
+normal provider state machine. Secret-bearing fields are detected from their
+address and nested field names. Their UI renders only “set” or “empty”; values
+are never formatted, logged, or inserted into DOM text.
+
+Explicit downgrade holds the same Web Lock, writes a materialized v1 snapshot
+to every connected provider, downloads it again, verifies both the absence of
+v2 metadata and equality of cloud data, and only then allows local replica and
+baseline metadata to be cleared. A partial downgrade keeps local v2 state so
+the user can retry safely.

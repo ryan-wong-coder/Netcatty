@@ -41,6 +41,28 @@ export function mergeVersionVectors(
   return merged;
 }
 
+/**
+ * Returns true when `candidate` has observed every write represented by
+ * `expected`. Extra counters in `candidate` are allowed: they represent a
+ * remote superset that must be joined and propagated, not a failed write.
+ */
+export function versionVectorDominates(
+  candidate: VersionVector,
+  expected: VersionVector,
+): boolean {
+  return Object.keys(expected).every(
+    (deviceId) => (getOwnRecordValue(candidate, deviceId) ?? 0)
+      >= (getOwnRecordValue(expected, deviceId) ?? 0),
+  );
+}
+
+export function versionVectorsEqual(
+  left: VersionVector,
+  right: VersionVector,
+): boolean {
+  return versionVectorDominates(left, right) && versionVectorDominates(right, left);
+}
+
 export function compareHybridLogicalClocks(
   left: HybridLogicalClock,
   right: HybridLogicalClock,

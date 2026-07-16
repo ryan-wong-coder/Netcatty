@@ -120,7 +120,7 @@ export async function initializePreparedConvergentMigration(options: {
     throw new Error('Unlock cloud sync before initializing convergent migration');
   }
   const runProtectedApply = options.runProtectedApply ?? applyProtectedSyncPayload;
-  await runProtectedApply({
+  await manager.withConvergentSyncLock(() => runProtectedApply({
     buildPreApplyPayload: options.buildPreApplyPayload,
     translateProtectiveBackupFailure: options.translateProtectiveBackupFailure,
     applyPayload: async () => {
@@ -135,7 +135,7 @@ export async function initializePreparedConvergentMigration(options: {
       });
       markConvergentSyncInitialized();
     },
-  });
+  }));
   return prepared.plan.preview;
 }
 

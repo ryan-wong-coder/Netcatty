@@ -241,6 +241,9 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   // Sync now handler - get fresh state directly from manager
   const syncNow = useCallback(async (options?: SyncNowOptions): Promise<boolean> => {
     if (!enabled) return false;
+    if (sync.convergentSyncConfig.initialized && !sync.convergentSyncConfig.enabled) {
+      return false;
+    }
     const trigger: SyncTrigger = options?.trigger ?? 'auto';
 
     isSyncRunningRef.current = true;

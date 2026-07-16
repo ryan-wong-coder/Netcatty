@@ -14,6 +14,7 @@ import {
   syncAllProvidersImpl,
 } from "./syncAllStorageMethods.ts";
 import type { CloudProvider, SyncedFile, SyncPayload } from "../../../domain/sync.ts";
+import { setConvergentSyncLocalConfig } from "../convergentSyncConfig.ts";
 
 function payload(hostId: string): SyncPayload {
   return payloadWithHosts([hostId]);
@@ -652,5 +653,45 @@ test("syncAllProviders builds provider-specific sync metadata from each provider
     }]);
   } finally {
     EncryptionService.encryptPayload = originalEncryptPayload;
+  }
+});
+
+test("an initialized but paused v2 replica cannot fall through to legacy provider writes", async () => {
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const values = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    },
+  });
+  try {
+    setConvergentSyncLocalConfig({ enabled: false, initialized: true });
+    let adapterRequested = false;
+    const manager = {
+      state: {
+        providers: {
+          github: { provider: "github", status: "connected" },
+        },
+      },
+      getConnectedAdapter: async () => {
+        adapterRequested = true;
+        throw new Error("legacy path must not run");
+      },
+    };
+
+    const all = await syncAllProvidersImpl.call(manager, payload("local"));
+    const one = await syncToProviderImpl.call(manager, "github", payload("local"));
+
+    assert.equal(all.get("github")?.success, false);
+    assert.match(all.get("github")?.error ?? "", /paused/i);
+    assert.equal(one.success, false);
+    assert.match(one.error ?? "", /paused/i);
+    assert.equal(adapterRequested, false);
+  } finally {
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
   }
 });
