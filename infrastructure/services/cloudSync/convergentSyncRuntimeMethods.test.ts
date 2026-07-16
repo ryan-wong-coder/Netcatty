@@ -653,6 +653,7 @@ test('explicit downgrade replaces v2 only after a verified legacy write', async 
     const results = await downgradeConvergentSyncImpl.call(
       subject,
       true,
+      async () => localPayload,
       async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
         appliedPayload = incoming;
         await commitReplica();
@@ -696,6 +697,7 @@ test('downgrade reports cleanup failure instead of releasing a successful result
     const results = await downgradeConvergentSyncImpl.call(
       subject,
       true,
+      async () => localPayload,
       async (_incoming: SyncPayload, commitReplica: () => Promise<void>) => {
         await commitReplica();
       },
@@ -740,6 +742,7 @@ test('downgrade joins remote-only v2 edits before applying or writing v1', async
     const results = await downgradeConvergentSyncImpl.call(
       subject,
       true,
+      async () => basePayload,
       async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
         appliedPayload = incoming;
         await commitReplica();
@@ -757,6 +760,65 @@ test('downgrade joins remote-only v2 edits before applying or writing v1', async
       'remote-only',
     );
     assert.equal(baselines.github?.materializedPayload.hosts[0]?.label, 'remote-only');
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    encryption.restore();
+  }
+});
+
+test('downgrade folds paused local edits into the joined provider state', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const basePayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
+    const pausedLocalPayload = payload('paused-local');
+    const remote = remoteState(
+      base,
+      basePayload,
+      payload('base', 'remote-user'),
+      'remote-device',
+      NOW + 1,
+    );
+    const github = adapter(encryption.register(
+      withConvergentSyncEnvelope(remote, { syncedAt: NOW + 1 }),
+      4,
+      'remote-device',
+    ));
+    const subject = manager(base, { github });
+    let appliedPayload: SyncPayload | null = null;
+
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async () => pausedLocalPayload,
+      async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        appliedPayload = incoming;
+        await commitReplica();
+      },
+    );
+
+    assert.equal(results.get('github')?.success, true);
+    assert.equal(appliedPayload?.hosts[0]?.label, 'paused-local');
+    assert.equal(appliedPayload?.hosts[0]?.username, 'remote-user');
+    const verified = await EncryptionService.decryptPayload(github.remote!, 'pw');
+    assert.equal(verified.hosts[0]?.label, 'paused-local');
+    assert.equal(verified.hosts[0]?.username, 'remote-user');
+    const persisted = materializeSyncPayloadFromConvergentState(
+      subject.persisted.at(-1)!,
+      { syncedAt: NOW },
+    );
+    assert.equal(persisted.hosts[0]?.label, 'paused-local');
+    assert.equal(persisted.hosts[0]?.username, 'remote-user');
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
@@ -787,6 +849,7 @@ test('downgrade preflight failure writes neither local state nor another provide
     const results = await downgradeConvergentSyncImpl.call(
       subject,
       true,
+      async () => localPayload,
       async () => {
         applied = true;
       },
@@ -823,9 +886,14 @@ test('failed protected downgrade apply uploads nothing and exits syncing state',
     const subject = manager(base, { github });
 
     await assert.rejects(
-      () => downgradeConvergentSyncImpl.call(subject, true, async () => {
-        throw new Error('protective downgrade apply failed');
-      }),
+      () => downgradeConvergentSyncImpl.call(
+        subject,
+        true,
+        async () => localPayload,
+        async () => {
+          throw new Error('protective downgrade apply failed');
+        },
+      ),
       /protective downgrade apply failed/,
     );
 
@@ -873,6 +941,7 @@ test('downgrade preserves concurrent provider candidates and blocks legacy write
     const results = await downgradeConvergentSyncImpl.call(
       subject,
       true,
+      async () => basePayload,
       async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
         appliedPayload = incoming;
         await commitReplica();

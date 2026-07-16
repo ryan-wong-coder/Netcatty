@@ -124,6 +124,7 @@ export interface CloudSyncHook {
   ) => Promise<{ payload: SyncPayload; results: Map<CloudProvider, SyncResult> }>;
   downgradeConvergentSync: (
     confirmed: boolean,
+    buildLocalPayload: () => SyncPayload | Promise<SyncPayload>,
     applyPayload: (
       payload: SyncPayload,
       commitReplica: () => Promise<void>,
@@ -782,13 +783,14 @@ export const useCloudSync = (): CloudSyncHook => {
 
   const downgradeConvergentSyncWithUnlock = useCallback(async (
     confirmed: boolean,
+    buildLocalPayload: () => SyncPayload | Promise<SyncPayload>,
     applyPayload: (
       payload: SyncPayload,
       commitReplica: () => Promise<void>,
     ) => Promise<void>,
   ) => {
     await ensureUnlocked();
-    return manager.downgradeConvergentSync(confirmed, applyPayload);
+    return manager.downgradeConvergentSync(confirmed, buildLocalPayload, applyPayload);
   }, [ensureUnlocked]);
   
   return {

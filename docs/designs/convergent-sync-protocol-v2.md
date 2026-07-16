@@ -164,11 +164,13 @@ arrays. Their UI renders only “set” or “empty”; values are never formatt
 logged, or inserted into DOM text.
 
 Explicit downgrade holds the same Web Lock and downloads every connected
-provider before writing anything. Netcatty joins those remote states with the
-local replica, applies the joined payload behind a protective backup, and
-blocks downgrade until any newly discovered field conflicts are resolved. It
-then writes the joined materialized v1 snapshot to every provider, downloads it
-again, and verifies both the absence of v2 metadata and equality of cloud data.
+provider before writing anything. Netcatty first converts edits made while v2
+was paused into causal writes over the local replica, then joins those writes
+with every remote state. It applies the joined payload behind a protective
+backup and blocks downgrade until any newly discovered field conflicts are
+resolved. It then writes the joined materialized v1 snapshot to every provider,
+downloads it again, and verifies both the absence of v2 metadata and equality
+of cloud data.
 Only after every provider verifies does Netcatty clear the local replica,
 provider baselines, and experimental configuration, still inside the same Web
 Lock. A partial downgrade keeps the joined local v2 state and refreshed

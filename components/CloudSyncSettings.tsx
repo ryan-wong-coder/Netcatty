@@ -360,6 +360,13 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         try {
             const results = await sync.downgradeConvergentSync(
                 true,
+                async () => {
+                    const localPayload = await onBuildPayload();
+                    if (!ensureSyncablePayload(localPayload)) {
+                        throw new Error(t('sync.credentialsUnavailable'));
+                    }
+                    return localPayload;
+                },
                 onApplyConvergentPayload,
             );
             const failed = [...results.values()].find((result) => !result.success);
@@ -373,7 +380,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         } finally {
             setConvergentBusy(false);
         }
-    }, [onApplyConvergentPayload, sync, t]);
+    }, [ensureSyncablePayload, onApplyConvergentPayload, onBuildPayload, sync, t]);
 
     // Handle conflict detection
     useEffect(() => {

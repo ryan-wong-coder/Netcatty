@@ -654,6 +654,7 @@ export async function resolveConvergentConflictAndSyncImpl(
 export async function downgradeConvergentSyncImpl(
   this: any,
   confirmed: boolean,
+  buildLocalPayload: () => SyncPayload | Promise<SyncPayload>,
   applyPayload: (
     payload: SyncPayload,
     commitReplica: () => Promise<void>,
@@ -669,6 +670,8 @@ export async function downgradeConvergentSyncImpl(
     }
     const replica = await this.loadConvergentReplica();
     if (!replica) throw new Error('Convergent sync replica is unavailable');
+    const localPayload = await buildLocalPayload();
+    assertSyncSecurityGeneration(this, syncSecurityGeneration);
     const results = new Map<CloudProvider, SyncResult>();
     this.state.syncState = 'SYNCING';
     this.state.lastError = null;
@@ -692,8 +695,19 @@ export async function downgradeConvergentSyncImpl(
     }
 
     const now = Date.now();
-    const canonical = mergeStates(
+    // Pausing v2 stops synchronization, not local editing. Convert every
+    // vault change made since the last persisted replica into causal local
+    // writes before joining provider states; otherwise downgrade would
+    // materialize the stale replica and overwrite those paused edits.
+    const withLocalWrites = applyLegacySyncPayload(
       replica.state,
+      materializedPayload(replica.state, now),
+      stripConvergentSyncEnvelope(localPayload),
+      this.state.deviceId,
+      now,
+    );
+    const canonical = mergeStates(
+      withLocalWrites,
       runtimes.flatMap((runtime) => runtime.verifiedState ? [runtime.verifiedState] : []),
     );
     const outgoing = materializedPayload(canonical, now);
