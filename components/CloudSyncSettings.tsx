@@ -658,12 +658,14 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         try {
             const payload = await onBuildPayload();
             if (!ensureSyncablePayload(payload)) return;
-            const result = await sync.syncToProvider(provider, payload);
+            const result = await sync.syncToProvider(provider, payload, {
+                applyConvergentPayload: onApplyConvergentPayload,
+            });
 
             // Convergent sync fans out to every provider. Even if the
             // requested provider fails, another provider can verify a newer
             // joined replica that must be applied before reporting the error.
-            if (result.mergedPayload && onApplyPayload) {
+            if (result.mergedPayload && !result.mergedPayloadApplied && onApplyPayload) {
                 await Promise.resolve(onApplyPayload(result.mergedPayload));
                 if (result.remoteFile) {
                     await sync.commitRemoteInspection(result.provider, result.remoteFile, result.mergedPayload, {
@@ -717,14 +719,17 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
 
                 let results: Map<CloudProvider, SyncResult> | null = null;
                 await withRestoreBarrier(async () => {
-                    results = await sync.syncNow(localPayload, { overrideShrink: true });
+                    results = await sync.syncNow(localPayload, {
+                        overrideShrink: true,
+                        applyConvergentPayload: onApplyConvergentPayload,
+                    });
                 });
 
                 if (results) {
                     // Apply any merged payload BEFORE closing the modal so local state
                     // reflects what's now on cloud (in case remote changed during the merge).
                     for (const result of (results as Map<CloudProvider, SyncResult>).values()) {
-                        if (result.mergedPayload) {
+                        if (result.mergedPayload && !result.mergedPayloadApplied) {
                             await Promise.resolve(onApplyPayload(result.mergedPayload));
                             if (result.remoteFile) {
                                 await sync.commitRemoteInspection(result.provider, result.remoteFile, result.mergedPayload, {
@@ -998,6 +1003,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
                 setShowClearLocalDialog={setShowClearLocalDialog}
                 onBuildPayload={onBuildPayload}
                 onApplyPayload={onApplyPayload}
+                onApplyConvergentPayload={onApplyConvergentPayload}
                 onClearLocalData={onClearLocalData}
                 ensureSyncablePayload={ensureSyncablePayload}
                 showForcePushConfirm={showForcePushConfirm}

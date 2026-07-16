@@ -689,7 +689,13 @@ export class CloudSyncManager {
   async syncToProvider(
     provider: CloudProvider,
     payload: SyncPayload,
-    opts: { overrideShrink?: boolean } = {},
+    opts: {
+      overrideShrink?: boolean;
+      applyConvergentPayload?: (
+        payload: SyncPayload,
+        commitReplica: () => Promise<void>,
+      ) => Promise<void>;
+    } = {},
   ): Promise<SyncResult> {
     return syncToProviderImpl.call(this, provider, payload, opts);
   }
@@ -780,7 +786,14 @@ export class CloudSyncManager {
    */
   async syncAllProviders(
     inputPayload?: SyncPayload,
-    opts: { overrideShrink?: boolean; conflictActionOverride?: CloudSyncConflictAction } = {},
+    opts: {
+      overrideShrink?: boolean;
+      conflictActionOverride?: CloudSyncConflictAction;
+      applyConvergentPayload?: (
+        payload: SyncPayload,
+        commitReplica: () => Promise<void>,
+      ) => Promise<void>;
+    } = {},
   ): Promise<Map<CloudProvider, SyncResult>> {
     return syncAllProvidersImpl.call(this, inputPayload, opts);
   }
@@ -929,8 +942,12 @@ export class CloudSyncManager {
   /** Caller must already hold the convergent Web Lock. */
   async syncConvergentProvidersUnderLock(
     payload: SyncPayload,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
   ): Promise<Map<CloudProvider, SyncResult>> {
-    return syncConvergentProvidersUnlockedImpl.call(this, payload);
+    return syncConvergentProvidersUnlockedImpl.call(this, payload, { applyPayload });
   }
 
   clearConvergentSyncStorage(confirmed = false): void {

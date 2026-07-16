@@ -131,6 +131,10 @@ interface CloudSyncDialogsProps {
   setShowClearLocalDialog: BooleanSetter;
   onBuildPayload: () => SyncPayload | Promise<SyncPayload>;
   onApplyPayload: (payload: SyncPayload) => void | Promise<void>;
+  onApplyConvergentPayload: (
+    payload: SyncPayload,
+    commitReplica: () => Promise<void>,
+  ) => Promise<void>;
   onClearLocalData?: () => void;
   ensureSyncablePayload: (payload: SyncPayload) => boolean;
   showForcePushConfirm: boolean;
@@ -237,6 +241,7 @@ export const CloudSyncDialogs: React.FC<CloudSyncDialogsProps> = ({
   setShowClearLocalDialog,
   onBuildPayload,
   onApplyPayload,
+  onApplyConvergentPayload,
   onClearLocalData,
   ensureSyncablePayload,
   showForcePushConfirm,
@@ -723,7 +728,9 @@ export const CloudSyncDialogs: React.FC<CloudSyncDialogsProps> = ({
                                     }
 
                                     if (payloadForReencrypt) {
-                                        await sync.syncNow(payloadForReencrypt);
+                                        await sync.syncNow(payloadForReencrypt, {
+                                            applyConvergentPayload: onApplyConvergentPayload,
+                                        });
                                     }
 
                                     toast.success(t('cloudSync.changeKey.updatedToast'));
@@ -883,14 +890,17 @@ export const CloudSyncDialogs: React.FC<CloudSyncDialogsProps> = ({
                                     }
                                     setShowForcePushConfirm(false);
                                     try {
-                                        const results = await sync.syncNow(localPayload, { overrideShrink: true });
+                                        const results = await sync.syncNow(localPayload, {
+                                            overrideShrink: true,
+                                            applyConvergentPayload: onApplyConvergentPayload,
+                                        });
 
                                         // Apply any merged payload BEFORE clearing the banner. If a merge happened
                                         // during force-push (remote changed), the merged result is what the cloud
                                         // now has — applying it to local state prevents the next sync from
                                         // re-deleting the remote additions we just merged in.
                                         for (const result of results.values()) {
-                                            if (result.mergedPayload) {
+                                            if (result.mergedPayload && !result.mergedPayloadApplied) {
                                                 await Promise.resolve(onApplyPayload(result.mergedPayload));
                                                 if (result.remoteFile) {
                                                     await sync.commitRemoteInspection(result.provider, result.remoteFile, result.mergedPayload, {

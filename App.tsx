@@ -558,6 +558,30 @@ function App({ settings }: { settings: SettingsState }) {
     ],
   );
 
+  const handleApplyConvergentSyncPayload = useCallback(
+    (payload: SyncPayload, commitReplica: () => Promise<void>) =>
+      applyProtectedSyncPayload({
+        buildPreApplyPayload: () => buildCurrentSyncPayload(),
+        applyPayload: async () => {
+          await applySyncPayload(payload, {
+            importVaultData: importDataFromString,
+            importPortForwardingRules,
+            onSettingsApplied: settings.rehydrateAllFromStorage,
+          });
+          await commitReplica();
+        },
+        translateProtectiveBackupFailure: (message) =>
+          t('cloudSync.localBackups.protectiveBackupFailed', { message }),
+      }),
+    [
+      buildCurrentSyncPayload,
+      importDataFromString,
+      importPortForwardingRules,
+      settings.rehydrateAllFromStorage,
+      t,
+    ],
+  );
+
   // Auto-sync hook for cloud sync
   const { syncNow: handleSyncNow, emptyVaultConflict, resolveEmptyVaultConflict } = useAutoSync({
     enabled: !isPeerSessionWindow,
@@ -575,6 +599,7 @@ function App({ settings }: { settings: SettingsState }) {
     settingsVersion: settings.settingsVersion,
     startupReady: startupSyncSafetyReady,
     onApplyPayload: handleApplySyncPayload,
+    onApplyConvergentPayload: handleApplyConvergentSyncPayload,
   });
 
   const { clearAndRemoveSource, clearAndRemoveSources, unmanageSource } = useManagedSourceSync({

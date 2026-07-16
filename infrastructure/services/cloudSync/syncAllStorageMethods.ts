@@ -93,7 +93,14 @@ async function rememberCurrentSyncBaseSnapshot(this: any, provider?: CloudProvid
 
 export async function syncAllProvidersImpl(this: any,
   inputPayload?: SyncPayload,
-  opts: { overrideShrink?: boolean; conflictActionOverride?: CloudSyncConflictAction } = {},
+  opts: {
+    overrideShrink?: boolean;
+    conflictActionOverride?: CloudSyncConflictAction;
+    applyConvergentPayload?: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>;
+  } = {},
 ): Promise<Map<CloudProvider, SyncResult>> {
     const results = new Map<CloudProvider, SyncResult>();
     let payload = inputPayload;
@@ -102,7 +109,10 @@ export async function syncAllProvidersImpl(this: any,
     const convergentConfig = getConvergentSyncLocalConfig();
     if (convergentConfig.initialized && inputPayload) {
       if (convergentConfig.enabled) {
-        return syncAllProvidersConvergentlyImpl.call(this, inputPayload, opts);
+        return syncAllProvidersConvergentlyImpl.call(this, inputPayload, {
+          ...opts,
+          applyPayload: opts.applyConvergentPayload,
+        });
       }
       const message = 'Convergent sync is paused on this device';
       for (const [provider, connection] of Object.entries(

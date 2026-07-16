@@ -282,16 +282,28 @@ export function selectConvergentSyncToProviderResult(
   // preserve that aggregate payload so the caller can update the local vault
   // before reporting the requested provider's failure.
   const aggregateMergedPayload = [...results.values()]
-    .find((result) => result.mergedPayload)?.mergedPayload;
-  return aggregateMergedPayload
-    ? { ...requested, mergedPayload: aggregateMergedPayload }
+    .find((result) => result.mergedPayload);
+  return aggregateMergedPayload?.mergedPayload
+    ? {
+        ...requested,
+        mergedPayload: aggregateMergedPayload.mergedPayload,
+        ...(aggregateMergedPayload.mergedPayloadApplied
+          ? { mergedPayloadApplied: true }
+          : {}),
+      }
     : requested;
 }
 
 export async function syncToProviderImpl(this: any,
   provider: CloudProvider,
   payload: SyncPayload,
-  opts: { overrideShrink?: boolean } = {},
+  opts: {
+    overrideShrink?: boolean;
+    applyConvergentPayload?: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>;
+  } = {},
 ): Promise<SyncResult> {
     const convergentConfig = getConvergentSyncLocalConfig();
     if (convergentConfig.initialized) {
@@ -305,6 +317,7 @@ export async function syncToProviderImpl(this: any,
       }
       const results = await syncAllProvidersConvergentlyImpl.call(this, payload, {
         overrideShrink: opts.overrideShrink,
+        applyPayload: opts.applyConvergentPayload,
       });
       return selectConvergentSyncToProviderResult(provider, results);
     }

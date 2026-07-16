@@ -311,6 +311,10 @@ export async function syncConvergentProvidersUnlockedImpl(
     jitter?: (round: number) => Promise<void>;
     strategyOverride?: CloudSyncStrategy;
     overrideShrink?: boolean;
+    applyPayload?: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>;
   } = {},
 ): Promise<Map<CloudProvider, SyncResult>> {
   const results = new Map<CloudProvider, SyncResult>();
@@ -492,17 +496,42 @@ export async function syncConvergentProvidersUnlockedImpl(
       && versionVectorDominates(runtime.verifiedState.vector, canonical.vector)
   ));
   const hasSuccess = successfulRuntimes.length > 0;
-  if (hasSuccess) {
-    await persistReplica(this, canonical, now());
-  } else {
-    await persistReplica(this, durableBeforeVerification, now());
-  }
-  const conflicts = updateConflictState(
-    this,
-    hasSuccess ? canonical : durableBeforeVerification,
-  );
   const mergedPayload = materializedPayload(canonical, now());
   const localPayloadChanged = !cloudSyncPayloadsEqual(inputPayload, mergedPayload);
+  let mergedPayloadApplied = false;
+  if (hasSuccess && localPayloadChanged) {
+    try {
+      if (!options.applyPayload) {
+        throw new Error(
+          'Convergent sync produced remote changes without a protected payload applier',
+        );
+      }
+      let committed = false;
+      await options.applyPayload(mergedPayload, async () => {
+        if (committed) return;
+        await persistReplica(this, canonical, now());
+        updateConflictState(this, canonical);
+        committed = true;
+      });
+      if (!committed) {
+        throw new Error('Convergent payload apply completed without committing its replica');
+      }
+    } catch (error) {
+      this.state.pendingLocalSync = true;
+      this.state.syncState = 'ERROR';
+      this.state.lastError = errorMessage(error);
+      this.notifyStateChange();
+      throw error;
+    }
+    mergedPayloadApplied = true;
+  } else if (hasSuccess) {
+    await persistReplica(this, canonical, now());
+    updateConflictState(this, canonical);
+  } else {
+    await persistReplica(this, durableBeforeVerification, now());
+    updateConflictState(this, durableBeforeVerification);
+  }
+  const conflicts = currentConflicts(hasSuccess ? canonical : durableBeforeVerification);
   for (const runtime of runtimes) {
     if (
       runtime.verifiedState
@@ -515,6 +544,7 @@ export async function syncConvergentProvidersUnlockedImpl(
         action: 'merge',
         version: runtime.verifiedFile?.meta.version ?? runtime.latestRemote?.meta.version,
         ...(localPayloadChanged ? { mergedPayload } : {}),
+        ...(mergedPayloadApplied ? { mergedPayloadApplied: true } : {}),
         convergentConflicts: conflicts,
         convergentConflictCount: conflicts.length,
       };
@@ -587,6 +617,10 @@ export async function syncAllProvidersConvergentlyImpl(
   opts: {
     conflictActionOverride?: CloudSyncConflictAction;
     overrideShrink?: boolean;
+    applyPayload?: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>;
   } = {},
 ): Promise<Map<CloudProvider, SyncResult>> {
   try {
@@ -599,6 +633,7 @@ export async function syncAllProvidersConvergentlyImpl(
       () => syncConvergentProvidersUnlockedImpl.call(this, inputPayload, {
         strategyOverride,
         overrideShrink: opts.overrideShrink,
+        applyPayload: opts.applyPayload,
       }),
     );
   } catch (error) {
@@ -696,18 +731,16 @@ export async function resolveConvergentConflictAndSyncImpl(
     if (!committed) {
       throw new Error('Convergent conflict apply completed without committing its replica');
     }
-    const results = await syncConvergentProvidersUnlockedImpl.call(this, prepared.payload);
+    const results = await syncConvergentProvidersUnlockedImpl.call(
+      this,
+      prepared.payload,
+      { applyPayload },
+    );
     const finalReplica = await this.loadConvergentReplica();
     if (!finalReplica) {
       throw new Error('Convergent sync replica disappeared after conflict propagation');
     }
     const finalPayload = materializedPayload(finalReplica.state, Date.now());
-    if (!cloudSyncPayloadsEqual(prepared.payload, finalPayload)) {
-      // Propagation can discover a concurrent provider write. Apply the final
-      // canonical materialization before releasing the same Web Lock so no
-      // window can turn the stale pre-propagation vault into a new CRDT write.
-      await applyPayload(finalPayload, async () => {});
-    }
     return { payload: finalPayload, results };
   });
 }

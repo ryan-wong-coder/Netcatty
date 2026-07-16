@@ -717,12 +717,25 @@ export const useCloudSync = (): CloudSyncHook => {
     throw new Error('Vault is locked');
   }, []);
 
-  const syncNowWithUnlock = useCallback(async (payload: SyncPayload, opts?: { overrideShrink?: boolean; conflictActionOverride?: CloudSyncConflictAction }) => {
+  const syncNowWithUnlock = useCallback(async (payload: SyncPayload, opts?: {
+    overrideShrink?: boolean;
+    conflictActionOverride?: CloudSyncConflictAction;
+    applyConvergentPayload?: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>;
+  }) => {
     await ensureUnlocked();
     return await manager.syncAllProviders(payload, opts);
   }, [ensureUnlocked]);
 
-  const syncToProviderWithUnlock = useCallback(async (provider: CloudProvider, payload: SyncPayload, opts?: { overrideShrink?: boolean }) => {
+  const syncToProviderWithUnlock = useCallback(async (provider: CloudProvider, payload: SyncPayload, opts?: {
+    overrideShrink?: boolean;
+    applyConvergentPayload?: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>;
+  }) => {
     await ensureUnlocked();
     return await manager.syncToProvider(provider, payload, opts);
   }, [ensureUnlocked]);

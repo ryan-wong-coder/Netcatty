@@ -66,6 +66,10 @@ interface AutoSyncConfig {
 
   // Callbacks
   onApplyPayload: (payload: SyncPayload) => void | Promise<void>;
+  onApplyConvergentPayload: (
+    payload: SyncPayload,
+    commitReplica: () => Promise<void>,
+  ) => Promise<void>;
 }
 
 // Get manager singleton for direct state access
@@ -146,7 +150,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
   const sync = useCloudSync();
   const convergentSyncPaused = sync.convergentSyncConfig.initialized
     && !sync.convergentSyncConfig.enabled;
-  const { onApplyPayload } = config;
+  const { onApplyPayload, onApplyConvergentPayload } = config;
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSyncedDataRef = useRef<string>('');
   const hasCheckedRemoteRef = useRef(false);
@@ -375,9 +379,12 @@ export const useAutoSync = (config: AutoSyncConfig) => {
 
       const results = await sync.syncNow(
         payload,
-        options?.conflictActionOverride
-          ? { conflictActionOverride: options.conflictActionOverride }
-          : undefined,
+        {
+          ...(options?.conflictActionOverride
+            ? { conflictActionOverride: options.conflictActionOverride }
+            : {}),
+          applyConvergentPayload: onApplyConvergentPayload,
+        },
       );
 
       // Apply merged payloads first (before checking for failures) so local
@@ -387,7 +394,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
         && resultList.every((result) => result.success);
 
       for (const result of resultList) {
-        if (result.mergedPayload) {
+        if (result.mergedPayload && !result.mergedPayloadApplied) {
           await Promise.resolve(onApplyPayload(result.mergedPayload));
           if (result.remoteFile) {
             await sync.commitRemoteInspection(result.provider, result.remoteFile, result.mergedPayload, {
@@ -441,7 +448,7 @@ export const useAutoSync = (config: AutoSyncConfig) => {
     } finally {
       isSyncRunningRef.current = false;
     }
-  }, [enabled, sync, buildPayload, getDataHash, onApplyPayload, t]);
+  }, [enabled, sync, buildPayload, getDataHash, onApplyConvergentPayload, onApplyPayload, t]);
 
   const syncNowRef = useRef(syncNow);
   useEffect(() => {

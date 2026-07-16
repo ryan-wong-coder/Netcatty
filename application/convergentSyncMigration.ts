@@ -185,14 +185,7 @@ export async function initializePreparedConvergentMigration(options: {
     // same Web Lock used by initialization.
     const publishResults = await manager.syncConvergentProvidersUnderLock(
       prepared.plan.payload as SyncPayload,
-    );
-    const mergedPayload = [...publishResults.values()]
-      .find((result) => result.mergedPayload)?.mergedPayload;
-    if (
-      mergedPayload
-      && !cloudSyncPayloadsEqual(prepared.plan.payload as SyncPayload, mergedPayload)
-    ) {
-      await runProtectedApply({
+      async (mergedPayload, commitReplica) => runProtectedApply({
         buildPreApplyPayload: options.buildPreApplyPayload,
         translateProtectiveBackupFailure: options.translateProtectiveBackupFailure,
         prepareApply: async () => {
@@ -202,10 +195,13 @@ export async function initializePreparedConvergentMigration(options: {
               'Local sync data changed while publishing the convergent migration. Retry sync to preserve the newer local edits.',
             );
           }
-          return async () => options.applyPayload(mergedPayload);
+          return async () => {
+            await options.applyPayload(mergedPayload);
+            await commitReplica();
+          };
         },
-      });
-    }
+      }),
+    );
 
     const failed = [...publishResults.values()].find((result) => !result.success);
     if (failed) {

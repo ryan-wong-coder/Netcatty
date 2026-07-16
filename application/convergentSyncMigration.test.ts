@@ -189,11 +189,18 @@ test('initialization applies a concurrent provider merge before releasing the mi
     },
     saveConvergentReplica: async () => {},
     saveConvergentProviderBaseline: async () => {},
-    syncConvergentProvidersUnderLock: async () => {
+    syncConvergentProvidersUnderLock: async (_incoming, applyPayload) => {
       assert.equal(lockHeld, true);
+      await applyPayload(mergedPayload, async () => {});
       return new Map([[
         'github',
-        { success: true, provider: 'github', action: 'merge', mergedPayload },
+        {
+          success: true,
+          provider: 'github',
+          action: 'merge',
+          mergedPayload,
+          mergedPayloadApplied: true,
+        },
       ]]);
     },
   } as unknown as CloudSyncManager;

@@ -81,6 +81,11 @@ function remoteState(
   return applyLegacySyncPayload(base, before, after, deviceId, now);
 }
 
+const applyAndCommit = async (
+  _payload: SyncPayload,
+  commitReplica: () => Promise<void>,
+): Promise<void> => commitReplica();
+
 interface MemoryAdapter extends CloudAdapter {
   uploads: number;
   remote: SyncedFile | null;
@@ -243,16 +248,64 @@ test('unordered provider join preserves independent offline edits and persists b
     const results = await syncConvergentProvidersUnlockedImpl.call(
       subject,
       basePayload,
-      { jitter: async () => {}, now: () => NOW + 10 },
+      { jitter: async () => {}, now: () => NOW + 10, applyPayload: applyAndCommit },
     );
 
     assert.equal(persistedBeforeUpload, true);
     assert.equal(results.get('github')?.success, true);
     assert.equal(results.get('google')?.success, true);
+    assert.equal(results.get('github')?.mergedPayloadApplied, true);
     const merged = results.get('github')?.mergedPayload;
     assert.equal(merged?.hosts[0]?.label, 'github-label');
     assert.equal(merged?.hosts[0]?.username, 'ubuntu');
     assert.equal(subject.state.convergentConflicts.length, 0);
+  } finally {
+    encryption.restore();
+  }
+});
+
+test('a failed protected merged apply leaves the durable replica aligned with local data', async () => {
+  const encryption = installEncryptionDouble();
+  try {
+    const localPayload = payload('local');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const remote = remoteState(
+      base,
+      localPayload,
+      payload('local', 'remote-user'),
+      'remote-device',
+      NOW + 1,
+    );
+    const github = adapter(encryption.register(
+      withConvergentSyncEnvelope(remote, { syncedAt: NOW + 1 }),
+      2,
+      'remote-device',
+    ));
+    const subject = manager(base, { github });
+
+    await assert.rejects(
+      () => syncConvergentProvidersUnlockedImpl.call(
+        subject,
+        localPayload,
+        {
+          jitter: async () => {},
+          now: () => NOW + 10,
+          applyPayload: async () => {
+            throw new Error('protective merged apply failed');
+          },
+        },
+      ),
+      /protective merged apply failed/,
+    );
+
+    const durable = materializeSyncPayloadFromConvergentState(
+      subject.persisted.at(-1)!,
+      { syncedAt: NOW },
+    );
+    assert.equal(durable.hosts[0]?.username, 'root');
+    assert.equal(github.uploads, 0);
+    assert.equal(subject.state.syncState, 'ERROR');
+    assert.equal(subject.state.pendingLocalSync, true);
   } finally {
     encryption.restore();
   }
@@ -352,7 +405,7 @@ test('a concurrent provider write discovered during verification is rejoined and
     const results = await syncConvergentProvidersUnlockedImpl.call(
       subject,
       payload('local-write'),
-      { jitter: async () => {}, now: () => NOW + 30 },
+      { jitter: async () => {}, now: () => NOW + 30, applyPayload: applyAndCommit },
     );
 
     assert.equal(results.get('github')?.success, true);
@@ -444,7 +497,12 @@ test('total upload failure keeps downloaded remote edits out of the durable loca
     const retried = await syncConvergentProvidersUnlockedImpl.call(
       subject,
       localPayload,
-      { maxRounds: 1, jitter: async () => {}, now: () => NOW + 20 },
+      {
+        maxRounds: 1,
+        jitter: async () => {},
+        now: () => NOW + 20,
+        applyPayload: applyAndCommit,
+      },
     );
 
     assert.equal(retried.get('github')?.success, true);
@@ -592,7 +650,7 @@ test('preferCloud adopts the joined remote replica without creating a local conf
     const results = await syncConvergentProvidersUnlockedImpl.call(
       subject,
       payload('unsaved-local'),
-      { jitter: async () => {}, now: () => NOW + 10 },
+      { jitter: async () => {}, now: () => NOW + 10, applyPayload: applyAndCommit },
     );
 
     assert.equal(results.get('github')?.mergedPayload?.hosts[0]?.label, 'cloud');
@@ -645,7 +703,7 @@ test('a trusted baseline converts an old-client v1 write into deterministic caus
     const results = await syncConvergentProvidersUnlockedImpl.call(
       subject,
       basePayload,
-      { jitter: async () => {}, now: () => NOW + 10 },
+      { jitter: async () => {}, now: () => NOW + 10, applyPayload: applyAndCommit },
     );
 
     assert.equal(results.get('github')?.success, true);
@@ -1362,7 +1420,7 @@ test('all five provider adapters converge independent field edits into one repli
     const results = await syncConvergentProvidersUnlockedImpl.call(
       subject,
       basePayload,
-      { jitter: async () => {}, now: () => NOW + 20 },
+      { jitter: async () => {}, now: () => NOW + 20, applyPayload: applyAndCommit },
     );
 
     assert.equal([...results.values()].every((result) => result.success), true);
