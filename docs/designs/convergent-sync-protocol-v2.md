@@ -89,11 +89,15 @@ compares it with the snapshot used for the preview. Any intervening local edit
 aborts initialization and requires a new preview. An unchanged vault gets a
 required encrypted safety backup, holds the cross-window restore barrier,
 applies the previewed materialized payload, persists the canonical replica, and
-only then marks v2 initialized. The sync manager must still be unlocked
-immediately before this transaction; otherwise initialization fails before any
-backup, sentinel, or local mutation. A crash or failure after mutation starts
-leaves the existing apply sentinel set so auto-sync cannot publish a partial
-migration.
+only then marks v2 initialized. Before releasing the same Web Lock, migration
+forces a convergent read/merge/write/verify cycle so unchanged v1 materialized
+data still receives a v2 envelope on every connected provider. Concurrent
+provider edits discovered by that cycle are protected and applied locally;
+partial publication remains visible as a provider error and pending sync. The
+sync manager must still be unlocked immediately before this transaction;
+otherwise initialization fails before any backup, sentinel, or local mutation.
+A crash or failure after mutation starts leaves the existing apply sentinel set
+so auto-sync cannot publish a partial migration.
 
 Before a local backup restore mutates local data, the restored snapshot is
 diffed against the current materialized replica and prepared as normal device

@@ -6,14 +6,23 @@ import {
   clearProviderMergeStateImpl,
   commitRemoteInspectionImpl,
 } from "./authMethods.ts";
-import { syncToProviderImpl, uploadToProviderImpl } from "./providerSyncMethods.ts";
+import {
+  selectConvergentSyncToProviderResult,
+  syncToProviderImpl,
+  uploadToProviderImpl,
+} from "./providerSyncMethods.ts";
 import {
   clearSyncBaseImpl,
   loadSyncSnapshotsImpl,
   saveSyncBaseImpl,
   syncAllProvidersImpl,
 } from "./syncAllStorageMethods.ts";
-import type { CloudProvider, SyncedFile, SyncPayload } from "../../../domain/sync.ts";
+import type {
+  CloudProvider,
+  SyncedFile,
+  SyncPayload,
+  SyncResult,
+} from "../../../domain/sync.ts";
 import { setConvergentSyncLocalConfig } from "../convergentSyncConfig.ts";
 
 function payload(hostId: string): SyncPayload {
@@ -694,4 +703,30 @@ test("an initialized but paused v2 replica cannot fall through to legacy provide
     if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
     else Reflect.deleteProperty(globalThis, "localStorage");
   }
+});
+
+test("syncToProvider preserves a merged payload discovered by a non-target provider", () => {
+  const mergedPayload = payload("remote-merged");
+  const results = new Map<CloudProvider, SyncResult>([
+    ["github", {
+      success: false,
+      provider: "github",
+      action: "none",
+      error: "github unavailable",
+    }],
+    ["google", {
+      success: true,
+      provider: "google",
+      action: "merge",
+      mergedPayload,
+    }],
+  ]);
+
+  const selected = selectConvergentSyncToProviderResult("github", results);
+
+  assert.equal(selected.success, false);
+  assert.equal(selected.provider, "github");
+  assert.equal(selected.error, "github unavailable");
+  assert.equal(selected.mergedPayload, mergedPayload);
+  assert.equal(selected.remoteFile, undefined);
 });

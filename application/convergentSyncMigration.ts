@@ -153,30 +153,67 @@ export async function initializePreparedConvergentMigration(options: {
     throw new Error('Unlock cloud sync before initializing convergent migration');
   }
   const runProtectedApply = options.runProtectedApply ?? applyProtectedSyncPayload;
-  await manager.withConvergentSyncLock(() => runProtectedApply({
-    buildPreApplyPayload: options.buildPreApplyPayload,
-    translateProtectiveBackupFailure: options.translateProtectiveBackupFailure,
-    prepareApply: async () => {
-      const currentPayload = stripConvergentSyncEnvelope(await options.buildCurrentPayload());
-      if (!cloudSyncPayloadsEqual(prepared.localSnapshot, currentPayload)) {
-        throw new Error(
-          'Local sync data changed after the migration preview. Review the updated migration before enabling convergent sync.',
-        );
-      }
-      return async () => {
-        await options.applyPayload(prepared.plan.payload as SyncPayload);
-        for (const baseline of prepared.providerBaselines) {
-          await manager.saveConvergentProviderBaseline(baseline);
+  await manager.withConvergentSyncLock(async () => {
+    await runProtectedApply({
+      buildPreApplyPayload: options.buildPreApplyPayload,
+      translateProtectiveBackupFailure: options.translateProtectiveBackupFailure,
+      prepareApply: async () => {
+        const currentPayload = stripConvergentSyncEnvelope(await options.buildCurrentPayload());
+        if (!cloudSyncPayloadsEqual(prepared.localSnapshot, currentPayload)) {
+          throw new Error(
+            'Local sync data changed after the migration preview. Review the updated migration before enabling convergent sync.',
+          );
         }
-        await manager.saveConvergentReplica({
-          schemaVersion: 2,
-          state: prepared.plan.state as NonNullable<ConvergentMigrationPlan['state']>,
-          updatedAt: now,
-        });
-        markConvergentSyncInitialized();
-      };
-    },
-  }));
+        return async () => {
+          await options.applyPayload(prepared.plan.payload as SyncPayload);
+          for (const baseline of prepared.providerBaselines) {
+            await manager.saveConvergentProviderBaseline(baseline);
+          }
+          await manager.saveConvergentReplica({
+            schemaVersion: 2,
+            state: prepared.plan.state as NonNullable<ConvergentMigrationPlan['state']>,
+            updatedAt: now,
+          });
+          markConvergentSyncInitialized();
+        };
+      },
+    });
+
+    // The materialized v1 snapshot often stays byte-for-byte unchanged, so
+    // hash-driven auto-sync cannot be trusted to publish the new envelope.
+    // Force the first v2 read/merge/write/verify cycle before releasing the
+    // same Web Lock used by initialization.
+    const publishResults = await manager.syncConvergentProvidersUnderLock(
+      prepared.plan.payload as SyncPayload,
+    );
+    const mergedPayload = [...publishResults.values()]
+      .find((result) => result.mergedPayload)?.mergedPayload;
+    if (
+      mergedPayload
+      && !cloudSyncPayloadsEqual(prepared.plan.payload as SyncPayload, mergedPayload)
+    ) {
+      await runProtectedApply({
+        buildPreApplyPayload: options.buildPreApplyPayload,
+        translateProtectiveBackupFailure: options.translateProtectiveBackupFailure,
+        prepareApply: async () => {
+          const currentPayload = stripConvergentSyncEnvelope(await options.buildCurrentPayload());
+          if (!cloudSyncPayloadsEqual(prepared.plan.payload as SyncPayload, currentPayload)) {
+            throw new Error(
+              'Local sync data changed while publishing the convergent migration. Retry sync to preserve the newer local edits.',
+            );
+          }
+          return async () => options.applyPayload(mergedPayload);
+        },
+      });
+    }
+
+    const failed = [...publishResults.values()].find((result) => !result.success);
+    if (failed) {
+      throw new Error(
+        `Convergent migration could not publish to ${failed.provider}: ${failed.error ?? 'sync failed'}`,
+      );
+    }
+  });
   return prepared.plan.preview;
 }
 

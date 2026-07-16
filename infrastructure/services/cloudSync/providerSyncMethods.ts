@@ -265,6 +265,29 @@ export function buildPayloadImpl(this: any,data: {
     };
   }
 
+export function selectConvergentSyncToProviderResult(
+  provider: CloudProvider,
+  results: Map<CloudProvider, SyncResult>,
+): SyncResult {
+  const requested = results.get(provider) ?? {
+    success: false,
+    provider,
+    action: 'none',
+    error: 'Provider is not available for convergent sync',
+  } satisfies SyncResult;
+  if (requested.mergedPayload) return requested;
+
+  // Convergent sync fans out to every provider. A non-target provider can
+  // verify a newer joined replica even when the requested provider fails;
+  // preserve that aggregate payload so the caller can update the local vault
+  // before reporting the requested provider's failure.
+  const aggregateMergedPayload = [...results.values()]
+    .find((result) => result.mergedPayload)?.mergedPayload;
+  return aggregateMergedPayload
+    ? { ...requested, mergedPayload: aggregateMergedPayload }
+    : requested;
+}
+
 export async function syncToProviderImpl(this: any,
   provider: CloudProvider,
   payload: SyncPayload,
@@ -283,12 +306,7 @@ export async function syncToProviderImpl(this: any,
       const results = await syncAllProvidersConvergentlyImpl.call(this, payload, {
         overrideShrink: opts.overrideShrink,
       });
-      return results.get(provider) ?? {
-        success: false,
-        provider,
-        action: 'none',
-        error: 'Provider is not available for convergent sync',
-      };
+      return selectConvergentSyncToProviderResult(provider, results);
     }
 
     if (this.state.securityState !== 'UNLOCKED') {

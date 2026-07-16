@@ -131,6 +131,7 @@ import {
 import {
   downgradeConvergentSyncImpl,
   resolveConvergentConflictAndSyncImpl,
+  syncConvergentProvidersUnlockedImpl,
   withConvergentSyncWebLock,
 } from './cloudSync/convergentSyncRuntimeMethods';
 
@@ -918,6 +919,13 @@ export class CloudSyncManager {
 
   async withConvergentSyncLock<T>(task: () => Promise<T>): Promise<T> {
     return withConvergentSyncWebLock(task);
+  }
+
+  /** Caller must already hold the convergent Web Lock. */
+  async syncConvergentProvidersUnderLock(
+    payload: SyncPayload,
+  ): Promise<Map<CloudProvider, SyncResult>> {
+    return syncConvergentProvidersUnlockedImpl.call(this, payload);
   }
 
   clearConvergentSyncStorage(confirmed = false): void {

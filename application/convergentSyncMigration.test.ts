@@ -17,7 +17,10 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 });
 
-const { planConvergentSyncMigration } = await import('../domain/convergentSync/index.ts');
+const {
+  planConvergentSyncMigration,
+  stripConvergentSyncEnvelope,
+} = await import('../domain/convergentSync/index.ts');
 const { getConvergentSyncLocalConfig } = await import('../infrastructure/services/convergentSyncConfig.ts');
 const {
   initializePreparedConvergentMigration,
@@ -116,6 +119,11 @@ test('initialization applies the protected preview before persisting and enablin
     saveConvergentProviderBaseline: async () => {
       calls.push('baseline');
     },
+    syncConvergentProvidersUnderLock: async (incoming: SyncPayload) => {
+      calls.push('publish');
+      assert.equal(incoming.convergentSync?.schemaVersion, 2);
+      return new Map();
+    },
   } as unknown as CloudSyncManager;
 
   await initializePreparedConvergentMigration({
@@ -141,8 +149,78 @@ test('initialization applies the protected preview before persisting and enablin
     },
   });
 
-  assert.deepEqual(calls, ['lock', 'protect', 'snapshot', 'apply', 'replica']);
+  assert.deepEqual(calls, ['lock', 'protect', 'snapshot', 'apply', 'replica', 'publish']);
   assert.deepEqual(getConvergentSyncLocalConfig(), { enabled: true, initialized: true });
+});
+
+test('initialization applies a concurrent provider merge before releasing the migration lock', async () => {
+  const localPayload = payload();
+  const mergedPayload: SyncPayload = {
+    ...payload(),
+    hosts: [{
+      id: 'remote-host',
+      label: 'Remote host',
+      hostname: 'remote.example.com',
+      port: 22,
+      username: 'root',
+      tags: [],
+      os: 'linux',
+    }],
+  };
+  const plan = planConvergentSyncMigration({
+    localPayload,
+    localTrustedBaseline: null,
+    providers: [],
+    deviceId: 'device-a',
+    now: NOW,
+  });
+  const applied: SyncPayload[] = [];
+  let currentPayload = localPayload;
+  let lockHeld = false;
+  const manager = {
+    isUnlocked: () => true,
+    withConvergentSyncLock: async (task: () => Promise<void>) => {
+      lockHeld = true;
+      try {
+        return await task();
+      } finally {
+        lockHeld = false;
+      }
+    },
+    saveConvergentReplica: async () => {},
+    saveConvergentProviderBaseline: async () => {},
+    syncConvergentProvidersUnderLock: async () => {
+      assert.equal(lockHeld, true);
+      return new Map([[
+        'github',
+        { success: true, provider: 'github', action: 'merge', mergedPayload },
+      ]]);
+    },
+  } as unknown as CloudSyncManager;
+
+  await initializePreparedConvergentMigration({
+    prepared: { plan, providerBaselines: [], localSnapshot: localPayload },
+    manager,
+    now: NOW,
+    buildCurrentPayload: () => currentPayload,
+    buildPreApplyPayload: () => currentPayload,
+    translateProtectiveBackupFailure: (message) => message,
+    applyPayload: async (incoming) => {
+      assert.equal(lockHeld, true);
+      applied.push(incoming);
+      currentPayload = stripConvergentSyncEnvelope(incoming);
+    },
+    runProtectedApply: async (options) => {
+      if (!options.prepareApply) throw new Error('Expected prepared migration apply');
+      const apply = await options.prepareApply();
+      await apply();
+    },
+  });
+
+  assert.equal(applied.length, 2);
+  assert.equal(applied[0]?.convergentSync?.schemaVersion, 2);
+  assert.equal(applied[1]?.hosts[0]?.label, 'Remote host');
+  assert.equal(lockHeld, false);
 });
 
 test('initialization rejects a stale preview before backup or apply', async () => {

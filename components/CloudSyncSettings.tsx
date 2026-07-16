@@ -660,16 +660,19 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
             if (!ensureSyncablePayload(payload)) return;
             const result = await sync.syncToProvider(provider, payload);
 
-            if (result.success) {
-                // Apply merged data if a three-way merge happened
-                if (result.mergedPayload && onApplyPayload) {
-                    await Promise.resolve(onApplyPayload(result.mergedPayload));
-                    if (result.remoteFile) {
-                        await sync.commitRemoteInspection(result.provider, result.remoteFile, result.mergedPayload, {
-                            recordDownload: true,
-                        });
-                    }
+            // Convergent sync fans out to every provider. Even if the
+            // requested provider fails, another provider can verify a newer
+            // joined replica that must be applied before reporting the error.
+            if (result.mergedPayload && onApplyPayload) {
+                await Promise.resolve(onApplyPayload(result.mergedPayload));
+                if (result.remoteFile) {
+                    await sync.commitRemoteInspection(result.provider, result.remoteFile, result.mergedPayload, {
+                        recordDownload: true,
+                    });
                 }
+            }
+
+            if (result.success) {
                 toast.success(t('cloudSync.sync.success', { provider }));
             } else if (result.conflictDetected) {
                 // Conflict modal will show automatically
