@@ -83,6 +83,7 @@ function remoteState(
 interface MemoryAdapter extends CloudAdapter {
   uploads: number;
   remote: SyncedFile | null;
+  failUpload?: boolean;
   failDownload?: boolean;
   downloadError?: Error;
   afterUpload?: (file: SyncedFile, adapter: MemoryAdapter) => void;
@@ -98,6 +99,7 @@ function adapter(initial: SyncedFile | null): MemoryAdapter {
     signOut: () => {},
     initializeSync: async () => null,
     upload: async (file) => {
+      if (result.failUpload) throw new Error('provider upload unavailable');
       result.uploads += 1;
       result.remote = file;
       result.afterUpload?.(file, result);
@@ -330,6 +332,54 @@ test('a failed provider does not roll back a provider that verified successfully
     assert.equal(results.get('google')?.success, false);
     assert.equal(subject.state.syncState, 'IDLE');
     assert.equal(subject.state.pendingLocalSync, true);
+  } finally {
+    encryption.restore();
+  }
+});
+
+test('total upload failure keeps downloaded remote edits out of the durable local replica', async () => {
+  const encryption = installEncryptionDouble();
+  try {
+    const localPayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const remote = remoteState(
+      base,
+      localPayload,
+      payload('base', 'remote-user'),
+      'remote-device',
+      NOW + 1,
+    );
+    const github = adapter(encryption.register(
+      withConvergentSyncEnvelope(remote, { syncedAt: NOW + 1 }),
+      2,
+      'remote-device',
+    ));
+    github.failUpload = true;
+    const subject = manager(base, { github });
+
+    const failed = await syncConvergentProvidersUnlockedImpl.call(
+      subject,
+      localPayload,
+      { maxRounds: 1, jitter: async () => {}, now: () => NOW + 10 },
+    );
+
+    assert.equal(failed.get('github')?.success, false);
+    assert.equal(
+      materializeSyncPayloadFromConvergentState(subject.persisted.at(-1)!, { syncedAt: NOW })
+        .hosts[0]?.username,
+      'root',
+    );
+
+    github.failUpload = false;
+    subject.state.providers.github.status = 'connected';
+    const retried = await syncConvergentProvidersUnlockedImpl.call(
+      subject,
+      localPayload,
+      { maxRounds: 1, jitter: async () => {}, now: () => NOW + 20 },
+    );
+
+    assert.equal(retried.get('github')?.success, true);
+    assert.equal(retried.get('github')?.mergedPayload?.hosts[0]?.username, 'remote-user');
   } finally {
     encryption.restore();
   }

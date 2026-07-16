@@ -48,6 +48,7 @@ import { CloudSyncDashboardTabs } from './cloud-sync/CloudSyncDashboardTabs';
 interface SyncDashboardProps {
     onBuildPayload: () => SyncPayload | Promise<SyncPayload>;
     onBuildLocalPayload: () => SyncPayload;
+    onApplyMigrationPayload: (payload: SyncPayload) => void | Promise<void>;
     onApplyPayload: (payload: SyncPayload) => void | Promise<void>;
     onApplyConvergentPayload: (
         payload: SyncPayload,
@@ -60,6 +61,7 @@ interface SyncDashboardProps {
 const SyncDashboard: React.FC<SyncDashboardProps> = ({
     onBuildPayload,
     onBuildLocalPayload,
+    onApplyMigrationPayload,
     onApplyPayload,
     onApplyConvergentPayload,
     onApplyLocalPayload,
@@ -314,13 +316,9 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
                 prepared: preparedConvergentMigration,
                 buildCurrentPayload: onBuildPayload,
                 buildPreApplyPayload: onBuildLocalPayload,
-                applyPayload: onApplyPayload,
+                applyPayload: onApplyMigrationPayload,
                 translateProtectiveBackupFailure: (message) =>
                     t('cloudSync.localBackups.protectiveBackupFailed', { message }),
-                // onApplyPayload already owns the protective-backup boundary.
-                runProtectedApply: async ({ applyPayload }) => {
-                    await applyPayload();
-                },
             });
             sync.refreshConvergentSyncConfig();
             setPreparedConvergentMigration(null);
@@ -331,7 +329,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         } finally {
             setConvergentBusy(false);
         }
-    }, [onApplyPayload, onBuildLocalPayload, onBuildPayload, preparedConvergentMigration, sync, t]);
+    }, [onApplyMigrationPayload, onBuildLocalPayload, onBuildPayload, preparedConvergentMigration, sync, t]);
 
     const handleResolveConvergentConflict = useCallback(async (
         addressKey: string,
@@ -1008,6 +1006,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
 interface CloudSyncSettingsProps {
     onBuildPayload: () => SyncPayload | Promise<SyncPayload>;
     onBuildLocalPayload: () => SyncPayload;
+    onApplyMigrationPayload: (payload: SyncPayload) => void | Promise<void>;
     onApplyPayload: (payload: SyncPayload) => void | Promise<void>;
     onApplyConvergentPayload: (
         payload: SyncPayload,

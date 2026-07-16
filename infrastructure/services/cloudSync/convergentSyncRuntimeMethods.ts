@@ -249,6 +249,11 @@ async function runInitialDownloads(
   }));
 }
 
+interface PreparedLocalState {
+  canonical: ConvergentSyncStateV2;
+  durableBeforeVerification: ConvergentSyncStateV2;
+}
+
 function prepareLocalState(
   strategy: CloudSyncStrategy,
   replica: ConvergentSyncStateV2,
@@ -256,21 +261,25 @@ function prepareLocalState(
   remoteStates: ConvergentSyncStateV2[],
   deviceId: string,
   now: number,
-): ConvergentSyncStateV2 {
+): PreparedLocalState {
   const localBaseline = materializedPayload(replica, now);
   if (strategy === 'preferCloud' && remoteStates.length > 0) {
     const [first, ...rest] = remoteStates;
-    return mergeStates(first, rest);
+    return {
+      canonical: mergeStates(first, rest),
+      durableBeforeVerification: replica,
+    };
   }
   if (strategy === 'preferLocal') {
     const joined = mergeStates(replica, remoteStates);
-    return applyLegacySyncPayload(
+    const canonical = applyLegacySyncPayload(
       joined,
       localBaseline,
       stripConvergentSyncEnvelope(localPayload),
       deviceId,
       now,
     );
+    return { canonical, durableBeforeVerification: canonical };
   }
   const withLocalWrites = applyLegacySyncPayload(
     replica,
@@ -279,7 +288,10 @@ function prepareLocalState(
     deviceId,
     now,
   );
-  return mergeStates(withLocalWrites, remoteStates);
+  return {
+    canonical: mergeStates(withLocalWrites, remoteStates),
+    durableBeforeVerification: withLocalWrites,
+  };
 }
 
 /**
@@ -360,7 +372,7 @@ export async function syncConvergentProvidersUnlockedImpl(
   // Adapter acquisition failures are terminal for this cycle. Download,
   // decrypt, and verification failures remain retryable in later rounds.
   const usable = runtimes.filter((runtime) => Boolean(runtime.adapter));
-  let canonical = prepareLocalState(
+  const preparedLocal = prepareLocalState(
     strategy,
     replica.state,
     inputPayload,
@@ -368,11 +380,15 @@ export async function syncConvergentProvidersUnlockedImpl(
     this.state.deviceId,
     now(),
   );
+  let canonical = preparedLocal.canonical;
+  const durableBeforeVerification = preparedLocal.durableBeforeVerification;
 
-  // Local durability precedes every network write. A crash can therefore
-  // retry from the same causal state without regenerating dots.
-  await persistReplica(this, canonical, now());
-  updateConflictState(this, canonical);
+  // Persist locally-generated dots before every network write, but do not
+  // commit downloaded remote-only dots until at least one provider verifies
+  // the joined state. A total network failure must leave the replica aligned
+  // with the still-unmodified renderer vault.
+  await persistReplica(this, durableBeforeVerification, now());
+  updateConflictState(this, durableBeforeVerification);
 
   for (let round = 0; round < maxRounds && usable.length > 0; round += 1) {
     if (round > 0) await jitter(round);
@@ -388,7 +404,6 @@ export async function syncConvergentProvidersUnlockedImpl(
       }
     }));
     canonical = mergeStates(canonical, preflight.flatMap((decoded) => decoded ? [decoded.state] : []));
-    await persistReplica(this, canonical, now());
 
     const expected = canonical;
     const outgoingPayload = withConvergentSyncEnvelope(expected, { syncedAt: now() });
@@ -430,8 +445,6 @@ export async function syncConvergentProvidersUnlockedImpl(
     }));
 
     canonical = mergeStates(canonical, verified.flatMap((decoded) => decoded ? [decoded.state] : []));
-    await persistReplica(this, canonical, now());
-    updateConflictState(this, canonical);
 
     const activeVerified = usable.filter((runtime) => runtime.verifiedState && !runtime.error);
     if (
@@ -444,16 +457,28 @@ export async function syncConvergentProvidersUnlockedImpl(
     ) break;
   }
 
-  const conflicts = updateConflictState(this, canonical);
+  const successfulRuntimes = runtimes.filter((runtime) => (
+    runtime.verifiedState
+      && !runtime.error
+      && versionVectorDominates(runtime.verifiedState.vector, canonical.vector)
+  ));
+  const hasSuccess = successfulRuntimes.length > 0;
+  if (hasSuccess) {
+    await persistReplica(this, canonical, now());
+  } else {
+    await persistReplica(this, durableBeforeVerification, now());
+  }
+  const conflicts = updateConflictState(
+    this,
+    hasSuccess ? canonical : durableBeforeVerification,
+  );
   const mergedPayload = materializedPayload(canonical, now());
-  let hasSuccess = false;
   for (const runtime of runtimes) {
     if (
       runtime.verifiedState
       && !runtime.error
       && versionVectorDominates(runtime.verifiedState.vector, canonical.vector)
     ) {
-      hasSuccess = true;
       const result: SyncResult = {
         success: true,
         provider: runtime.provider,

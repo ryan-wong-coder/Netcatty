@@ -125,7 +125,11 @@ The runtime downloads every connected provider before choosing an outgoing
 state. `smartMerge` joins local writes and all remote branches, `preferLocal`
 joins first and then creates causal local writes that dominate the joined
 registers, and `preferCloud` adopts the unordered remote join. The canonical
-replica is encrypted and persisted before any provider upload.
+state containing locally generated dots is encrypted and persisted before any
+provider upload. Downloaded remote-only dots are committed to the local replica
+only after at least one provider verifies the joined state; a total network
+failure therefore leaves the durable replica aligned with the unchanged local
+vault and safely retries the remote branch later.
 Before `smartMerge` or `preferLocal` turns a local snapshot into writes, the
 existing suspicious-shrink guard compares it with the materialized replica.
 Mass deletion is blocked before dots are allocated or persisted unless the
@@ -133,19 +137,19 @@ user performs the existing one-shot force operation.
 
 Providers then run at most three read-merge-write-verify rounds. Every round:
 
-1. downloads and joins any state that appeared since the initial read;
-2. persists the expanded canonical replica;
-3. uploads the same expected vector to available providers;
-4. reads each provider back and accepts the write only when the returned vector
+1. downloads and joins in memory any state that appeared since the initial read;
+2. uploads the same expected vector to available providers;
+3. reads each provider back and accepts the write only when the returned vector
    dominates the expected vector;
-5. joins verified remote supersets and repeats when they contain new concurrent
+4. joins verified remote supersets and repeats when they contain new concurrent
    state.
 
 The retry delay uses short full jitter. One unavailable provider remains an
 error and leaves local sync pending, but it does not roll back providers that
-verified successfully. Because the canonical state is durable before network
-I/O, application restart retries the same causal writes instead of regenerating
-dots. Provider baselines advance only after read-back verification.
+verified successfully. Because locally generated causal writes are durable
+before network I/O, application restart retries the same dots instead of
+regenerating them. Provider baselines and the joined canonical replica advance
+only after read-back verification.
 
 ## Conflict resolution and downgrade
 
