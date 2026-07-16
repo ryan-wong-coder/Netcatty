@@ -69,6 +69,32 @@ test("an unchanged remote check cannot absorb an existing paused-edit baseline",
   );
 });
 
+test("enabled convergent remote checks use the CRDT runtime before legacy inspection", () => {
+  const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
+  const checkIndex = source.indexOf("const checkRemoteVersion = useCallback");
+  const convergentGuardIndex = source.indexOf(
+    "if (currentConvergentConfig.initialized && currentConvergentConfig.enabled)",
+    checkIndex,
+  );
+  const convergentSyncIndex = source.indexOf(
+    "await syncNowRef.current({ notifyOnFailure })",
+    convergentGuardIndex,
+  );
+  const legacyInspectionIndex = source.indexOf(
+    "manager.inspectProviderRemote(connectedProvider)",
+    convergentSyncIndex,
+  );
+
+  assert.notEqual(checkIndex, -1);
+  assert.notEqual(convergentGuardIndex, -1);
+  assert.notEqual(convergentSyncIndex, -1);
+  assert.notEqual(legacyInspectionIndex, -1);
+  assert.ok(
+    convergentGuardIndex < convergentSyncIndex && convergentSyncIndex < legacyInspectionIndex,
+    "v2 checks must return through the CRDT runtime before the legacy snapshot inspector",
+  );
+});
+
 test("auto-sync skips only the exact remote-applied data hash", () => {
   const source = readFileSync(new URL("./useAutoSync.ts", import.meta.url), "utf8");
   const helperIndex = source.indexOf("const getSyncPayloadDataHash = (payload: SyncPayload): string");

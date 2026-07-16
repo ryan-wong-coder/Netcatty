@@ -665,9 +665,6 @@ export async function downgradeConvergentSyncImpl(
     const syncSecurityGeneration = getSyncSecurityGeneration(this);
     assertSyncSecurityGeneration(this, syncSecurityGeneration);
     const providers = connectedProviders(this);
-    if (providers.length === 0) {
-      throw new Error('Connect every provider containing convergent data before downgrading');
-    }
     const replica = await this.loadConvergentReplica();
     if (!replica) throw new Error('Convergent sync replica is unavailable');
     const localPayload = await buildLocalPayload();
@@ -746,6 +743,9 @@ export async function downgradeConvergentSyncImpl(
       this.state.syncState = 'CONFLICT';
       this.state.lastError = message;
       this.notifyStateChange();
+      if (providers.length === 0) {
+        throw new Error(message);
+      }
       return results;
     }
 
@@ -801,6 +801,13 @@ export async function downgradeConvergentSyncImpl(
         this.completeConvergentSyncDowngrade(true);
       } catch (error) {
         const message = `Unable to finalize convergent downgrade: ${errorMessage(error)}`;
+        if (providers.length === 0) {
+          this.state.pendingLocalSync = true;
+          this.state.syncState = 'ERROR';
+          this.state.lastError = message;
+          this.notifyStateChange();
+          throw new Error(message);
+        }
         for (const provider of providers) {
           results.set(provider, failedResult(provider, message));
           this.updateProviderStatus(provider, 'error', message);

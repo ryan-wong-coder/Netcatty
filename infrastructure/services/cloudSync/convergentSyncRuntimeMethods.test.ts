@@ -715,6 +715,121 @@ test('downgrade reports cleanup failure instead of releasing a successful result
   }
 });
 
+test('downgrade finalizes a local-only convergent replica without providers', async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const basePayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
+    const pausedLocalPayload = payload('paused-local');
+    const subject = manager(base, {});
+    let appliedPayload: SyncPayload | null = null;
+
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async () => pausedLocalPayload,
+      async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        appliedPayload = incoming;
+        await commitReplica();
+      },
+    );
+
+    assert.equal(results.size, 0);
+    assert.equal(appliedPayload?.hosts[0]?.label, 'paused-local');
+    assert.deepEqual(subject.completedDowngrades, [true]);
+    assert.equal(subject.state.syncState, 'IDLE');
+    assert.equal(subject.state.pendingLocalSync, false);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});
+
+test('local-only downgrade reports cleanup failures instead of returning an empty success', async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const localPayload = payload('local');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const subject = manager(base, {});
+    subject.completeConvergentSyncDowngrade = () => {
+      throw new Error('local cleanup failed');
+    };
+
+    await assert.rejects(
+      () => downgradeConvergentSyncImpl.call(
+        subject,
+        true,
+        async () => localPayload,
+        async (_incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+          await commitReplica();
+        },
+      ),
+      /local cleanup failed/,
+    );
+
+    assert.equal(subject.state.syncState, 'ERROR');
+    assert.equal(subject.state.pendingLocalSync, true);
+    assert.deepEqual(subject.completedDowngrades, []);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});
+
+test('local-only downgrade fails closed while the replica has unresolved conflicts', async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const basePayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
+    const left = remoteState(base, basePayload, payload('left'), 'left-device', NOW + 1);
+    const right = remoteState(base, basePayload, payload('right'), 'right-device', NOW + 2);
+    const conflicted = mergeConvergentSyncStates(left, right);
+    const subject = manager(conflicted, {});
+
+    await assert.rejects(
+      () => downgradeConvergentSyncImpl.call(
+        subject,
+        true,
+        async () => materializeSyncPayloadFromConvergentState(conflicted, { syncedAt: NOW }),
+        async (_incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+          await commitReplica();
+        },
+      ),
+      /Resolve 1 convergent conflict/,
+    );
+
+    assert.equal(subject.state.syncState, 'CONFLICT');
+    assert.deepEqual(subject.completedDowngrades, []);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});
+
 test('downgrade joins remote-only v2 edits before applying or writing v1', async () => {
   const encryption = installEncryptionDouble();
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');

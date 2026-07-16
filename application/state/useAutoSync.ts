@@ -123,6 +123,7 @@ type SyncTrigger = 'auto' | 'manual';
 
 interface SyncNowOptions {
   trigger?: SyncTrigger;
+  notifyOnFailure?: boolean;
 }
 
 interface RemoteVersionCheckOptions {
@@ -414,15 +415,22 @@ export const useAutoSync = (config: AutoSyncConfig) => {
         throw error;
       }
       console.error('[AutoSync] Sync failed:', error);
-      notify.error(
-        error instanceof Error ? error.message : t('common.unknownError'),
-        t('sync.autoSync.failedTitle'),
-      );
+      if (options?.notifyOnFailure !== false) {
+        notify.error(
+          error instanceof Error ? error.message : t('common.unknownError'),
+          t('sync.autoSync.failedTitle'),
+        );
+      }
       return false;
     } finally {
       isSyncRunningRef.current = false;
     }
   }, [enabled, sync, buildPayload, getDataHash, onApplyPayload, t]);
+
+  const syncNowRef = useRef(syncNow);
+  useEffect(() => {
+    syncNowRef.current = syncNow;
+  }, [syncNow]);
 
   // One-shot toast per mount when a previous apply was interrupted, so the
   // user understands why auto-sync is silently paused and where to go to
@@ -553,6 +561,15 @@ export const useAutoSync = (config: AutoSyncConfig) => {
     let markCurrentDataSynced = true;
     let inspectedRemoteChange = false;
     try {
+      if (currentConvergentConfig.initialized && currentConvergentConfig.enabled) {
+        // A v2 remote check must join the provider replicas through the CRDT
+        // runtime. Inspecting the materialized v1 snapshot here would discard
+        // retained candidates and could turn the deterministic winner into a
+        // local write that silently resolves a real field conflict.
+        await syncNowRef.current({ notifyOnFailure });
+        return;
+      }
+
       // Load base BEFORE observing the remote payload (commitRemoteInspection overwrites the base).
       const base = await manager.loadSyncBase(connectedProvider);
       const inspection = await manager.inspectProviderRemote(connectedProvider);
