@@ -154,8 +154,11 @@ normal provider state machine. Secret-bearing fields are detected from their
 address and nested field names. Their UI renders only “set” or “empty”; values
 are never formatted, logged, or inserted into DOM text.
 
-Explicit downgrade holds the same Web Lock, writes a materialized v1 snapshot
-to every connected provider, downloads it again, verifies both the absence of
-v2 metadata and equality of cloud data, and only then allows local replica and
-baseline metadata to be cleared. A partial downgrade keeps local v2 state so
-the user can retry safely.
+Explicit downgrade holds the same Web Lock and downloads every connected
+provider before writing anything. Netcatty joins those remote states with the
+local replica, applies the joined payload behind a protective backup, and
+blocks downgrade until any newly discovered field conflicts are resolved. It
+then writes the joined materialized v1 snapshot to every provider, downloads it
+again, and verifies both the absence of v2 metadata and equality of cloud data.
+A partial downgrade keeps the joined local v2 state and refreshed provider
+baselines so the user can retry safely without losing remote-only dots.

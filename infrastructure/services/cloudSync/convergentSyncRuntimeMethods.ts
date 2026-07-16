@@ -606,6 +606,10 @@ export async function resolveConvergentConflictAndSyncImpl(
 export async function downgradeConvergentSyncImpl(
   this: any,
   confirmed: boolean,
+  applyPayload: (
+    payload: SyncPayload,
+    commitReplica: () => Promise<void>,
+  ) => Promise<void>,
 ): Promise<Map<CloudProvider, SyncResult>> {
   if (!confirmed) throw new Error('Explicit confirmation is required to downgrade convergent sync');
   return withConvergentSyncWebLock(async () => {
@@ -617,19 +621,71 @@ export async function downgradeConvergentSyncImpl(
     }
     const replica = await this.loadConvergentReplica();
     if (!replica) throw new Error('Convergent sync replica is unavailable');
-    const outgoing = materializedPayload(replica.state, Date.now());
     const results = new Map<CloudProvider, SyncResult>();
-    await Promise.all(providers.map(async (provider) => {
+    this.state.syncState = 'SYNCING';
+    this.state.lastError = null;
+    const runtimes = await runInitialDownloads(this, providers, syncSecurityGeneration);
+    const failedPreflight = runtimes.find((runtime) => runtime.error || !runtime.adapter);
+    if (failedPreflight) {
+      const message = `Downgrade preflight failed for ${failedPreflight.provider}: ${failedPreflight.error ?? 'provider adapter unavailable'}`;
+      for (const provider of providers) {
+        results.set(provider, failedResult(provider, message));
+        this.updateProviderStatus(provider, 'error', message);
+      }
+      this.state.pendingLocalSync = true;
+      this.state.syncState = 'ERROR';
+      this.state.lastError = message;
+      this.notifyStateChange();
+      return results;
+    }
+
+    const now = Date.now();
+    const canonical = mergeStates(
+      replica.state,
+      runtimes.flatMap((runtime) => runtime.verifiedState ? [runtime.verifiedState] : []),
+    );
+    const outgoing = materializedPayload(canonical, now);
+    assertSyncSecurityGeneration(this, syncSecurityGeneration);
+    let committed = false;
+    try {
+      await applyPayload(outgoing, async () => {
+        if (committed) return;
+        await persistReplica(this, canonical, now);
+        updateConflictState(this, canonical);
+        this.state.pendingLocalSync = true;
+        this.notifyStateChange();
+        committed = true;
+      });
+      if (!committed) {
+        throw new Error('Convergent downgrade apply completed without committing its replica');
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      for (const provider of providers) this.updateProviderStatus(provider, 'error', message);
+      this.state.pendingLocalSync = true;
+      this.state.syncState = 'ERROR';
+      this.state.lastError = message;
+      this.notifyStateChange();
+      throw error;
+    }
+    assertSyncSecurityGeneration(this, syncSecurityGeneration);
+
+    const conflicts = currentConflicts(canonical);
+    if (conflicts.length > 0) {
+      const message = `Resolve ${conflicts.length} convergent conflict(s) before downgrading`;
+      for (const provider of providers) {
+        results.set(provider, failedResult(provider, message));
+        this.updateProviderStatus(provider, 'connected');
+      }
+      this.state.syncState = 'CONFLICT';
+      this.state.lastError = message;
+      this.notifyStateChange();
+      return results;
+    }
+
+    await Promise.all(runtimes.map(async (runtime) => {
+      const { provider, adapter, latestRemote: before } = runtime;
       try {
-        const adapter = await this.getConnectedAdapter(provider) as CloudAdapter;
-        assertSyncSecurityGeneration(this, syncSecurityGeneration);
-        const before = await adapter.download();
-        assertSyncSecurityGeneration(this, syncSecurityGeneration);
-        const remoteSchema = (before?.meta as { syncSchemaVersion?: unknown } | undefined)
-          ?.syncSchemaVersion;
-        if (remoteSchema !== undefined && remoteSchema !== 2) {
-          throw new Error(`Cannot downgrade unsupported sync schema version: ${String(remoteSchema)}`);
-        }
         const file = await EncryptionService.encryptPayload(
           outgoing,
           this.masterPassword,
@@ -652,6 +708,15 @@ export async function downgradeConvergentSyncImpl(
         if (!cloudSyncPayloadsEqual(outgoing, verifiedPayload)) {
           throw new Error('Provider payload changed while verifying downgrade');
         }
+        await this.saveConvergentProviderBaseline({
+          schemaVersion: 2,
+          provider,
+          remoteVersion: verifiedFile.meta.version,
+          remoteUpdatedAt: verifiedFile.meta.updatedAt,
+          remoteDeviceId: verifiedFile.meta.deviceId,
+          materializedPayload: verifiedPayload,
+          state: canonical,
+        });
         results.set(provider, {
           success: true,
           provider,
@@ -665,6 +730,10 @@ export async function downgradeConvergentSyncImpl(
         this.updateProviderStatus(provider, 'error', message);
       }
     }));
+    const failed = [...results.values()].find((result) => !result.success);
+    this.state.pendingLocalSync = Boolean(failed);
+    this.state.syncState = failed ? 'ERROR' : 'IDLE';
+    this.state.lastError = failed?.error ?? null;
     this.notifyStateChange();
     return results;
   });

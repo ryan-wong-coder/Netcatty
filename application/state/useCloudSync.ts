@@ -119,7 +119,13 @@ export interface CloudSyncHook {
       commitReplica: () => Promise<void>,
     ) => Promise<void>,
   ) => Promise<{ payload: SyncPayload; results: Map<CloudProvider, SyncResult> }>;
-  downgradeConvergentSync: (confirmed: boolean) => Promise<Map<CloudProvider, SyncResult>>;
+  downgradeConvergentSync: (
+    confirmed: boolean,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
+  ) => Promise<Map<CloudProvider, SyncResult>>;
 
   // Gist Revision History
   getGistRevisionHistory: () => Promise<Array<{ version: string; date: Date }>>;
@@ -772,9 +778,15 @@ export const useCloudSync = (): CloudSyncHook => {
     return next;
   }, []);
 
-  const downgradeConvergentSyncWithUnlock = useCallback(async (confirmed: boolean) => {
+  const downgradeConvergentSyncWithUnlock = useCallback(async (
+    confirmed: boolean,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
+  ) => {
     await ensureUnlocked();
-    return manager.downgradeConvergentSync(confirmed);
+    return manager.downgradeConvergentSync(confirmed, applyPayload);
   }, [ensureUnlocked]);
   
   return {

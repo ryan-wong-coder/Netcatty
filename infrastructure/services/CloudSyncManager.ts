@@ -904,8 +904,14 @@ export class CloudSyncManager {
     );
   }
 
-  async downgradeConvergentSync(confirmed = false): Promise<Map<CloudProvider, SyncResult>> {
-    return downgradeConvergentSyncImpl.call(this, confirmed);
+  async downgradeConvergentSync(
+    confirmed: boolean,
+    applyPayload: (
+      payload: SyncPayload,
+      commitReplica: () => Promise<void>,
+    ) => Promise<void>,
+  ): Promise<Map<CloudProvider, SyncResult>> {
+    return downgradeConvergentSyncImpl.call(this, confirmed, applyPayload);
   }
 
   async withConvergentSyncLock<T>(task: () => Promise<T>): Promise<T> {

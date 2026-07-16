@@ -360,7 +360,10 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         setConvergentBusy(true);
         setConvergentError(null);
         try {
-            const results = await sync.downgradeConvergentSync(true);
+            const results = await sync.downgradeConvergentSync(
+                true,
+                onApplyConvergentPayload,
+            );
             const failed = [...results.values()].find((result) => !result.success);
             if (failed) throw new Error(failed.error || t('sync.autoSync.syncFailed'));
             completeConvergentSyncDowngrade(true);
@@ -373,7 +376,7 @@ const SyncDashboard: React.FC<SyncDashboardProps> = ({
         } finally {
             setConvergentBusy(false);
         }
-    }, [sync, t]);
+    }, [onApplyConvergentPayload, sync, t]);
 
     // Handle conflict detection
     useEffect(() => {

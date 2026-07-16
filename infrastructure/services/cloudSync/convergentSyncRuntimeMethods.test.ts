@@ -519,14 +519,200 @@ test('explicit downgrade replaces v2 only after a verified legacy write', async 
     const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
     const github = adapter(encryption.register(withConvergentSyncEnvelope(base, { syncedAt: NOW }), 2));
     const subject = manager(base, { github });
+    let appliedPayload: SyncPayload | null = null;
 
-    const results = await downgradeConvergentSyncImpl.call(subject, true);
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        appliedPayload = incoming;
+        await commitReplica();
+      },
+    );
 
     assert.equal(results.get('github')?.success, true);
+    assert.equal(appliedPayload?.hosts[0]?.label, 'local');
     assert.equal(github.remote?.meta.syncSchemaVersion, undefined);
     const verified = await EncryptionService.decryptPayload(github.remote!, 'pw');
     assert.equal(verified.convergentSync, undefined);
     assert.equal(verified.hosts[0]?.label, 'local');
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    encryption.restore();
+  }
+});
+
+test('downgrade joins remote-only v2 edits before applying or writing v1', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const basePayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
+    const remote = remoteState(base, basePayload, payload('remote-only'), 'remote-device', NOW + 1);
+    const github = adapter(encryption.register(
+      withConvergentSyncEnvelope(remote, { syncedAt: NOW + 1 }),
+      4,
+      'remote-device',
+    ));
+    const baselines: Partial<Record<CloudProvider, ConvergentProviderBaselineV2>> = {};
+    const subject = manager(base, { github }, baselines);
+    let appliedPayload: SyncPayload | null = null;
+
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        appliedPayload = incoming;
+        await commitReplica();
+      },
+    );
+
+    assert.equal(results.get('github')?.success, true);
+    assert.equal(appliedPayload?.hosts[0]?.label, 'remote-only');
+    assert.equal(github.remote?.meta.syncSchemaVersion, undefined);
+    const verified = await EncryptionService.decryptPayload(github.remote!, 'pw');
+    assert.equal(verified.hosts[0]?.label, 'remote-only');
+    assert.equal(
+      materializeSyncPayloadFromConvergentState(subject.persisted.at(-1)!, { syncedAt: NOW }).hosts[0]?.label,
+      'remote-only',
+    );
+    assert.equal(baselines.github?.materializedPayload.hosts[0]?.label, 'remote-only');
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    encryption.restore();
+  }
+});
+
+test('downgrade preflight failure writes neither local state nor another provider', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const localPayload = payload('local');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const github = adapter(encryption.register(withConvergentSyncEnvelope(base, { syncedAt: NOW }), 2));
+    const google = adapter(null);
+    google.failDownload = true;
+    const subject = manager(base, { github, google });
+    let applied = false;
+
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async () => {
+        applied = true;
+      },
+    );
+
+    assert.equal([...results.values()].every((result) => !result.success), true);
+    assert.equal(applied, false);
+    assert.equal(subject.persisted.length, 0);
+    assert.equal(github.uploads, 0);
+    assert.equal(google.uploads, 0);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    encryption.restore();
+  }
+});
+
+test('failed protected downgrade apply uploads nothing and exits syncing state', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const localPayload = payload('local');
+    const base = createConvergentSyncStateFromPayload(localPayload, 'seed', NOW);
+    const github = adapter(encryption.register(withConvergentSyncEnvelope(base, { syncedAt: NOW }), 2));
+    const subject = manager(base, { github });
+
+    await assert.rejects(
+      () => downgradeConvergentSyncImpl.call(subject, true, async () => {
+        throw new Error('protective downgrade apply failed');
+      }),
+      /protective downgrade apply failed/,
+    );
+
+    assert.equal(subject.persisted.length, 0);
+    assert.equal(github.uploads, 0);
+    assert.equal(subject.state.syncState, 'ERROR');
+    assert.equal(subject.state.pendingLocalSync, true);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    encryption.restore();
+  }
+});
+
+test('downgrade preserves concurrent provider candidates and blocks legacy writes', async () => {
+  const encryption = installEncryptionDouble();
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: async (_name: string, _options: unknown, callback: (lock: object) => unknown) => callback({}),
+        },
+      },
+    });
+    const basePayload = payload('base');
+    const base = createConvergentSyncStateFromPayload(basePayload, 'seed', NOW);
+    const githubState = remoteState(base, basePayload, payload('github-edit'), 'github-device', NOW + 1);
+    const googleState = remoteState(base, basePayload, payload('google-edit'), 'google-device', NOW + 2);
+    const github = adapter(encryption.register(
+      withConvergentSyncEnvelope(githubState, { syncedAt: NOW + 1 }),
+      2,
+      'github-device',
+    ));
+    const google = adapter(encryption.register(
+      withConvergentSyncEnvelope(googleState, { syncedAt: NOW + 2 }),
+      2,
+      'google-device',
+    ));
+    const subject = manager(base, { github, google });
+    let appliedPayload: SyncPayload | null = null;
+
+    const results = await downgradeConvergentSyncImpl.call(
+      subject,
+      true,
+      async (incoming: SyncPayload, commitReplica: () => Promise<void>) => {
+        appliedPayload = incoming;
+        await commitReplica();
+      },
+    );
+
+    assert.equal([...results.values()].every((result) => !result.success), true);
+    assert.equal(appliedPayload?.hosts[0]?.label, 'google-edit');
+    assert.equal(subject.state.convergentConflicts.length, 1);
+    assert.equal(subject.state.syncState, 'CONFLICT');
+    assert.equal(subject.persisted.length, 1);
+    assert.equal(github.uploads, 0);
+    assert.equal(google.uploads, 0);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
