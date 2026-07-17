@@ -563,7 +563,22 @@ function createCatalogTool(spec: CattyToolSpec) {
                 output: `[monitor batch suppressed by rate limit; suppressed=${guarded.suppressedCount}]`,
               };
             } else {
-              poll = { ...poll, output: guarded.content };
+              let output = guarded.content;
+              if (guarded.sourceTruncated && toolOutputStore && deps.chatSessionId) {
+                const jobId = String(poll.jobId ?? args.jobId ?? '');
+                const handle = toolOutputStore.store({
+                  chatSessionId: deps.chatSessionId,
+                  capabilityId: 'terminal.poll.monitor-batch',
+                  content: poll.output,
+                  sessionId: jobId ? toolResultDedup?.terminalSessionForJob(jobId) : undefined,
+                });
+                output += [
+                  '',
+                  `[monitor batch archived before shortening: rawChars=${poll.output.length} handleId=${handle.id}]`,
+                  'Use tool_output_read with this handleId to search/read omitted details; the terminal nextOffset already advances past the raw batch.',
+                ].join('\n');
+              }
+              poll = { ...poll, output };
             }
           }
           if (poll.status !== 'running' && poll.status !== 'stopping') {

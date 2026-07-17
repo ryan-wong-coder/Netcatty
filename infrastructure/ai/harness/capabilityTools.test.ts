@@ -578,6 +578,8 @@ describe('capabilityTools terminal polling', () => {
   });
 
   it('bounds follow-style monitor output before it reaches the model', async () => {
+    const store = new ToolOutputStore();
+    const rawOutput = `${'x '.repeat(400)}\n${'log line\n'.repeat(500)}MONITOR_MIDDLE_EVIDENCE_7319\n${'tail line\n'.repeat(500)}`;
     const { tools, toolsContext } = createCattyToolsFromCatalog(
       {
         aiCapability: async () => ({
@@ -585,7 +587,7 @@ describe('capabilityTools terminal polling', () => {
           jobId: 'monitor-job-unique',
           command: 'tail -f /var/log/app.log',
           status: 'running',
-          output: `${'x'.repeat(800)}\n${'log line\n'.repeat(1_000)}`,
+          output: rawOutput,
           nextOffset: 9_000,
         }),
       },
@@ -594,14 +596,21 @@ describe('capabilityTools terminal polling', () => {
       'auto',
       undefined,
       'chat-monitor',
+      store,
     );
     const result = await withCattyToolContext(
       tools.terminal_poll,
       toolsContext.terminal_poll,
     ).execute({ jobId: 'monitor-job-unique', offset: 0 }) as { output: string };
 
-    assert.ok(result.output.length <= 3_000);
+    assert.ok(result.output.length < 3_500);
     assert.ok(result.output.split('\n')[0].length <= 500);
+    const handleId = result.output.match(/handleId=(tool-output-[^\]\s]+)/)?.[1];
+    assert.ok(handleId);
+    assert.match(
+      store.read({ handleId, mode: 'search', query: 'MONITOR_MIDDLE_EVIDENCE_7319' }, 'chat-monitor') ?? '',
+      /MONITOR_MIDDLE_EVIDENCE_7319/,
+    );
   });
 
   it('does not count empty monitor polls as output bursts', async () => {

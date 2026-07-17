@@ -15,7 +15,7 @@ interface MonitorState {
 }
 
 export type MonitorGuardResult =
-  | { action: 'deliver'; content: string; suppressedCount: number }
+  | { action: 'deliver'; content: string; suppressedCount: number; sourceTruncated: boolean }
   | { action: 'suppress'; suppressedCount: number }
   | { action: 'stop'; suppressedCount: number };
 
@@ -62,10 +62,12 @@ export class TerminalMonitorGuard {
     state.suppressedCount = 0;
     this.states.set(key, state);
     const prefix = suppressedCount > 0 ? `[${suppressedCount} monitor batches suppressed]\n` : '';
+    const fitted = fitMonitorBatch(`${prefix}${output}`);
     return {
       action: 'deliver',
-      content: fitMonitorBatch(`${prefix}${output}`),
+      content: fitted.content,
       suppressedCount,
+      sourceTruncated: fitted.sourceTruncated,
     };
   }
 
@@ -186,16 +188,21 @@ function canonicalOptionName(option: string): string {
   return optionName.startsWith('--') ? optionName.toLowerCase() : optionName;
 }
 
-function fitMonitorBatch(output: string): string {
+function fitMonitorBatch(output: string): { content: string; sourceTruncated: boolean } {
   const normalized = compressVerboseText(output);
+  let sourceTruncated = false;
   const lines = normalized.split('\n').map(line => {
     if (line.length <= MONITOR_LINE_MAX_CHARS) return line;
+    sourceTruncated = true;
     return `${line.slice(0, MONITOR_LINE_MAX_CHARS - 28)}[... line shortened ...]`;
   });
   const content = lines.join('\n');
-  if (content.length <= MONITOR_BATCH_MAX_CHARS) return content;
+  if (content.length <= MONITOR_BATCH_MAX_CHARS) return { content, sourceTruncated };
   const marker = '\n[... monitor batch shortened ...]';
-  return `${content.slice(0, MONITOR_BATCH_MAX_CHARS - marker.length)}${marker}`;
+  return {
+    content: `${content.slice(0, MONITOR_BATCH_MAX_CHARS - marker.length)}${marker}`,
+    sourceTruncated: true,
+  };
 }
 
 export const globalTerminalMonitorGuard = new TerminalMonitorGuard();
