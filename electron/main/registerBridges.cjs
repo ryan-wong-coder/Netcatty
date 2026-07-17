@@ -226,7 +226,7 @@ function createBridgeRegistrar(context) {
     onedriveAuthBridge.registerHandlers(ipcMain, electronModule);
     cloudSyncBridge.registerHandlers(ipcMain, electronModule);
     fileWatcherBridge.registerHandlers(ipcMain, { terminalWorkerManager });
-    tempDirBridge.registerHandlers(ipcMain, shell);
+    tempDirBridge.registerHandlers(ipcMain, shell, electronModule);
     sessionLogsBridge.registerHandlers(ipcMain, { terminalWorkerManager });
     compressUploadBridge.registerHandlers(ipcMain, { terminalWorkerManager });
     globalShortcutBridge.registerHandlers(ipcMain);

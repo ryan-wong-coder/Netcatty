@@ -22,6 +22,15 @@ function nextTurnId(): string {
   return `turn-${Date.now()}-${turnCounter}`;
 }
 
+function isFailedToolResult(result: string): boolean {
+  try {
+    const parsed = JSON.parse(result) as Record<string, unknown>;
+    return parsed?.ok === false || typeof parsed?.error === 'string';
+  } catch {
+    return false;
+  }
+}
+
 interface ActiveTurn {
   turnId: string;
   backend: AgentBackend;
@@ -65,6 +74,10 @@ export class AgentRuntime {
     this.sessionStateStore.clear(chatSessionId);
     globalTwoPassCompactionCache.clear(chatSessionId);
     globalTerminalMonitorGuard.clearPrefix(`${chatSessionId}:`);
+  }
+
+  clearTerminalSession(terminalSessionId: string): void {
+    this.toolOutputStore.pruneTerminalSessionEverywhere(terminalSessionId);
   }
 
   async waitForActiveTurn(chatSessionId: string): Promise<void> {
@@ -154,6 +167,7 @@ export class AgentRuntime {
         });
       }
       if (event.type === 'tool_result') {
+        const toolResultIsError = event.isError || isFailedToolResult(event.result);
         const meta = toolCallMeta.get(event.toolCallId);
         const toolName = event.toolName ?? meta?.toolName;
         if (toolName) {
@@ -162,14 +176,14 @@ export class AgentRuntime {
             toolName,
             meta?.args,
             event.result,
-            event.isError,
+            toolResultIsError,
           );
           if (
-            !event.isError
+            !toolResultIsError
             && (toolName === 'session_close' || toolName === 'session.close')
             && typeof meta?.args.sessionId === 'string'
           ) {
-            toolOutputStore.pruneTerminalSession(chatSessionId, meta.args.sessionId);
+            toolOutputStore.pruneTerminalSessionEverywhere(meta.args.sessionId);
           }
         }
       }

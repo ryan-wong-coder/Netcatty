@@ -20,10 +20,13 @@ import {
   pruneInactiveScopedTransientState,
 } from './aiScopeCleanup';
 import { emitAIStateChanged } from './aiStateEvents';
+import { getAgentRuntime } from '../../infrastructure/ai/harness/globalAgentRuntime';
 
 /** Typed accessor for the Electron IPC bridge exposed on `window.netcatty`. */
 export interface AIBridge {
   aiSdkAgentCleanup?: (chatSessionId: string) => Promise<{ ok: boolean }>;
+  deleteChatToolOutputsTemp?: (chatSessionId: string) => Promise<{ deletedCount: number }>;
+  deleteTerminalToolOutputsEverywhereTemp?: (terminalSessionId: string) => Promise<{ deletedCount: number }>;
   aiMcpSetPermissionMode?: (mode: AIPermissionMode) => Promise<unknown> | unknown;
   aiMcpSetToolIntegrationMode?: (mode: AIToolIntegrationMode) => Promise<unknown> | unknown;
   aiMcpSetCommandBlocklist?: (blocklist: string[]) => Promise<unknown> | unknown;
@@ -44,9 +47,27 @@ export type PanelViewByScope = Partial<Record<string, AIPanelView>>;
 
 export function cleanupSdkAgentSessions(sessionIds: string[]) {
   const bridge = getAIBridge();
-  if (!bridge?.aiSdkAgentCleanup || sessionIds.length === 0) return;
+  if (sessionIds.length === 0) return;
   for (const sessionId of sessionIds) {
-    void bridge.aiSdkAgentCleanup(sessionId).catch(() => {});
+    void bridge?.aiSdkAgentCleanup?.(sessionId).catch(() => {});
+  }
+}
+
+export function cleanupDeletedAIChatSessions(sessionIds: string[]) {
+  const bridge = getAIBridge();
+  if (sessionIds.length === 0) return;
+  for (const sessionId of sessionIds) {
+    getAgentRuntime().clearChatSession(sessionId);
+    void bridge?.aiSdkAgentCleanup?.(sessionId).catch(() => {});
+    void bridge?.deleteChatToolOutputsTemp?.(sessionId).catch(() => {});
+  }
+}
+
+export function cleanupClosedTerminalSessions(terminalSessionIds: string[]) {
+  const bridge = getAIBridge();
+  for (const terminalSessionId of new Set(terminalSessionIds)) {
+    getAgentRuntime().clearTerminalSession(terminalSessionId);
+    void bridge?.deleteTerminalToolOutputsEverywhereTemp?.(terminalSessionId).catch(() => {});
   }
 }
 

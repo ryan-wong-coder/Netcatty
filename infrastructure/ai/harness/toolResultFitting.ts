@@ -108,6 +108,7 @@ function fitString(value: string, ctx: FitValueContext): string {
     fieldPath: formatFieldPath(ctx.path),
     totalChars: value.length,
     handleId,
+    restartPersistenceAvailable: false,
   });
 }
 
@@ -128,8 +129,12 @@ function appendToolOutputHandleNotice(
     fieldPath: string;
     totalChars: number;
     handleId?: string;
+    restartPersistenceAvailable?: boolean;
   },
 ): string {
   const handleSuffix = details.handleId ? ` handleId=${details.handleId}` : '';
-  return `${fitted}\n\n[tool output handle: capability=${details.capabilityId} field=${details.fieldPath} chars=${details.totalChars} truncated for model context${handleSuffix}]`;
+  const restartSuffix = details.handleId && details.restartPersistenceAvailable === false
+    ? ' restartPersistence=unavailable (read before closing the app)'
+    : '';
+  return `${fitted}\n\n[tool output handle: capability=${details.capabilityId} field=${details.fieldPath} chars=${details.totalChars} truncated for model context${handleSuffix}${restartSuffix}]`;
 }

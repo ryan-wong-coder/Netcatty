@@ -72,6 +72,7 @@ test('terminal fitting keeps raw output in the local handle but redacts model-vi
 
   assert.doesNotMatch(fitted.stdout, /tok_live/);
   assert.doesNotMatch(fitted.command ?? '', /tok_live/);
+  assert.match(fitted.stdout, /restartPersistence=unavailable \(read before closing the app\)/);
   const handle = store.listPendingHandles('chat-1')[0];
   assert.match(handle.fullContent, /tok_live/);
 });

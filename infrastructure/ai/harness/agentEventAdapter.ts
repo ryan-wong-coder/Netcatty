@@ -93,15 +93,18 @@ export function mapSdkStreamEventToAgentEvents(
         args: (event.args ?? event.input ?? {}) as Record<string, unknown>,
       }];
     case 'tool-result':
+      {
+        const output = event.result ?? event.output ?? '';
       return [{
         ...base,
         id: nextEventId('tool-result'),
         type: 'tool_result',
         toolCallId: String(event.toolCallId ?? ''),
         toolName: typeof event.toolName === 'string' ? event.toolName : undefined,
-        result: String(event.result ?? event.output ?? ''),
-        isError: Boolean(event.isError),
+        result: typeof output === 'string' ? output : JSON.stringify(output),
+        isError: Boolean(event.isError) || isToolResultError(output),
       }];
+      }
     case 'file-change':
       return [{
         ...base,

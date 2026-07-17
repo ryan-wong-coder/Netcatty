@@ -1264,7 +1264,6 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
       }
 
       deleteSession(sessionId, scopeKey);
-      getAgentRuntime().clearChatSession(sessionId);
 
       if (deletingActiveSession || deletingLastScopedSession) {
         setShowHistory(false);

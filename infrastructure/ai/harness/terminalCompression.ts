@@ -20,6 +20,7 @@ export interface TerminalOutputHandle {
   totalStdoutChars: number;
   totalStderrChars: number;
   handleId?: string;
+  restartPersistenceAvailable?: boolean;
 }
 
 export interface FitTerminalExecuteResultOptions {
@@ -74,6 +75,7 @@ export function fitTerminalExecuteResultForModel(
       totalStdoutChars: result.stdout.length,
       totalStderrChars: result.stderr.length,
       handleId,
+      restartPersistenceAvailable: false,
     };
     fitted.stdout = appendOutputHandleNotice(stdout, handle, 'stdout');
     if (result.stderr) {
@@ -91,5 +93,8 @@ function appendOutputHandleNotice(
 ): string {
   const totalChars = stream === 'stdout' ? handle.totalStdoutChars : handle.totalStderrChars;
   const handleSuffix = handle.handleId ? ` handleId=${handle.handleId}` : '';
-  return `${truncated}\n\n[output handle: session=${handle.sessionId}${handle.command ? ` command=${handle.command}` : ''} ${stream}=${totalChars} chars truncated for model context${handleSuffix}]`;
+  const restartSuffix = handle.handleId && handle.restartPersistenceAvailable === false
+    ? ' restartPersistence=unavailable (read before closing the app)'
+    : '';
+  return `${truncated}\n\n[output handle: session=${handle.sessionId}${handle.command ? ` command=${handle.command}` : ''} ${stream}=${totalChars} chars truncated for model context${handleSuffix}${restartSuffix}]`;
 }

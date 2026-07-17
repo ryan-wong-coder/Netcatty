@@ -49,6 +49,7 @@ import {
 import { resolveRestorePreviousSessionSetting } from './sessionRestoreSettings';
 import type { CodingCliProviderId } from '../../domain/codingCliProviders';
 import { normalizeCodingCliDynamicTitleForStorage } from '../../domain/codingCliTitleParse';
+import { cleanupClosedTerminalSessions } from './aiStateSnapshots';
 
 export function addWorkspaceIfMissing(
   workspaces: Workspace[],
@@ -373,6 +374,9 @@ export const useSessionState = ({
   }, []);
 
   const closeWorkspace = useCallback((workspaceId: string) => {
+    cleanupClosedTerminalSessions(
+      sessionsRef.current.filter(session => session.workspaceId === workspaceId).map(session => session.id),
+    );
     setWorkspaces(prevWorkspaces => {
       const remainingWorkspaces = prevWorkspaces.filter(w => w.id !== workspaceId);
 
@@ -392,6 +396,7 @@ export const useSessionState = ({
   }, [setActiveTabId]);
 
   const closeSessions = useCallback((sessionIds: string[]) => {
+    cleanupClosedTerminalSessions(sessionIds);
     const result = closeSessionsState({
       sessions: sessionsRef.current,
       workspaces: workspacesRef.current,
