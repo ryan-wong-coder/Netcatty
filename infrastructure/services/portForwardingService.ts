@@ -1014,11 +1014,15 @@ export const stopPortForward = async (
         const error = result.errors?.filter(Boolean).join('; ') ||
           `Failed to stop ${result.failed} port forwarding tunnel(s)`;
         clearReconnectTimer(ruleId);
-        if (conn) {
-          conn.reconnectStartAuthorized = false;
-          conn.status = 'error';
-          conn.error = error;
-        }
+        const failedConnection = conn ?? {
+          ruleId,
+          tunnelId: `untracked-${ruleId}`,
+          status: 'error' as const,
+        };
+        failedConnection.reconnectStartAuthorized = false;
+        failedConnection.status = 'error';
+        failedConnection.error = error;
+        activeConnections.set(ruleId, failedConnection);
         onStatusChange('error', error);
         return { success: false, error };
       }
