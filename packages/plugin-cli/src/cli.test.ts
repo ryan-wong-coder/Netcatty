@@ -229,6 +229,30 @@ test("packer rejects symbolic links and undeclared executables", async (context)
   );
 });
 
+test("packer ignores root dev artifacts without dropping nested runtime dependencies", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "netcatty-plugin-runtime-deps-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const directory = await createPlugin(root);
+  await Promise.all([
+    mkdir(path.join(directory, "node_modules/dev-only"), { recursive: true }),
+    mkdir(path.join(directory, "dist/node_modules/runtime-dependency"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(path.join(directory, "node_modules/dev-only/index.js"), "dev only\n"),
+    writeFile(
+      path.join(directory, "dist/node_modules/runtime-dependency/index.js"),
+      "export const runtime = true;\n",
+    ),
+  ]);
+  const packagePath = path.join(root, "runtime-deps.ncpkg");
+
+  const build = await buildPluginPackage(directory, packagePath);
+  const validation = await validatePluginPackage(packagePath);
+
+  assert.equal(build.fileCount, 4);
+  assert.equal(validation.fileCount, 4);
+});
+
 test("manifest byte limit is enforced before JSON parsing", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "netcatty-plugin-limit-"));
   context.after(() => rm(root, { recursive: true, force: true }));

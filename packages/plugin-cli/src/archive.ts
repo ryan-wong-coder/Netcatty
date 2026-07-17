@@ -126,7 +126,12 @@ async function scanPackageDirectory(
     for await (const entry of await opendir(directory)) entries.push(entry);
     entries.sort((left, right) => Buffer.compare(Buffer.from(left.name), Buffer.from(right.name)));
     for (const entry of entries) {
-      if (IGNORED_ROOT_ENTRIES.has(entry.name) || entry.name.endsWith(".ncpkg")) continue;
+      if (
+        relativeDirectory === ""
+        && (IGNORED_ROOT_ENTRIES.has(entry.name) || entry.name.endsWith(".ncpkg"))
+      ) {
+        continue;
+      }
       const relativePath = relativeDirectory
         ? `${relativeDirectory}/${entry.name}`
         : entry.name;
