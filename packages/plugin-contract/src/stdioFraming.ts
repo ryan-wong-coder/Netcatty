@@ -10,11 +10,18 @@ export const COMPANION_STDIO_MAX_CONTENT_BYTES = 16 * 1024 * 1024;
 
 const HEADER_SEPARATOR = new Uint8Array([13, 10, 13, 10]);
 const ABSOLUTE_MAX_HEADER_BYTES = 64 * 1024;
+const BYTE_QUEUE_SLAB_BYTES = 64 * 1024;
 const encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
+interface ByteQueueChunk {
+  readonly bytes: Uint8Array;
+  length: number;
+}
+
 class ByteQueue {
-  readonly #chunks: Uint8Array[] = [];
+  readonly #chunks: ByteQueueChunk[] = [];
+  #headIndex = 0;
   #headOffset = 0;
   #byteLength = 0;
 
@@ -24,19 +31,37 @@ class ByteQueue {
 
   push(chunk: Uint8Array): void {
     if (chunk.byteLength === 0) return;
-    this.#chunks.push(chunk.slice());
-    this.#byteLength += chunk.byteLength;
+    let inputOffset = 0;
+    while (inputOffset < chunk.byteLength) {
+      let tail = this.#chunks.at(-1);
+      if (!tail || tail.length === tail.bytes.byteLength) {
+        const remaining = chunk.byteLength - inputOffset;
+        const capacity = remaining >= BYTE_QUEUE_SLAB_BYTES
+          ? remaining
+          : BYTE_QUEUE_SLAB_BYTES;
+        tail = { bytes: new Uint8Array(capacity), length: 0 };
+        this.#chunks.push(tail);
+      }
+      const take = Math.min(
+        tail.bytes.byteLength - tail.length,
+        chunk.byteLength - inputOffset,
+      );
+      tail.bytes.set(chunk.subarray(inputOffset, inputOffset + take), tail.length);
+      tail.length += take;
+      inputOffset += take;
+      this.#byteLength += take;
+    }
   }
 
   indexOf(needle: Uint8Array, limit: number): number {
     let matched = 0;
     let index = 0;
-    for (let chunkIndex = 0; chunkIndex < this.#chunks.length; chunkIndex += 1) {
+    for (let chunkIndex = this.#headIndex; chunkIndex < this.#chunks.length; chunkIndex += 1) {
       const chunk = this.#chunks[chunkIndex];
-      const start = chunkIndex === 0 ? this.#headOffset : 0;
-      for (let offset = start; offset < chunk.byteLength; offset += 1) {
+      const start = chunkIndex === this.#headIndex ? this.#headOffset : 0;
+      for (let offset = start; offset < chunk.length; offset += 1) {
         if (index >= limit) return -1;
-        const byte = chunk[offset];
+        const byte = chunk.bytes[offset];
         if (byte === needle[matched]) {
           matched += 1;
           if (matched === needle.byteLength) return index - needle.byteLength + 1;
@@ -57,18 +82,28 @@ class ByteQueue {
     let outputOffset = 0;
     let remaining = byteLength;
     while (remaining > 0) {
-      const head = this.#chunks[0];
-      const available = head.byteLength - this.#headOffset;
+      const head = this.#chunks[this.#headIndex];
+      const available = head.length - this.#headOffset;
       const take = Math.min(available, remaining);
-      output.set(head.subarray(this.#headOffset, this.#headOffset + take), outputOffset);
+      output.set(
+        head.bytes.subarray(this.#headOffset, this.#headOffset + take),
+        outputOffset,
+      );
       outputOffset += take;
       remaining -= take;
       this.#headOffset += take;
       this.#byteLength -= take;
-      if (this.#headOffset === head.byteLength) {
-        this.#chunks.shift();
+      if (this.#headOffset === head.length) {
+        this.#headIndex += 1;
         this.#headOffset = 0;
       }
+    }
+    if (this.#byteLength === 0) {
+      this.#chunks.length = 0;
+      this.#headIndex = 0;
+    } else if (this.#headIndex >= 1_024 && this.#headIndex * 2 >= this.#chunks.length) {
+      this.#chunks.splice(0, this.#headIndex);
+      this.#headIndex = 0;
     }
     return output;
   }

@@ -120,3 +120,44 @@ test("content-length framing accepts a split delimiter at the header byte limit"
     /header exceeds 32 bytes/,
   );
 });
+
+test("content-length framing stays linear under adversarial byte fragmentation", () => {
+  const message = { value: "x".repeat(100_000) };
+  const frame = encodeContentLengthFrame(message);
+  const decoder = new ContentLengthFrameDecoder();
+  const startedAt = performance.now();
+  let decoded: unknown[] = [];
+  for (let index = 0; index < frame.byteLength; index += 1) {
+    const messages = decoder.push(frame.subarray(index, index + 1));
+    if (messages.length > 0) decoded = messages;
+  }
+  const elapsedMs = performance.now() - startedAt;
+  assert.deepEqual(decoded, [message]);
+  assert.doesNotThrow(() => decoder.finish());
+  assert.ok(
+    elapsedMs < 3_000,
+    `byte-fragmented frame decoding took ${Math.round(elapsedMs)}ms`,
+  );
+});
+
+test("content-length framing coalesces fragmented headers without losing the body", () => {
+  const header = `Content-Length:${" ".repeat(2_000)}2\r\n\r\n`;
+  const bytes = new TextEncoder().encode(`${header}{}`);
+  const decoder = new ContentLengthFrameDecoder();
+  let decoded: unknown[] = [];
+  for (let index = 0; index < bytes.byteLength; index += 1) {
+    const messages = decoder.push(bytes.subarray(index, index + 1));
+    if (messages.length > 0) decoded = messages;
+  }
+  assert.deepEqual(decoded, [{}]);
+  assert.doesNotThrow(() => decoder.finish());
+});
+
+test("content-length framing snapshots Buffer input before returning", () => {
+  const decoder = new ContentLengthFrameDecoder();
+  const prefix = Buffer.from("Content-Length: 2\r\n\r\n{");
+  assert.deepEqual(decoder.push(prefix), []);
+  prefix.fill(0);
+  assert.deepEqual(decoder.push("}"), [{}]);
+  assert.doesNotThrow(() => decoder.finish());
+});

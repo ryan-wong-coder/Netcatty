@@ -133,6 +133,11 @@ JSON serialization reads validated own data properties directly and never
 executes inherited `toJSON()` hooks supplied through a hostile prototype.
 All RPC and stream JSON values use the same depth and node-count budgets so a
 validly framed peer cannot consume an unbounded call stack or validation loop.
+The stdio decoder also consumes fragmented byte queues by advancing an index
+rather than repeatedly shifting arrays. Small fragments are copied into bounded
+slabs, preventing both quadratic work and per-byte object retention when a peer
+delivers a large frame in very small chunks. Copying also prevents a caller from
+mutating queued Node.js `Buffer` storage after `push()` returns.
 
 ### Update substitution and rollback
 

@@ -248,7 +248,12 @@ non-finite value are also rejected before a decoded message is returned.
 Decoder options may lower but never raise the 16 MiB absolute content limit.
 `encodeContentLengthFrame()` and the incremental
 `ContentLengthFrameDecoder` implement this contract without shell or line-based
-parsing. `finish()` detects truncated frames when a process exits.
+parsing. The decoder uses an amortized queue instead of removing array heads,
+and coalesces small inputs into bounded slabs, so adversarial one-byte
+fragmentation remains linear without retaining one object per byte. Incoming
+Node.js `Buffer` data is copied before `push()` returns and cannot mutate a
+partially buffered frame later.
+`finish()` detects truncated frames when a process exits.
 
 JSON-RPC standard failures retain their standard integer codes. SDK
 `PluginError` values use stable implementation-defined codes in JSON-RPC's
