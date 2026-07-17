@@ -16,6 +16,58 @@ const waitFor = async (predicate, timeoutMs = 100) => {
   }
 };
 
+const withFakeOutputScheduler = (run) => {
+  const originalSetImmediate = global.setImmediate;
+  const originalClearImmediate = global.clearImmediate;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalDateNow = Date.now;
+  const immediates = [];
+  const timers = [];
+  let now = 0;
+
+  global.setImmediate = (callback) => {
+    const handle = { callback, cleared: false };
+    immediates.push(handle);
+    return handle;
+  };
+  global.clearImmediate = (handle) => {
+    if (handle) handle.cleared = true;
+  };
+  global.setTimeout = (callback, ms) => {
+    const handle = { callback, ms, dueAt: now + ms, cleared: false };
+    timers.push(handle);
+    return handle;
+  };
+  global.clearTimeout = (handle) => {
+    if (handle) handle.cleared = true;
+  };
+  Date.now = () => now;
+
+  try {
+    return run({
+      immediates,
+      timers,
+      setNow(value) { now = value; },
+      advance(ms) {
+        now += ms;
+        for (const timer of timers) {
+          if (!timer.cleared && timer.dueAt <= now) {
+            timer.cleared = true;
+            timer.callback();
+          }
+        }
+      },
+    });
+  } finally {
+    global.setImmediate = originalSetImmediate;
+    global.clearImmediate = originalClearImmediate;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    Date.now = originalDateNow;
+  }
+};
+
 test("coalesces data buffered within the same turn into a single send", async () => {
   const sends = [];
   const buffer = createPtyOutputBuffer((data) => sends.push(data));
@@ -43,6 +95,66 @@ test("flushes within a single event-loop turn (not on a fixed delay)", async () 
   await tick();
 
   assert.deepEqual(sends, ["x"]);
+});
+
+test("coalesces network-dribbled bursts after forwarding the first chunk immediately", () => {
+  const sends = [];
+  withFakeOutputScheduler(({ immediates, timers, setNow }) => {
+    const buffer = createPtyOutputBuffer((data) => sends.push(data));
+
+    buffer.bufferData("Reading database ... 1%");
+    immediates.shift().callback();
+    assert.deepEqual(sends, ["Reading database ... 1%"]);
+
+    setNow(1);
+    buffer.bufferData("\rReading database ... 2%");
+    setNow(2);
+    buffer.bufferData("\rReading database ... 3%");
+
+    assert.deepEqual(sends, ["Reading database ... 1%"]);
+    assert.equal(timers.length, 1);
+    assert.ok(timers[0].ms > 0 && timers[0].ms <= 4);
+
+    timers[0].callback();
+    assert.deepEqual(sends, [
+      "Reading database ... 1%",
+      "\rReading database ... 2%\rReading database ... 3%",
+    ]);
+
+    setNow(20);
+    buffer.bufferData("prompt after idle");
+    assert.equal(immediates.length, 1);
+    immediates.shift().callback();
+    assert.equal(sends.at(-1), "prompt after idle");
+  });
+});
+
+test("cuts IPC sends for a 1ms network-dribbled apt-style burst", () => {
+  let sends = 0;
+  let output = "";
+  withFakeOutputScheduler(({ immediates, advance }) => {
+    const buffer = createPtyOutputBuffer((data) => {
+      sends += 1;
+      output += data;
+    });
+    const chunks = Array.from({ length: 1031 }, (_, index) => (
+      index % 2 === 0
+        ? `\rReading database ... ${index % 101}%`
+        : `Preparing package-${index} for upgrade\n`
+    ));
+
+    for (const chunk of chunks) {
+      buffer.bufferData(chunk);
+      for (const immediate of immediates.splice(0)) {
+        if (!immediate.cleared) immediate.callback();
+      }
+      advance(1);
+    }
+    buffer.flush();
+
+    assert.equal(output, chunks.join(""));
+    assert.ok(sends <= 350, `expected at most 350 IPC sends, got ${sends}`);
+  });
 });
 
 test("paces size-cap flushes with a short flood delay", () => {
@@ -472,7 +584,7 @@ test("keeps batching after a flush", async () => {
   await tick();
 
   buffer.bufferData("second");
-  await tick();
+  await waitFor(() => sends.length === 2);
 
   assert.deepEqual(sends, ["first", "second"]);
 });
