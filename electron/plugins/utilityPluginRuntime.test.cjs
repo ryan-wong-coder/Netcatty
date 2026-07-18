@@ -97,3 +97,23 @@ test("utility runtime launches without a shell using a minimal environment", asy
   assert.equal(Object.hasOwn(forkOptions.env, "NODE_OPTIONS"), false);
   assert.equal(Object.hasOwn(forkOptions.env, "HOME"), false);
 });
+
+test("an already-aborted utility startup never forks a process", async () => {
+  let forks = 0;
+  const runtime = new UtilityPluginRuntime({
+    utilityProcess: { fork() { forks += 1; } },
+    plugin: {
+      id: "com.example.cancelled-utility",
+      manifest: { main: { node: "dist/index.js" } },
+    },
+    packageRoot: "/missing",
+    bootstrapPath: "/runtime/utilityRuntime.mjs",
+    moduleMappings: {},
+    handlers: {},
+    logger: { write() {} },
+  });
+  const controller = new AbortController();
+  controller.abort(new Error("cancelled"));
+  await assert.rejects(runtime.start({}, { signal: controller.signal }), /cancelled/);
+  assert.equal(forks, 0);
+});

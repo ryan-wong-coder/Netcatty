@@ -474,6 +474,10 @@ const registerBridges = createBridgeRegistrar({
  */
 async function createWindow() {
   const windowManager = getWindowManager();
+  windowManager.setAppContentWindowClosedHandler(createAppContentWindowClosedHandler({
+    app,
+    windowManager,
+  }));
   const win = await windowManager.createWindow(electronModule, {
     preload,
     devServerUrl: effectiveDevServerUrl,
@@ -482,10 +486,6 @@ async function createWindow() {
     isMac,
     electronDir,
     onRegisterBridge: registerBridges,
-    onAppContentWindowClosed: createAppContentWindowClosedHandler({
-      app,
-      windowManager,
-    }),
   });
   
   return win;

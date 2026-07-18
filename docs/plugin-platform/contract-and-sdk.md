@@ -198,6 +198,13 @@ safe integers. Peers that need a larger opaque identifier use the string form;
 this prevents distinct JSON numbers from collapsing onto one correlation key
 when Electron or Node parses them.
 
+One JSON-RPC control message is limited to 1 MiB. The generated
+`PLUGIN_RPC_MAX_JSON_BYTES` constant exposes that boundary; payloads above it
+must use the stream protocol. Stream frames use the separate generated
+`PLUGIN_STREAM_MAX_FRAME_JSON_BYTES` limit (24 MiB), which is large enough for
+one maximum-size base64 chunk without turning the control plane into an
+unbounded data channel.
+
 Stream control envelopes remain schema-valid JSON, but chunk data has three
 explicit encodings:
 
@@ -231,8 +238,8 @@ The initial receive window is 1 KiB through 16 MiB, and each
 `windowUpdate.creditBytes` grant is 1 byte through 16 MiB. The public
 MessagePort envelope helper enforces the same Schema-owned ranges before
 returning a frame. The generated runtime constants, including the stream ID,
-chunk, window, credit, safe-integer, and RPC error-code limits, are derived from
-the same Schema and checked for drift. `windowUpdate.creditBytes` grants an
+chunk, frame-byte, window, credit, safe-integer, RPC-byte, and error-code limits,
+are derived from the same Schema and checked for drift. `windowUpdate.creditBytes` grants an
 additional amount rather than replacing the window, so retries and duplicate
 control frames cannot be interpreted as an absolute reset. A stdio peer must
 never emit the `transfer` encoding because stdio has no structured-clone

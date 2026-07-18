@@ -11,8 +11,14 @@ const {
 
 test("main-process JSON boundary matches the public contract budgets", async () => {
   const contract = await import("@netcatty/plugin-contract");
+  const hostLimits = require("./constants.cjs");
   assert.equal(PLUGIN_JSON_MAX_DEPTH, contract.PLUGIN_JSON_MAX_DEPTH);
   assert.equal(PLUGIN_JSON_MAX_NODES, contract.PLUGIN_JSON_MAX_NODES);
+  assert.equal(hostLimits.PLUGIN_RPC_MAX_JSON_BYTES, contract.PLUGIN_RPC_MAX_JSON_BYTES);
+  assert.equal(
+    hostLimits.PLUGIN_STREAM_MAX_FRAME_JSON_BYTES,
+    contract.PLUGIN_STREAM_MAX_FRAME_JSON_BYTES,
+  );
 });
 
 test("main-process JSON boundary rejects deep, sparse, cyclic, and accessor values", () => {
@@ -28,4 +34,15 @@ test("main-process JSON boundary rejects deep, sparse, cyclic, and accessor valu
   const accessor = {};
   Object.defineProperty(accessor, "value", { get: () => 1, enumerable: true });
   assert.throws(() => assertPluginJsonValue(accessor), /data properties/);
+});
+
+test("main-process JSON boundary enforces an incremental UTF-8 byte budget", () => {
+  const value = { text: "你好\n\"", empty: [] };
+  const exactBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+  assert.deepEqual(assertPluginJsonValue(value, { maxBytes: exactBytes }), value);
+  assert.throws(
+    () => assertPluginJsonValue(value, { maxBytes: exactBytes - 1 }),
+    new RegExp(`exceeds ${exactBytes - 1} bytes`),
+  );
+  assert.throws(() => assertPluginJsonValue({}, { maxBytes: 0 }), /positive safe integer/);
 });

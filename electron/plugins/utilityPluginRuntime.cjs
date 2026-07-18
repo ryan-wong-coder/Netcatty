@@ -53,7 +53,10 @@ class UtilityPluginRuntime {
     this.packageRoot = options.packageRoot;
     this.bootstrapPath = options.bootstrapPath;
     this.moduleMappings = options.moduleMappings;
-    this.handlers = options.handlers;
+    this.requestHandlers = options.requestHandlers ?? options.handlers;
+    this.notificationHandlers = options.notificationHandlers ?? options.handlers;
+    this.onIncomingStream = options.onIncomingStream;
+    this.onProgress = options.onProgress;
     this.logger = options.logger;
     this.onExit = options.onExit ?? (() => {});
     this.onProtocolError = options.onProtocolError ?? (() => {});
@@ -62,12 +65,20 @@ class UtilityPluginRuntime {
     this.stopping = false;
   }
 
-  async start(runtimeConfig) {
+  #assertStarting(signal) {
+    signal?.throwIfAborted();
+    if (this.stopping) throw new Error("Plugin utility runtime startup was stopped");
+  }
+
+  async start(runtimeConfig, options = {}) {
+    const { signal } = options;
+    this.#assertStarting(signal);
     if (!this.utilityProcess?.fork) throw new Error("Electron utility plugin runtime is unavailable");
     const entryUrl = pathToFileURL(await resolveUtilityEntrypoint(
       this.packageRoot,
       this.plugin.manifest.main.node,
     )).href;
+    this.#assertStarting(signal);
     const config = { ...runtimeConfig, entryUrl, moduleMappings: this.moduleMappings };
     this.child = this.utilityProcess.fork(this.bootstrapPath, [], {
       cwd: this.packageRoot,
@@ -89,7 +100,10 @@ class UtilityPluginRuntime {
     this.router = new PluginRpcRouter({
       pluginId: this.plugin.id,
       send: (message) => this.child?.postMessage(message),
-      handlers: this.handlers,
+      requestHandlers: this.requestHandlers,
+      notificationHandlers: this.notificationHandlers,
+      onIncomingStream: this.onIncomingStream,
+      onProgress: this.onProgress,
       onProtocolError: (error) => {
         this.onProtocolError(error);
         this.#handleExit(error);
@@ -105,12 +119,15 @@ class UtilityPluginRuntime {
     const ready = waitForUtilityReady(this.child, PLUGIN_ACTIVATION_TIMEOUT_MS);
     this.child.postMessage({ type: "netcatty-plugin:bootstrap", config });
     await ready;
+    this.#assertStarting(signal);
     const initialized = await this.router.request("plugin.initialize", {
       netcattyVersion: config.netcattyVersion,
       apiVersion: config.apiVersion,
       supportedFeatures: config.supportedFeatures,
     }, { timeoutMs: PLUGIN_ACTIVATION_TIMEOUT_MS });
+    this.#assertStarting(signal);
     await this.router.request("plugin.activate", {}, { timeoutMs: PLUGIN_ACTIVATION_TIMEOUT_MS });
+    this.#assertStarting(signal);
     return initialized;
   }
 
@@ -120,9 +137,26 @@ class UtilityPluginRuntime {
     try {
       await this.router?.request("plugin.deactivate", {}, { timeoutMs: PLUGIN_DEACTIVATION_TIMEOUT_MS });
     } finally {
-      this.router?.close();
+      const router = this.router;
+      this.router = null;
+      router?.close();
       this.child?.kill();
     }
+  }
+
+  request(method, params, options) {
+    if (!this.router) return Promise.reject(new Error("Plugin utility runtime is not connected"));
+    return this.router.request(method, params, options);
+  }
+
+  notify(method, params) {
+    if (!this.router) throw new Error("Plugin utility runtime is not connected");
+    this.router.notify(method, params);
+  }
+
+  openStream(streamId, windowBytes) {
+    if (!this.router) return Promise.reject(new Error("Plugin utility runtime is not connected"));
+    return this.router.streams.openOutgoing(streamId, windowBytes);
   }
 
   #handleExit(error) {

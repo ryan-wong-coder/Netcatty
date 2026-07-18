@@ -172,7 +172,11 @@ function createMainWindowApi(ctx) {
         }
         if (registerAsAppContentWindow) {
           try {
-            onAppContentWindowClosed?.(win);
+            if (typeof notifyAppContentWindowClosed === "function") {
+              notifyAppContentWindowClosed(win);
+            } else {
+              onAppContentWindowClosed?.(win);
+            }
           } catch {
             // The application-level close fallback must not disrupt teardown.
           }

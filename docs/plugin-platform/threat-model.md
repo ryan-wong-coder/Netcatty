@@ -141,14 +141,21 @@ bounded pending work, bounded logs, and crash quarantine. Later permission and
 terminal phases add CPU/memory/rate quotas and interceptor circuit breakers. A
 failed plugin must not stop unrelated plugins or terminal sessions.
 
+RPC control JSON is capped at 1 MiB. Stream frames use a separate 24 MiB JSON
+budget only to carry a 16 MiB JSON/base64 chunk; transferred buffers are still
+validated against the 16 MiB chunk limit. This keeps large data on the
+credit-controlled path and prevents a single string from bypassing structural
+depth and node limits.
+
 Runtime decoders must apply exact schemas for reserved methods instead of
 accepting malformed reserved messages as generic RPC. Transferable stream data
 is brand-checked through the native `ArrayBuffer` internal slot; an object that
 only spoofs `Symbol.toStringTag` or `byteLength` is not a transferable buffer.
 JSON serialization reads validated own data properties directly and never
 executes inherited `toJSON()` hooks supplied through a hostile prototype.
-All RPC and stream JSON values use the same depth and node-count budgets so a
-validly framed peer cannot consume an unbounded call stack or validation loop.
+All RPC and stream JSON values use the same depth and node-count budgets, plus
+their surface-specific byte budgets, so a validly framed peer cannot consume an
+unbounded call stack, validation loop, or retained control-message allocation.
 The stdio decoder also consumes fragmented byte queues by advancing an index
 rather than repeatedly shifting arrays. Small fragments are copied into bounded
 slabs, preventing both quadratic work and per-byte object retention when a peer

@@ -36,6 +36,12 @@
         "maxSafeInteger": 9007199254740991
       }
     },
+    "RpcLimits": {
+      "description": "Host-enforced byte limit for one JSON-RPC control message. Larger payloads must use a stream.",
+      "const": {
+        "maxJsonBytes": 1048576
+      }
+    },
     "SafeUnsignedInteger": {
       "type": "integer",
       "minimum": 0,
@@ -51,6 +57,7 @@
       "const": {
         "maxStreamIdLength": 128,
         "maxChunkBytes": 16777216,
+        "maxFrameJsonBytes": 25165824,
         "minWindowBytes": 1024,
         "maxWindowBytes": 16777216,
         "maxCreditBytes": 16777216

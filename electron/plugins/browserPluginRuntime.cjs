@@ -49,7 +49,10 @@ class BrowserPluginRuntime {
     this.plugin = options.plugin;
     this.packageRoot = options.packageRoot;
     this.preloadPath = options.preloadPath;
-    this.handlers = options.handlers;
+    this.requestHandlers = options.requestHandlers ?? options.handlers;
+    this.notificationHandlers = options.notificationHandlers ?? options.handlers;
+    this.onIncomingStream = options.onIncomingStream;
+    this.onProgress = options.onProgress;
     this.logger = options.logger ?? { write() {} };
     this.onExit = options.onExit ?? (() => {});
     this.onProtocolError = options.onProtocolError ?? (() => {});
@@ -61,7 +64,14 @@ class BrowserPluginRuntime {
     this.stopping = false;
   }
 
-  async start(runtimeConfig) {
+  #assertStarting(signal) {
+    signal?.throwIfAborted();
+    if (this.stopping) throw new Error("Plugin browser runtime startup was stopped");
+  }
+
+  async start(runtimeConfig, options = {}) {
+    const { signal } = options;
+    this.#assertStarting(signal);
     const { BrowserWindow, MessageChannelMain, session } = this.electron;
     if (!BrowserWindow || !MessageChannelMain || !session?.fromPartition) {
       throw new Error("Electron browser plugin runtime is unavailable");
@@ -83,6 +93,7 @@ class BrowserPluginRuntime {
       proxyRules: "http=127.0.0.1:9;https=127.0.0.1:9;socks=127.0.0.1:9",
       proxyBypassRules: "<-loopback>",
     });
+    this.#assertStarting(signal);
     pluginSession.enableNetworkEmulation({ offline: true });
     pluginSession.on("will-download", (event) => event.preventDefault());
     pluginSession.setPermissionCheckHandler?.(() => false);
@@ -166,13 +177,16 @@ class BrowserPluginRuntime {
     this.router = new PluginRpcRouter({
       pluginId: this.plugin.id,
       send: (message) => port1.postMessage(message),
-      handlers: this.handlers,
+      requestHandlers: this.requestHandlers,
+      notificationHandlers: this.notificationHandlers,
+      onIncomingStream: this.onIncomingStream,
+      onProgress: this.onProgress,
       onProtocolError: (error) => {
         this.onProtocolError(error);
         this.#handleExit(error);
       },
     });
-    port1.on("message", (event) => this.router.accept(event.data));
+    port1.on("message", (event) => this.router?.accept(event.data));
     port1.on("close", () => this.#handleExit(new Error("Plugin message port closed")));
     port1.start();
     let resolvePreloadReady;
@@ -207,6 +221,7 @@ class BrowserPluginRuntime {
     } finally {
       clearTimeout(preloadTimer);
     }
+    this.#assertStarting(signal);
     contents.postMessage("netcatty-plugin:connect", null, [port2]);
     let connectionTimer;
     const connectionDeadline = new Promise((_, reject) => {
@@ -224,12 +239,15 @@ class BrowserPluginRuntime {
       clearTimeout(connectionTimer);
       contents.removeListener("ipc-message", onPreloadMessage);
     }
+    this.#assertStarting(signal);
     const initialized = await this.router.request("plugin.initialize", {
       netcattyVersion: config.netcattyVersion,
       apiVersion: config.apiVersion,
       supportedFeatures: config.supportedFeatures,
     }, { timeoutMs: PLUGIN_ACTIVATION_TIMEOUT_MS });
+    this.#assertStarting(signal);
     await this.router.request("plugin.activate", {}, { timeoutMs: PLUGIN_ACTIVATION_TIMEOUT_MS });
+    this.#assertStarting(signal);
     return initialized;
   }
 
@@ -241,12 +259,29 @@ class BrowserPluginRuntime {
         timeoutMs: PLUGIN_DEACTIVATION_TIMEOUT_MS,
       });
     } finally {
-      this.router?.close();
+      const router = this.router;
+      this.router = null;
+      router?.close();
       this.port?.close();
       this.registration?.dispose();
       this.sessionRegistration?.dispose();
       if (this.window && !this.window.isDestroyed()) this.window.destroy();
     }
+  }
+
+  request(method, params, options) {
+    if (!this.router) return Promise.reject(new Error("Plugin browser runtime is not connected"));
+    return this.router.request(method, params, options);
+  }
+
+  notify(method, params) {
+    if (!this.router) throw new Error("Plugin browser runtime is not connected");
+    this.router.notify(method, params);
+  }
+
+  openStream(streamId, windowBytes) {
+    if (!this.router) return Promise.reject(new Error("Plugin browser runtime is not connected"));
+    return this.router.streams.openOutgoing(streamId, windowBytes);
   }
 
   #handleExit(error) {

@@ -27,7 +27,7 @@ function manifest(id = "com.example.test", version = "1.0.0") {
   };
 }
 
-test("plugin database migrates atomically and rejects newer schemas", (context) => {
+test("plugin database initializes atomically and rejects newer schemas", (context) => {
   const database = createDatabase(context);
   assert.equal(database.db.prepare("PRAGMA user_version").get().user_version, SCHEMA_VERSION);
   assert.equal(database.db.prepare("PRAGMA foreign_keys").get().foreign_keys, 1);
@@ -40,6 +40,27 @@ test("plugin database migrates atomically and rejects newer schemas", (context) 
   newer.exec("PRAGMA user_version = 99");
   newer.close();
   assert.throws(() => new PluginDatabase(file), /newer than supported/);
+});
+
+test("initial schema scopes runtime and crash state to immutable plugin versions", (context) => {
+  const database = createDatabase(context);
+  assert.deepEqual(
+    database.db.prepare("PRAGMA table_info(plugin_crashes)").all().map(({ name }) => name),
+    ["plugin_id", "plugin_version", "crashed_at"],
+  );
+  assert.deepEqual(
+    database.db.prepare("PRAGMA table_info(plugin_runtime_state)").all().map(({ name }) => name),
+    [
+      "plugin_id",
+      "plugin_version",
+      "status",
+      "runtime_kind",
+      "last_error",
+      "quarantined_at",
+      "updated_at",
+    ],
+  );
+  database.close();
 });
 
 test("version activation and namespaced key/value writes are transactional", (context) => {
@@ -64,6 +85,18 @@ test("version activation and namespaced key/value writes are transactional", (co
   assert.deepEqual(database.listKeys(pluginManifest.id), ["count", "greeting"]);
   database.deleteValue(pluginManifest.id, "count");
   assert.equal(database.getValue(pluginManifest.id, "count"), undefined);
+  database.close();
+});
+
+test("database transactions reject async callbacks before committing", (context) => {
+  const database = createDatabase(context);
+  assert.throws(() => database.transaction(async () => {
+    database.db.prepare(`
+      INSERT INTO plugins(id, enabled, active_version, installed_at, updated_at)
+      VALUES ('com.example.async', 0, NULL, 1, 1)
+    `).run();
+  }), /must be synchronous/);
+  assert.equal(database.getActivePlugin("com.example.async"), null);
   database.close();
 });
 
@@ -111,17 +144,85 @@ test("three crashes inside five minutes quarantine until explicit recovery", (co
     packageRelativePath: "com.example.test/1.0.0/package",
   });
 
-  assert.deepEqual(database.recordCrash(pluginManifest.id, 300_000, 3), {
+  assert.deepEqual(database.recordCrash(pluginManifest.id, pluginManifest.version, 300_000, 3), {
     count: 1, quarantined: false, quarantinedAt: null,
   });
   now += 1_000;
-  assert.equal(database.recordCrash(pluginManifest.id, 300_000, 3).quarantined, false);
+  assert.equal(database.recordCrash(pluginManifest.id, pluginManifest.version, 300_000, 3).quarantined, false);
   now += 1_000;
-  assert.equal(database.recordCrash(pluginManifest.id, 300_000, 3).quarantined, true);
+  assert.equal(database.recordCrash(pluginManifest.id, pluginManifest.version, 300_000, 3).quarantined, true);
   assert.equal(database.getActivePlugin(pluginManifest.id).runtime.status, "quarantined");
 
   database.clearQuarantine(pluginManifest.id);
   assert.equal(database.getActivePlugin(pluginManifest.id).runtime.quarantinedAt, null);
   assert.equal(database.getActivePlugin(pluginManifest.id).runtime.status, "stopped");
+  database.close();
+});
+
+test("activating a new version resets runtime quarantine without forgiving the same version", (context) => {
+  const database = createDatabase(context);
+  const first = manifest();
+  database.installVersion({
+    pluginId: first.id,
+    version: first.version,
+    manifest: first,
+    archiveSha256: "a".repeat(64),
+    packageRelativePath: `${first.id}/${first.version}/package`,
+  }, { enable: true });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    database.recordCrash(first.id, first.version, 300_000, 3);
+  }
+  assert.equal(database.getActivePlugin(first.id).runtime.status, "quarantined");
+
+  database.installVersion({
+    pluginId: first.id,
+    version: first.version,
+    manifest: first,
+    archiveSha256: "a".repeat(64),
+    packageRelativePath: `${first.id}/${first.version}/package`,
+  });
+  assert.equal(database.getActivePlugin(first.id).runtime.status, "quarantined");
+
+  const second = manifest(first.id, "2.0.0");
+  database.installVersion({
+    pluginId: second.id,
+    version: second.version,
+    manifest: second,
+    archiveSha256: "b".repeat(64),
+    packageRelativePath: `${second.id}/${second.version}/package`,
+  });
+  const active = database.getActivePlugin(first.id);
+  assert.equal(active.activeVersion, "2.0.0");
+  assert.equal(active.runtime.status, "stopped");
+  assert.equal(active.runtime.lastError, null);
+  assert.equal(active.runtime.quarantinedAt, null);
+  assert.deepEqual(database.recordCrash(second.id, second.version, 300_000, 3), {
+    count: 1,
+    quarantined: false,
+    quarantinedAt: null,
+  });
+  assert.deepEqual(database.recordCrash(first.id, first.version, 300_000, 3), {
+    count: 4,
+    quarantined: true,
+    quarantinedAt: 1_000,
+  });
+  database.clearQuarantine(second.id);
+  assert.equal(Number(database.db.prepare(`
+    SELECT COUNT(*) AS count FROM plugin_crashes
+    WHERE plugin_id = ? AND plugin_version = ?
+  `).get(first.id, first.version).count), 4);
+  assert.equal(Number(database.db.prepare(`
+    SELECT COUNT(*) AS count FROM plugin_crashes
+    WHERE plugin_id = ? AND plugin_version = ?
+  `).get(second.id, second.version).count), 0);
+  database.installVersion({
+    pluginId: first.id,
+    version: first.version,
+    manifest: first,
+    archiveSha256: "a".repeat(64),
+    packageRelativePath: `${first.id}/${first.version}/package`,
+  });
+  assert.equal(database.getActivePlugin(first.id).runtime.status, "quarantined");
+  assert.equal(database.getActivePlugin(first.id).runtime.quarantinedAt, 1_000);
   database.close();
 });

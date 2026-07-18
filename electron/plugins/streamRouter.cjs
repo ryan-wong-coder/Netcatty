@@ -50,6 +50,7 @@ class PluginStreamRouter {
     assertStreamEnvelopeShape(rawEnvelope);
     assertStreamFrameSchema(rawEnvelope.frame);
     const contract = await loadContractRuntime();
+    if (this.closed) throw new Error("Plugin stream router is closed");
     const envelope = contract.createMessagePortStreamEnvelope(
       rawEnvelope.frame,
       getTransferredBuffer(rawEnvelope),
@@ -71,12 +72,20 @@ class PluginStreamRouter {
         closed: false,
       };
       this.incoming.set(frame.streamId, state);
-      const accepted = await this.onIncomingStream({
-        streamId: frame.streamId,
-        windowBytes: frame.windowBytes,
-        cancel: () => this.#cancelIncoming(state),
-      });
-      if (accepted === false) await this.#cancelIncoming(state);
+      let accepted;
+      try {
+        accepted = await this.onIncomingStream({
+          streamId: frame.streamId,
+          windowBytes: frame.windowBytes,
+          bind: (handlers) => this.bindIncoming(frame.streamId, handlers),
+          cancel: () => this.#cancelIncoming(state),
+        });
+      } catch (error) {
+        state.closed = true;
+        this.incoming.delete(frame.streamId);
+        throw error;
+      }
+      if (accepted !== true) await this.#cancelIncoming(state);
       return;
     }
     if (frame.kind === "windowUpdate") {
@@ -128,26 +137,45 @@ class PluginStreamRouter {
         released = true;
         state.availableBytes += creditBytes;
         state.updateSequence += 1;
-        this.send({
-          frame: {
-            streamId: state.streamId,
-            sequence: state.updateSequence,
-            kind: "windowUpdate",
-            creditBytes,
-          },
-        });
+        try {
+          this.send({
+            frame: {
+              streamId: state.streamId,
+              sequence: state.updateSequence,
+              kind: "windowUpdate",
+              creditBytes,
+            },
+          });
+        } catch (error) {
+          state.closed = true;
+          this.incoming.delete(state.streamId);
+          try {
+            const closing = state.onClose?.(error);
+            if (closing && typeof closing.then === "function") void closing.catch(() => {});
+          } catch {}
+          throw error;
+        }
       };
       await listener(materialized, release);
       return;
     }
     state.closed = true;
     this.incoming.delete(frame.streamId);
-    state.onClose?.(frame.kind === "error" ? frame.error : frame.kind);
+    await state.onClose?.(frame.kind === "error" ? frame.error : frame.kind);
   }
 
   bindIncoming(streamId, handlers) {
     const state = this.incoming.get(streamId);
     if (!state || state.closed) throw new Error(`Unknown incoming plugin stream: ${streamId}`);
+    if (!handlers || typeof handlers !== "object" || Array.isArray(handlers)) {
+      throw new TypeError("Plugin incoming stream handlers must be an object");
+    }
+    if (typeof handlers.onChunk !== "function") {
+      throw new TypeError("Plugin incoming stream onChunk handler is required");
+    }
+    if (handlers.onClose != null && typeof handlers.onClose !== "function") {
+      throw new TypeError("Plugin incoming stream onClose handler must be a function");
+    }
     state.onChunk = handlers.onChunk;
     state.onClose = handlers.onClose;
   }
@@ -162,6 +190,14 @@ class PluginStreamRouter {
       throw new Error(`Plugin stream cannot be opened: ${streamId}`);
     }
     const contract = await loadContractRuntime();
+    if (
+      this.closed
+      || this.outgoing.has(streamId)
+      || this.incoming.has(streamId)
+      || this.incoming.size + this.outgoing.size >= this.maxStreams
+    ) {
+      throw new Error(`Plugin stream cannot be opened: ${streamId}`);
+    }
     const envelope = contract.createMessagePortStreamEnvelope({
       streamId,
       sequence: 0,
@@ -180,7 +216,13 @@ class PluginStreamRouter {
       closed: false,
     };
     this.outgoing.set(streamId, state);
-    this.send(envelope);
+    try {
+      this.send(envelope);
+    } catch (error) {
+      state.closed = true;
+      this.outgoing.delete(streamId);
+      throw error;
+    }
     return {
       write: (data) => this.#queueOutgoing(state, data),
       end: () => this.#endOutgoing(state),
@@ -191,11 +233,17 @@ class PluginStreamRouter {
   async #queueOutgoing(state, data) {
     if (state.closed) throw new Error(`Plugin stream is closed: ${state.streamId}`);
     const contract = await loadContractRuntime();
+    if (this.closed || state.closed || this.outgoing.get(state.streamId) !== state) {
+      throw new Error(`Plugin stream is closed: ${state.streamId}`);
+    }
     let chunk;
     if (data instanceof Uint8Array) {
       const copy = new Uint8Array(data.byteLength);
       copy.set(data);
       const buffer = copy.buffer;
+      if (buffer.byteLength > contract.PLUGIN_STREAM_MAX_CHUNK_BYTES) {
+        throw new Error(`Plugin stream chunk exceeds ${contract.PLUGIN_STREAM_MAX_CHUNK_BYTES} bytes`);
+      }
       chunk = { encoding: "transfer", byteLength: buffer.byteLength, transfer: buffer };
     } else {
       chunk = { ...contract.createJsonStreamChunk(data), transfer: undefined };
@@ -226,23 +274,43 @@ class PluginStreamRouter {
           : pending.chunk,
       };
       state.nextSequence += 1;
-      const envelope = state.contract.createMessagePortStreamEnvelope(frame, pending.chunk.transfer);
-      this.send(envelope, pending.chunk.transfer ? [pending.chunk.transfer] : []);
-      pending.resolve();
+      try {
+        const envelope = state.contract.createMessagePortStreamEnvelope(frame, pending.chunk.transfer);
+        this.send(envelope, pending.chunk.transfer ? [pending.chunk.transfer] : []);
+        pending.resolve();
+      } catch (error) {
+        pending.reject(error);
+        this.#failOutgoing(state, error);
+        throw error;
+      }
     }
+  }
+
+  #failOutgoing(state, error) {
+    if (state.closed) return;
+    state.closed = true;
+    this.outgoing.delete(state.streamId);
+    for (const pending of state.queue) pending.reject(error);
+    state.queue.length = 0;
+    state.queuedBytes = 0;
   }
 
   #finishOutgoing(state, kind) {
     if (state.closed) return;
     state.closed = true;
     this.outgoing.delete(state.streamId);
-    this.send(state.contract.createMessagePortStreamEnvelope({
-      streamId: state.streamId,
-      sequence: state.nextSequence,
-      kind,
-    }));
-    for (const pending of state.queue) pending.reject(new Error(`Plugin stream ${kind}`));
-    state.queue.length = 0;
+    const error = new Error(`Plugin stream ${kind}`);
+    try {
+      this.send(state.contract.createMessagePortStreamEnvelope({
+        streamId: state.streamId,
+        sequence: state.nextSequence,
+        kind,
+      }));
+    } finally {
+      for (const pending of state.queue) pending.reject(error);
+      state.queue.length = 0;
+      state.queuedBytes = 0;
+    }
   }
 
   #endOutgoing(state) {
@@ -270,6 +338,13 @@ class PluginStreamRouter {
       for (const pending of state.queue) pending.reject(error);
     }
     this.outgoing.clear();
+    for (const state of this.incoming.values()) {
+      state.closed = true;
+      try {
+        const closing = state.onClose?.(error);
+        if (closing && typeof closing.then === "function") void closing.catch(() => {});
+      } catch {}
+    }
     this.incoming.clear();
   }
 }

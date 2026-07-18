@@ -21,17 +21,22 @@ these steps:
    validator, including ZIP metadata, local/central header agreement, path
    aliases, size limits, CRC, manifest semantics, referenced resources, and
    companion digests;
-4. write installation identity and archive digest metadata, sync the staged
-   files, and rename the complete version directory into
-   `packages/<pluginId>/<version>/`;
-5. switch the active version in one SQLite transaction.
+4. write installation identity and archive digest metadata and sync the staged
+   files;
+5. when replacing an enabled version, persist a temporary disabled state and
+   stop the old runtime before publishing any replacement;
+6. rename the complete version directory into
+   `packages/<pluginId>/<version>/` and switch the active version in one SQLite
+   transaction.
 
-The file rename occurs before the database transaction. If the process exits
-between them, startup recovery validates the committed directory and imports it
-as a disabled version, even when an older version of that plugin was enabled.
-Files left under `staging/` were never published and are removed. A database
-row whose active package is missing or invalid is disabled and reported as an
-error instead of being executed.
+The file rename occurs before the database transaction. A normal database
+failure removes the just-published directory and restores the previous runtime.
+If the process exits between the durable rename and the transaction, startup
+recovery validates the committed directory and imports it as a disabled
+version, even when an older version of that plugin was enabled. Files left
+under `staging/` were never published and are removed. A database row whose
+active package is missing or invalid is disabled and reported as an error
+instead of being executed.
 
 Uninstall uses the inverse two-phase move. The plugin directory first moves
 under a marked `staging/remove-*` transaction and the database row is deleted
@@ -49,16 +54,33 @@ digest is rejected; version substitution must use a new version.
 
 Install, enable/disable, restart and uninstall mutations share one manager
 queue. A second renderer request cannot race an active-version switch or start
-two runtimes for one plugin. Replacing an enabled version stops the old runtime
-before activating the newly committed version. Activation failure preserves the
-installed package for diagnosis but leaves it disabled.
+two runtimes for one plugin. Replacing an enabled version first persists a
+temporary disabled state and fully stops the old runtime, then switches the
+active-version pointer and restores the requested enabled state in the same
+database transaction. Lazy activation cannot recreate the old runtime between
+those steps. A failure before the pointer switch restores the prior enabled
+runtime; activation failure after the switch preserves the installed package
+for diagnosis but leaves it disabled.
 
 ## Database ownership
 
 `plugins.sqlite` uses WAL, foreign keys, `synchronous=FULL`, explicit schema
 versions, and immediate transactions. It records installed versions, the active
-version, enabled state, runtime state, crash history, and namespaced JSON key /
-value storage. Newer unknown database schemas fail closed.
+version, enabled state, runtime state, version-scoped crash history, and
+namespaced JSON key/value storage. Newer unknown database schemas fail closed.
+The plugin host has not shipped to users, so phase 2 defines one complete
+initial schema at version 1 and has no migration chain. Pre-release phases may
+still revise that initial schema (or reset development-only databases); schema
+migrations begin only after a released build can have durable user data.
+Because the host uses the synchronous `node:sqlite` API, transaction callbacks
+must also be synchronous; returning a Promise aborts and rolls back instead of
+committing an operation whose later failure could no longer be contained.
+Crash counters and runtime state never cross a version boundary. A genuinely
+new version starts with clean state, reinstalling the same version does not
+bypass quarantine, and selecting a retained version restores that version's
+prior error/quarantine state.
+Explicit recovery clears only the active version's counter and preserves other
+retained versions' failure history.
 
 Permission grants, encrypted settings and secrets are deliberately absent from
 this phase. Those tables and brokers are introduced with the permission engine
@@ -122,26 +144,42 @@ behind the local development gate.
 ## RPC and streams
 
 Both runtimes use the phase-1 JSON-RPC contract over one MessagePort. Every
-incoming envelope passes the same depth/node JSON budget and the committed
-JSON Schema before correlation or dispatch. Reserved initialize, cancellation,
-progress and stream messages cannot fall through as generic methods.
+incoming envelope passes the depth/node budget, a schema-owned byte budget, and
+the committed JSON Schema before correlation or dispatch. Control messages are
+limited to 1 MiB; larger payloads use a stream. Stream frames have their own
+24 MiB JSON budget so a maximum 16 MiB base64 chunk remains representable.
+Reserved initialize, cancellation, progress and stream messages cannot fall
+through as generic methods.
 
 The router provides:
 
 - safe integer/string request correlation;
 - a bounded pending and in-flight request count;
 - request deadlines and `$/cancelRequest` propagation;
+- identity-scoped `$/progress` events for later command and Provider registries;
 - host-assigned plugin identity on every handler call;
 - immediate method-not-supported responses;
 - method-specific validation of `plugin.initialize` results;
-- rejection of unknown response IDs and malformed peers.
+- one bounded tombstone for a timed-out/cancelled request, allowing exactly one
+  late response without confusing it with a reused request ID;
+- rejection of genuinely unknown or duplicate response IDs and malformed peers.
 
 Stream frames use stable sequence numbers and byte credit. A sender stops when
 credit reaches zero. Received credit is returned only after the consumer
 releases the materialized chunk. Pending outbound bytes cannot exceed the
 negotiated window, duplicate or out-of-order credit updates fail the peer, and
 gaps in a direction's sequence fail just like duplicates. Unhandled streams are
-cancelled immediately.
+cancelled immediately. Router shutdown invalidates retained release callbacks,
+and any transport send failure closes the affected stream. Outgoing failure
+rejects all pending writes; failure while returning receive credit removes the
+incoming stream before notifying its owner, so peers cannot continue with
+different window accounting.
+
+The host-side composition and downstream dependency rules are documented in
+[`runtime-extension-boundaries.md`](./runtime-extension-boundaries.md). In
+particular, permissions and later Provider registries attach through one RPC
+middleware/handler registry, while host calls use the supervisor rather than
+reaching into runtime routers.
 
 ## Lifecycle and failure containment
 
@@ -149,12 +187,20 @@ The host performs compatibility and feature negotiation before activation,
 then uses `plugin.initialize` and `plugin.activate`. Activation has a five-second
 deadline. Normal stop requests `plugin.deactivate` with a two-second deadline
 and then closes the port and process/window even if plugin cleanup hangs.
+Placement and runtime startup share one cancellation signal. Each browser or
+utility resource-creation boundary rechecks it, so a stopped activation cannot
+resume later and create a hidden window or process.
 
 Unexpected renderer loss, utility-process exit, closed control ports and
 protocol violations reject all pending work for only that plugin. Three failures
 inside five minutes quarantine the plugin. Quarantine survives restart and is
-cleared only by an explicit restart action. One plugin's state, process and
-pending requests are never shared with another plugin.
+cleared only by an explicit restart or re-enable action. One plugin's state,
+process and pending requests are never shared with another plugin.
+
+Plugin-host construction and recovery remain behind the development gate. A
+damaged plugin database or missing host resource disables that subsystem and
+leaves the rest of Netcatty running; an optional plugin host failure must not
+become an application startup failure.
 
 Runtime logs are per-plugin, bounded and rotated. Structured fields whose names
 look like credentials, passwords, tokens, secrets or private keys are redacted.

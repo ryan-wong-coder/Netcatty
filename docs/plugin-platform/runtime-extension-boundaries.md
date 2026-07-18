@@ -1,0 +1,218 @@
+# Plugin runtime extension boundaries
+
+Status: phase 2 internal architecture review
+
+This document records the host-runtime decisions that later plugin-platform
+phases are allowed to depend on. The goal is to keep permission, contribution,
+terminal, connection, synchronization, and distribution work out of the
+runtime lifecycle core while still giving those phases stable internal seams.
+
+These are host-internal APIs, not the public plugin API. The public contract
+remains `0.1.0-internal` until the phase-9 API 1.0 freeze.
+
+## Runtime identity is the authority root
+
+Every activation receives a new host-generated runtime ID. The identity used by
+host handlers contains the plugin ID, active version, runtime kind, package
+root, manifest, and logger. It is captured when the runtime starts and cannot be
+supplied or replaced by plugin messages.
+
+The RPC registry adds this identity to every request, notification, middleware
+call, and incoming stream. A later permission decision can therefore bind a
+grant to all of the following without trusting payload fields:
+
+- plugin ID and version;
+- one activation (`runtimeId`) for once/session grants;
+- browser or advanced utility placement;
+- declared manifest permissions and resources;
+- the request cancellation and deadline context.
+
+Host-to-plugin calls also verify that the recorded activation still matches the
+database's enabled active version. An update cannot accidentally deliver a
+command or Provider request to the old version after the active-version pointer
+has moved.
+
+Placement resolution and activation repeat that version check after every
+asynchronous policy or startup boundary. A late crash or startup failure from
+an old version is emitted for cleanup and diagnostics but cannot increment the
+replacement version's crash counter, quarantine it, or overwrite its runtime
+state. If the old immutable version is still installed, the event updates that
+version's own runtime and crash state so a later rollback cannot mistake it for
+a clean or still-running release.
+
+## One capability registry, two message classes
+
+`PluginHostRpcRegistry` is the composition point for plugin-to-host authority.
+It deliberately distinguishes request handlers from notification handlers.
+Storage mutations cannot be invoked as fire-and-forget notifications, and the
+logging notification cannot be converted into a request with a meaningful
+result. Reserved lifecycle and transport methods cannot be registered as
+capabilities.
+
+Registrations have unique method ownership and may carry immutable metadata.
+Each registration may also provide a synchronous, side-effect-free parameter
+validator. It runs before middleware, so resource extraction, permission
+decisions, quotas, and audit records always consume the method's normalized
+parameter shape instead of attacker-controlled raw input. Middleware then runs
+immediately before the final handler with the host identity, method, validated
+parameters, metadata, cancellation signal, request ID, and deadline.
+Phase 3 installs permission, quota, audit, and fail-closed UI mediation here,
+at the final privileged boundary rather than in renderer components.
+Handler metadata is recursively copied and frozen when registered. Runtime
+identity is checked before middleware, again after any asynchronous middleware
+(such as an approval prompt), and once more before a result leaves the route.
+An old activation therefore cannot resume a privileged handler after an update,
+disable, quarantine, or stop transition.
+
+Asynchronous handlers also receive `context.assertActive()`. A handler that
+prepares I/O and then commits a mutation must call it immediately before the
+commit and honor `context.signal` while waiting. The guard checks both the
+host-owned activation identity and the request cancellation signal, so a
+timed-out approval or Provider operation cannot commit merely because the same
+plugin version remains active. Cancellation cannot undo a side effect already
+issued to an external service, so this commit guard is part of the
+capability-handler contract.
+
+A running activation uses a route snapshot. Registering a new host subsystem
+does not mutate a live plugin's authority invisibly; it applies on the next
+activation. This is important when a new Netcatty build adds a capability or a
+grant changes the available surface.
+
+## Bidirectional invocation and validation
+
+`RuntimeSupervisor.request()`, `notify()`, and `openStream()` are the only
+general host-to-plugin entrypoints. Browser and utility runtimes implement the
+same methods over their private router. Later registries do not reach into a
+runtime window, utility process, MessagePort, or router.
+
+Outgoing requests accept a method-specific result validator. Command and
+Provider adapters must validate their exact public result schema before using
+plugin data. The generic JSON boundary remains the first structural limit, not
+a substitute for operation-level validation.
+
+Control-plane JSON is limited to 1 MiB. Large command results, importer data,
+sync objects, terminal snapshots, and connection traffic must use the bounded
+stream transport rather than raising this limit. A cancelled request ID remains
+temporarily retired until one possible late response is discarded, so a slow
+provider cannot accidentally answer a newer request after ID wraparound.
+
+Lifecycle methods and `$/` transport methods are excluded from the general
+entrypoints. Only the supervisor may initialize, activate, deactivate, cancel,
+or account for a runtime.
+
+## Stream ownership and the terminal fast path
+
+Incoming stream handlers are registered centrally and receive a bind function
+for the matched stream plus the same runtime identity. The first handler that
+recognizes a pre-authorized stream ID owns it; unknown streams are cancelled.
+Handlers registered after activation require a restart, matching RPC route
+snapshot semantics.
+
+General RPC streams remain bounded control/data channels for importers, sync,
+connection Providers, and non-hot terminal results. Phase 6 still creates its
+planned direct terminal-worker-to-utility-process `MessagePort`; it must not put
+the 4 ms interceptor budget through this general JSON-RPC path.
+
+Every outbound write either reaches the transport or rejects. Port failure,
+router close, peer cancellation, and local cancellation settle all queued
+writes and invalidate retained receive-credit callbacks. If returning receive
+credit itself fails, the incoming stream is removed and its owner is notified
+before the error escapes. Normal end/error frames await the owner's asynchronous
+close handler; forced synchronous router shutdown contains a rejected cleanup
+promise so it cannot become an unhandled process rejection. Later provider code
+must still release consumed chunks promptly and must not retain a release
+callback as an application-level acknowledgement.
+
+## Placement, lifecycle, and packaged modules
+
+Runtime placement is selected through an injectable resolver. The default
+continues to prefer the sandboxed browser entrypoint. Phase 3 can require an
+advanced-runtime grant, and phase 9 can add trust attestation, without changing
+activation, crash, or shutdown ownership.
+
+The resolver receives an abort signal. Stop, disable, uninstall, and application
+shutdown cancel both a pending placement decision and an activation already in
+progress. Cancellation does not count as a plugin crash. A permission prompt
+introduced in phase 3 must honor this signal, so shutdown never waits for a
+renderer decision and no runtime can appear after the supervisor has closed.
+Browser and utility runtimes recheck the same signal after every asynchronous
+resource-creation boundary; cancelling only the outer supervisor promise is not
+sufficient.
+Start and stop also share a per-plugin transition gate. A lazy activation waits
+for the previous process to finish stopping, while disable/uninstall persist the
+disabled state before teardown. Later activation events therefore cannot race a
+management operation and recreate a runtime that the user just disabled.
+
+Runtime state listeners receive starting, running, stopped, error, and
+quarantined transitions with the stable activation identity. Permission scopes,
+commands, views, and Provider registries can release their state on one common
+stop boundary. Listener failures cannot break plugin shutdown.
+
+Progress notifications have a separate supervisor event. Each event carries
+the host-assigned activation identity together with the schema-validated token
+and an immutable progress value, so simultaneous Providers from different
+plugins or plugin versions cannot collide on a token alone.
+
+Browser import maps and utility-process loader mappings are generated from one
+reviewed host-module resource list. Adding `@netcatty/plugin-ui` or another
+host-owned SDK package does not expand arbitrary filesystem access or require a
+new protocol route. Plugin packages still cannot add mappings themselves.
+
+## Downstream phase matrix
+
+| Phase | Depends on phase-2 seam | Work intentionally left to that phase |
+| --- | --- | --- |
+| PR 3 permissions | RPC middleware, immutable runtime identity, placement resolver, runtime stop events | grants, resource canonicalization, secrets, credentials, companions, quotas |
+| PR 4 contributions | host-to-plugin request/notify, runtime events, host module resources | activation-event policy, command/settings/view registries, UI SDK |
+| PR 5 terminal Providers | validated host requests, cancellation, lifecycle events | Provider ranking, deadlines, snapshots, built-in migrations |
+| PR 6 terminal pipeline | runtime identity and placement policy | direct MessagePort fast path, sensitive-input bypass, circuit breaker |
+| PR 7 connection/auth/import | requests, validated results, streams, crash containment | profiles, challenges, SecretLease, importer transactions |
+| PR 8 sync | streams, lifecycle identity, namespaced storage boundary | dynamic providers, encrypted sidecar, CRDT state and account baselines |
+| PR 9 distribution | retained immutable versions, placement resolver, module resources | signatures, trust, health checks, activation rollback, API 1.0 |
+
+## Data-model decisions that must remain explicit
+
+The phase-2 database retains every installed immutable version, so phase 9 can
+add an audited active-version switch and rollback without changing package
+layout. It does not implement that policy early.
+
+Crash history is keyed by plugin and version. Changing the active version
+starts with clean runtime state, while reinstalling identical version bytes
+does not clear quarantine. Phase 9 can therefore assess and roll back one bad
+release without inheriting or erasing another version's failure history.
+
+Package publication exposes one internal `beforeActivate` commit boundary.
+The manager uses it to disable and stop an enabled old activation before the
+database pointer changes, and restores that activation if preparation fails.
+Phase 9 health checks and rollback must preserve this ordering instead of
+writing the active-version pointer directly.
+
+`plugin_kv` is runtime-owned local data and is removed by explicit uninstall.
+Future user settings, connection profiles, encrypted secrets, grants, and CRDT
+sidecar baselines are different ownership classes. Their tables must not use
+the phase-2 `plugin_kv` cascade when the product requirement says missing plugin
+code must preserve user or synchronized data.
+
+Activation events are declared by the public manifest, but phase 2 starts
+enabled plugins eagerly only behind the development gate. Phase 4 owns the
+switch to `onStartupFinished`, `onCommand`, `onView`, and `onProvider` lazy
+activation. It uses the existing `start()` and state-listener boundary rather
+than replacing process supervision.
+
+## Review checklist for changes to this boundary
+
+Before a later phase changes the supervisor or transport, verify:
+
+1. Can the behavior be expressed as a registry handler, middleware, placement
+   resolver, state listener, validated request, or stream owner instead?
+2. Does every privileged operation retain the host-generated runtime identity?
+3. Can a request race an update, disable, quarantine, crash, or shutdown and
+   reach a stale runtime?
+4. Are request and notification semantics distinct and exactly validated?
+5. Is terminal hot-path work kept off general JSON-RPC?
+6. Does missing or uninstalled plugin code preserve user-owned data?
+7. Does adding a host SDK module expand only an explicit trusted resource list?
+
+If the answer requires a new public plugin concept, update the canonical JSON
+Schema, generated types, SDK, compatibility rules, documentation, and drift
+tests together. An internal shortcut must not become an accidental public API.

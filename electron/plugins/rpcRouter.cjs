@@ -65,11 +65,15 @@ class PluginRpcRouter {
   constructor(options) {
     this.pluginId = options.pluginId;
     this.send = options.send;
-    this.handlers = new Map(Object.entries(options.handlers ?? {}));
+    const legacyHandlers = options.handlers ?? {};
+    this.requestHandlers = new Map(Object.entries(options.requestHandlers ?? legacyHandlers));
+    this.notificationHandlers = new Map(Object.entries(options.notificationHandlers ?? legacyHandlers));
     this.pending = new Map();
     this.pendingCancellationIds = new Set();
+    this.retiredResponseIds = new Set();
     this.inflight = new Map();
     this.inflightIds = new Set();
+    this.inflightNotifications = new Set();
     this.nextId = 0;
     this.closed = false;
     this.maxPending = options.maxPending ?? PLUGIN_RPC_MAX_PENDING;
@@ -102,10 +106,11 @@ class PluginRpcRouter {
   }
 
   #allocateRequestId() {
-    for (let attempt = 0; attempt <= this.maxPending; attempt += 1) {
+    for (let attempt = 0; attempt <= this.maxPending + this.retiredResponseIds.size; attempt += 1) {
       const id = this.nextId;
       this.nextId = this.nextId === Number.MAX_SAFE_INTEGER ? 0 : this.nextId + 1;
-      if (!this.pending.has(rpcIdKey(id))) return id;
+      const key = rpcIdKey(id);
+      if (!this.pending.has(key) && !this.retiredResponseIds.has(key)) return id;
     }
     throw new PluginRpcError(RPC_ERRORS.resourceExhausted, "No RPC correlation ID is available");
   }
@@ -124,9 +129,19 @@ class PluginRpcRouter {
     pending.abortCleanup?.();
   }
 
+  #retireResponseId(id) {
+    const key = rpcIdKey(id);
+    this.retiredResponseIds.delete(key);
+    this.retiredResponseIds.add(key);
+    while (this.retiredResponseIds.size > this.maxPending) {
+      this.retiredResponseIds.delete(this.retiredResponseIds.values().next().value);
+    }
+  }
+
   accept(rawMessage) {
     return this.#accept(rawMessage)
       .catch((error) => {
+        if (this.closed) return;
         this.onProtocolError(error);
         this.close(error);
       });
@@ -163,16 +178,20 @@ class PluginRpcRouter {
   #acceptResponse(message) {
     const key = rpcIdKey(message.id);
     const pending = this.pending.get(key);
-    if (!pending) throw new Error(`Plugin returned an unknown RPC response ID: ${String(message.id)}`);
+    if (!pending) {
+      if (this.retiredResponseIds.delete(key)) return;
+      throw new Error(`Plugin returned an unknown RPC response ID: ${String(message.id)}`);
+    }
     this.#forgetPending(message.id, pending);
     if (Object.hasOwn(message, "error")) {
       pending.reject(new PluginRpcError(message.error.code, message.error.message, message.error.data));
       return;
     }
     try {
-      const result = pending.method === "plugin.initialize"
+      let result = pending.method === "plugin.initialize"
         ? assertInitializeResult(message.result)
         : message.result;
+      if (pending.validateResult) result = pending.validateResult(result);
       pending.resolve(result);
     } catch (error) {
       pending.reject(error);
@@ -188,7 +207,7 @@ class PluginRpcRouter {
       });
       return;
     }
-    const handler = this.handlers.get(message.method);
+    const handler = this.requestHandlers.get(message.method);
     if (!handler) {
       this.#sendRpc({
         jsonrpc: "2.0",
@@ -230,10 +249,12 @@ class PluginRpcRouter {
         pluginId: this.pluginId,
         signal: controller.signal,
         cancellationId,
+        deadlineMs: timeoutMs,
+        requestId: message.id,
       })), controller.signal);
-      this.#sendRpc({ jsonrpc: "2.0", id: message.id, result: result ?? null });
+      if (!this.closed) this.#sendRpc({ jsonrpc: "2.0", id: message.id, result: result ?? null });
     } catch (error) {
-      this.#sendFailure(message.id, error);
+      if (!this.closed) this.#sendFailure(message.id, error);
     } finally {
       clearTimeout(timer);
       this.inflight.delete(cancellationId);
@@ -242,13 +263,27 @@ class PluginRpcRouter {
   }
 
   async #acceptNotification(message) {
-    const handler = this.handlers.get(message.method);
+    const handler = this.notificationHandlers.get(message.method);
     if (!handler) return;
-    const signal = AbortSignal.timeout(this.defaultTimeoutMs);
-    await raceWithAbort(Promise.resolve(handler(message.params, {
-      pluginId: this.pluginId,
-      signal,
-    })), signal);
+    if (this.inflightNotifications.size >= this.maxPending) {
+      throw new PluginRpcError(RPC_ERRORS.resourceExhausted, "Too many in-flight plugin notifications");
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new PluginRpcError(
+      RPC_ERRORS.deadlineExceeded,
+      "Plugin notification deadline exceeded",
+    )), this.defaultTimeoutMs);
+    this.inflightNotifications.add(controller);
+    try {
+      await raceWithAbort(Promise.resolve(handler(message.params, {
+        pluginId: this.pluginId,
+        signal: controller.signal,
+        notification: true,
+      })), controller.signal);
+    } finally {
+      clearTimeout(timer);
+      this.inflightNotifications.delete(controller);
+    }
   }
 
   #cancelInflight(cancellationId) {
@@ -273,6 +308,9 @@ class PluginRpcRouter {
       ));
     }
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+    if (options.validateResult != null && typeof options.validateResult !== "function") {
+      return Promise.reject(new TypeError("Plugin RPC result validator must be a function"));
+    }
     const message = {
       jsonrpc: "2.0",
       id,
@@ -285,7 +323,10 @@ class PluginRpcRouter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = this.pending.get(rpcIdKey(id));
-        if (pending) this.#forgetPending(id, pending);
+        if (pending) {
+          this.#retireResponseId(id);
+          this.#forgetPending(id, pending);
+        }
         try {
           this.#sendRpc({ jsonrpc: "2.0", method: "$/cancelRequest", params: { cancellationId } });
         } catch {}
@@ -295,7 +336,10 @@ class PluginRpcRouter {
       if (options.signal) {
         const onAbort = () => {
           const pending = this.pending.get(rpcIdKey(id));
-          if (pending) this.#forgetPending(id, pending);
+          if (pending) {
+            this.#retireResponseId(id);
+            this.#forgetPending(id, pending);
+          }
           try {
             this.#sendRpc({ jsonrpc: "2.0", method: "$/cancelRequest", params: { cancellationId } });
           } catch {}
@@ -304,7 +348,15 @@ class PluginRpcRouter {
         options.signal.addEventListener("abort", onAbort, { once: true });
         abortCleanup = () => options.signal.removeEventListener("abort", onAbort);
       }
-      const pending = { method, cancellationId, resolve, reject, timer, abortCleanup };
+      const pending = {
+        method,
+        cancellationId,
+        resolve,
+        reject,
+        timer,
+        abortCleanup,
+        validateResult: options.validateResult,
+      };
       this.pending.set(rpcIdKey(id), pending);
       this.pendingCancellationIds.add(cancellationId);
       try {
@@ -317,7 +369,7 @@ class PluginRpcRouter {
   }
 
   notify(method, params) {
-    if (this.closed) return;
+    if (this.closed) throw new PluginRpcError(RPC_ERRORS.unavailable, "Plugin runtime is closed");
     const message = { jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) };
     this.#sendRpc(message);
   }
@@ -332,9 +384,12 @@ class PluginRpcRouter {
     }
     this.pending.clear();
     this.pendingCancellationIds.clear();
+    this.retiredResponseIds.clear();
     for (const controller of this.inflight.values()) controller.abort(error);
     this.inflight.clear();
     this.inflightIds.clear();
+    for (const controller of this.inflightNotifications) controller.abort(error);
+    this.inflightNotifications.clear();
     this.streams.close(error);
   }
 }

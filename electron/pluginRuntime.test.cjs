@@ -4,7 +4,11 @@
 // repository's existing electron/*.test.cjs full-test discovery contract.
 require("./plugins/database.test.cjs");
 require("./plugins/browserPluginRuntime.test.cjs");
+require("./plugins/hostRpcRegistry.test.cjs");
+require("./plugins/hostBootstrap.test.cjs");
+require("./plugins/hostService.test.cjs");
 require("./plugins/jsonBoundary.test.cjs");
+require("./plugins/moduleResources.test.cjs");
 require("./plugins/packageStore.test.cjs");
 require("./plugins/packaging.test.cjs");
 require("./plugins/paths.test.cjs");

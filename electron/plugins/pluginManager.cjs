@@ -41,10 +41,34 @@ class PluginManager {
   install(archivePath, options) {
     return this.#mutate(async () => {
       await this.#ready();
-      const plugin = await this.packageStore.install(archivePath, options);
+      let stoppedPlugin = null;
+      let plugin;
+      try {
+        plugin = await this.packageStore.install(archivePath, {
+          enable: options?.enable === true,
+          beforeActivate: async ({ pluginId, previousPlugin }) => {
+            if (!previousPlugin?.enabled) return;
+            this.database.setEnabled(pluginId, false);
+            stoppedPlugin = { pluginId, version: previousPlugin.activeVersion };
+            await this.runtimeSupervisor.stop(pluginId);
+          },
+        });
+      } catch (error) {
+        if (stoppedPlugin) {
+          const current = this.database.getActivePlugin(stoppedPlugin.pluginId);
+          if (current?.activeVersion === stoppedPlugin.version) {
+            this.database.setEnabled(stoppedPlugin.pluginId, true);
+            try {
+              await this.runtimeSupervisor.start(stoppedPlugin.pluginId);
+            } catch {
+              this.database.setEnabled(stoppedPlugin.pluginId, false);
+            }
+          }
+        }
+        throw error;
+      }
       if (plugin?.enabled) {
         try {
-          await this.runtimeSupervisor.stop(plugin.id);
           await this.runtimeSupervisor.start(plugin.id);
         } catch (error) {
           this.database.setEnabled(plugin.id, false);
@@ -59,6 +83,10 @@ class PluginManager {
     return this.#mutate(async () => {
       await this.#ready();
       if (enabled) {
+        const plugin = this.database.getActivePlugin(pluginId);
+        if (plugin?.runtime?.quarantinedAt != null) {
+          this.database.clearQuarantine(pluginId, plugin.activeVersion);
+        }
         this.database.setEnabled(pluginId, true);
         try { await this.runtimeSupervisor.start(pluginId); }
         catch (error) {
@@ -66,8 +94,8 @@ class PluginManager {
           throw error;
         }
       } else {
-        await this.runtimeSupervisor.stop(pluginId);
         this.database.setEnabled(pluginId, false);
+        await this.runtimeSupervisor.stop(pluginId);
       }
       return this.database.getActivePlugin(pluginId);
     });
@@ -84,6 +112,8 @@ class PluginManager {
   uninstall(pluginId) {
     return this.#mutate(async () => {
       await this.#ready();
+      const plugin = this.database.getActivePlugin(pluginId);
+      if (plugin) this.database.setEnabled(pluginId, false);
       await this.runtimeSupervisor.stop(pluginId);
       return this.packageStore.uninstall(pluginId);
     });

@@ -51,6 +51,10 @@ const wireIntegerLimits = schema.$defs.WireIntegerLimits?.const;
 if (wireIntegerLimits?.maxSafeInteger !== Number.MAX_SAFE_INTEGER) {
   throw new Error("WireIntegerLimits.maxSafeInteger must equal Number.MAX_SAFE_INTEGER");
 }
+const rpcLimits = schema.$defs.RpcLimits?.const;
+if (!Number.isSafeInteger(rpcLimits?.maxJsonBytes) || rpcLimits.maxJsonBytes < 1) {
+  throw new Error("RpcLimits.maxJsonBytes must be a positive safe integer");
+}
 for (const [definitionName, minimum] of [
   ["SafeUnsignedInteger", 0],
   ["SafePositiveInteger", 1],
@@ -74,6 +78,10 @@ if (rpcErrorCodes.length === 0
   throw new Error("RPC error code definitions must contain unique safe integers");
 }
 const streamLimits = schema.$defs.StreamLimits?.const;
+if (!Number.isSafeInteger(streamLimits?.maxFrameJsonBytes)
+  || streamLimits.maxFrameJsonBytes < streamLimits?.maxChunkBytes) {
+  throw new Error("StreamLimits.maxFrameJsonBytes must cover one maximum stream chunk");
+}
 const streamIdDefinition = schema.$defs.StreamId;
 if (!Number.isSafeInteger(streamLimits?.maxStreamIdLength)
   || streamLimits.maxStreamIdLength < 1
@@ -203,9 +211,11 @@ const generatedLimits = [
   `export const PLUGIN_JSON_MAX_DEPTH = ${jsonValueLimits.maxDepth} as const;`,
   `export const PLUGIN_JSON_MAX_NODES = ${jsonValueLimits.maxNodes} as const;`,
   `export const PLUGIN_WIRE_MAX_SAFE_INTEGER = ${wireIntegerLimits.maxSafeInteger} as const;`,
+  `export const PLUGIN_RPC_MAX_JSON_BYTES = ${rpcLimits.maxJsonBytes} as const;`,
   `export const PLUGIN_RPC_ERROR_CODES = ${JSON.stringify(rpcErrorCodes)} as const;`,
   `export const PLUGIN_STREAM_MAX_ID_LENGTH = ${streamLimits.maxStreamIdLength} as const;`,
   `export const PLUGIN_STREAM_MAX_CHUNK_BYTES = ${streamLimits.maxChunkBytes} as const;`,
+  `export const PLUGIN_STREAM_MAX_FRAME_JSON_BYTES = ${streamLimits.maxFrameJsonBytes} as const;`,
   `export const PLUGIN_STREAM_MIN_WINDOW_BYTES = ${streamLimits.minWindowBytes} as const;`,
   `export const PLUGIN_STREAM_MAX_WINDOW_BYTES = ${streamLimits.maxWindowBytes} as const;`,
   `export const PLUGIN_STREAM_MAX_CREDIT_BYTES = ${streamLimits.maxCreditBytes} as const;`,

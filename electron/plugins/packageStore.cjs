@@ -157,27 +157,48 @@ class PackageStore {
       const pluginId = assertPluginStorageSegment(manifest.id, "ID");
       const version = assertPluginStorageSegment(manifest.version, "version");
       const targetDirectory = resolveInstalledVersionDirectory(this.paths, pluginId, version);
+      const previousPlugin = this.database.getActivePlugin(pluginId);
+      const enableAfterActivation = options.enable === true || previousPlugin?.enabled === true;
+      let activationPrepared = false;
+      const prepareActivation = async (reason) => {
+        if (activationPrepared) return;
+        if (typeof options.beforeActivate === "function") {
+          await options.beforeActivate(Object.freeze({
+            pluginId,
+            version,
+            previousPlugin,
+            reason,
+          }));
+        }
+        activationPrepared = true;
+      };
       const existing = this.database.getVersion(pluginId, version);
       if (existing) {
         if (existing.archiveSha256 !== snapshot.sha256) {
           throw new Error(`Plugin ${pluginId}@${version} is already installed with different contents`);
         }
+        let existingValidation;
         try {
           const existingPackage = path.join(targetDirectory, PACKAGE_DIRECTORY);
-          const existingValidation = await pluginCli.validatePluginDirectory(existingPackage);
+          existingValidation = await pluginCli.validatePluginDirectory(existingPackage);
           if (existingValidation.manifest.id !== pluginId || existingValidation.manifest.version !== version) {
             throw new Error("Installed plugin identity does not match its database record");
           }
+        } catch {
+          if (previousPlugin?.activeVersion === version) await prepareActivation("replace-active-files");
+          await rm(targetDirectory, { recursive: true, force: true });
+        }
+        if (existingValidation) {
+          if (previousPlugin?.activeVersion !== version) await prepareActivation("switch-active-version");
+          const existingPackage = path.join(targetDirectory, PACKAGE_DIRECTORY);
           this.database.installVersion({
             pluginId,
             version,
             manifest: existingValidation.manifest,
             archiveSha256: existing.archiveSha256,
             packageRelativePath: path.relative(this.paths.packages, existingPackage),
-          }, { enable: options.enable === true });
+          }, { enable: enableAfterActivation });
           return this.database.getActivePlugin(pluginId);
-        } catch {
-          await rm(targetDirectory, { recursive: true, force: true });
         }
       }
       try {
@@ -195,19 +216,26 @@ class PackageStore {
       );
       await syncDirectory(stagingDirectory);
       await mkdir(path.dirname(targetDirectory), { recursive: true, mode: 0o700 });
+      if (previousPlugin?.activeVersion !== version) await prepareActivation("switch-active-version");
       await rename(stagingDirectory, targetDirectory);
       await syncDirectory(path.dirname(targetDirectory));
       const packageRelativePath = path.relative(
         this.paths.packages,
         path.join(targetDirectory, PACKAGE_DIRECTORY),
       );
-      this.database.installVersion({
-        pluginId,
-        version,
-        manifest,
-        archiveSha256: snapshot.sha256,
-        packageRelativePath,
-      }, { enable: options.enable === true });
+      try {
+        this.database.installVersion({
+          pluginId,
+          version,
+          manifest,
+          archiveSha256: snapshot.sha256,
+          packageRelativePath,
+        }, { enable: enableAfterActivation });
+      } catch (error) {
+        await rm(targetDirectory, { recursive: true, force: true });
+        await syncDirectory(path.dirname(targetDirectory));
+        throw error;
+      }
       return this.database.getActivePlugin(pluginId);
     } finally {
       await rm(stagingDirectory, { recursive: true, force: true });

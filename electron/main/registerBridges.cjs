@@ -93,20 +93,19 @@ function createBridgeRegistrar(context) {
       createTrustedPluginBridgeSender,
       registerPluginBridge,
     } = require("../plugins/pluginBridge.cjs");
-    const { isPluginDevelopmentEnabled } = require("../plugins/constants.cjs");
-    let pluginHostService = null;
-    if (isPluginDevelopmentEnabled(process.env)) {
-      const { createPluginHostService } = require("../plugins/hostService.cjs");
-      const { registerPluginShutdown } = require("../plugins/shutdownCoordinator.cjs");
-      pluginHostService = createPluginHostService({
-        app,
-        electron: electronModule,
-      });
-      void pluginHostService.manager.initialize().catch((error) => {
-        console.error("[Plugins] Failed to initialize plugin host:", error);
-      });
-      registerPluginShutdown(() => pluginHostService.manager.shutdown());
-    }
+    const { startDevelopmentPluginHost } = require("../plugins/hostBootstrap.cjs");
+    const pluginHostService = startDevelopmentPluginHost({
+      env: process.env,
+      createService: () => {
+        const { createPluginHostService } = require("../plugins/hostService.cjs");
+        return createPluginHostService({ app, electron: electronModule });
+      },
+      registerShutdown: (handler) => {
+        const { registerPluginShutdown } = require("../plugins/shutdownCoordinator.cjs");
+        return registerPluginShutdown(handler);
+      },
+      logger: console,
+    });
     registerPluginBridge(ipcMain, {
       manager: pluginHostService?.manager,
       env: process.env,

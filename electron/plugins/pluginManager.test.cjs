@@ -67,8 +67,39 @@ test("management mutations are serialized in invocation order", async () => {
   assert.deepEqual(calls, [
     "install:start",
     "install:end",
-    "stop:com.example.serial",
     "enabled:com.example.serial:false",
+    "stop:com.example.serial",
+  ]);
+});
+
+test("explicit enable clears the active version quarantine before starting", async () => {
+  const calls = [];
+  const pluginId = "com.example.recover";
+  const manager = new PluginManager({
+    database: {
+      close() {},
+      getActivePlugin: () => ({
+        id: pluginId,
+        activeVersion: "1.0.0",
+        enabled: false,
+        runtime: { quarantinedAt: 123 },
+      }),
+      listPlugins: () => [],
+      clearQuarantine(id, version) { calls.push(`recover:${id}@${version}`); },
+      setEnabled(id, enabled) { calls.push(`enabled:${id}:${enabled}`); },
+    },
+    packageStore: { async initialize() {} },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async start(id) { calls.push(`start:${id}`); },
+    },
+  });
+
+  await manager.setEnabled(pluginId, true);
+  assert.deepEqual(calls, [
+    `recover:${pluginId}@1.0.0`,
+    `enabled:${pluginId}:true`,
+    `start:${pluginId}`,
   ]);
 });
 
@@ -76,10 +107,27 @@ test("installing an enabled version replaces the active runtime", async () => {
   const calls = [];
   const plugin = { id: "com.example.upgrade", enabled: true };
   const manager = new PluginManager({
-    database: { close() {}, listPlugins: () => [], setEnabled() {} },
+    database: {
+      close() {},
+      listPlugins: () => [],
+      setEnabled(pluginId, enabled) { calls.push(`enabled:${pluginId}:${enabled}`); },
+    },
     packageStore: {
       async initialize() {},
-      async install() { return plugin; },
+      async install(_archivePath, options) {
+        await options.beforeActivate({
+          pluginId: plugin.id,
+          version: "2.0.0",
+          previousPlugin: {
+            id: plugin.id,
+            enabled: true,
+            activeVersion: "1.0.0",
+          },
+          reason: "switch-active-version",
+        });
+        calls.push("activate:2.0.0");
+        return plugin;
+      },
     },
     runtimeSupervisor: {
       async startEnabled() {},
@@ -88,5 +136,138 @@ test("installing an enabled version replaces the active runtime", async () => {
     },
   });
   assert.equal(await manager.install("/tmp/upgrade.ncpkg"), plugin);
-  assert.deepEqual(calls, ["stop:com.example.upgrade", "start:com.example.upgrade"]);
+  assert.deepEqual(calls, [
+    "enabled:com.example.upgrade:false",
+    "stop:com.example.upgrade",
+    "activate:2.0.0",
+    "start:com.example.upgrade",
+  ]);
+});
+
+test("failed version preparation restores the previously enabled runtime", async () => {
+  const calls = [];
+  const pluginId = "com.example.upgrade-rollback";
+  let activePlugin = {
+    id: pluginId,
+    enabled: true,
+    activeVersion: "1.0.0",
+  };
+  const manager = new PluginManager({
+    database: {
+      close() {},
+      getActivePlugin: () => ({ ...activePlugin }),
+      listPlugins: () => [],
+      setEnabled(id, enabled) {
+        assert.equal(id, pluginId);
+        activePlugin = { ...activePlugin, enabled };
+        calls.push(`enabled:${enabled}`);
+      },
+    },
+    packageStore: {
+      async initialize() {},
+      async install(_archivePath, options) {
+        await options.beforeActivate({
+          pluginId,
+          version: "2.0.0",
+          previousPlugin: { ...activePlugin },
+          reason: "switch-active-version",
+        });
+        calls.push("prepare:failed");
+        throw new Error("database switch failed");
+      },
+    },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async stop(id) { calls.push(`stop:${id}`); },
+      async start(id) { calls.push(`start:${id}`); },
+    },
+  });
+
+  await assert.rejects(manager.install("/tmp/upgrade.ncpkg"), /database switch failed/);
+  assert.deepEqual(calls, [
+    "enabled:false",
+    `stop:${pluginId}`,
+    "prepare:failed",
+    "enabled:true",
+    `start:${pluginId}`,
+  ]);
+  assert.equal(activePlugin.enabled, true);
+});
+
+test("failed restoration leaves the previous plugin disabled", async () => {
+  const calls = [];
+  const pluginId = "com.example.upgrade-broken-rollback";
+  let activePlugin = { id: pluginId, enabled: true, activeVersion: "1.0.0" };
+  const manager = new PluginManager({
+    database: {
+      close() {},
+      getActivePlugin: () => ({ ...activePlugin }),
+      listPlugins: () => [],
+      setEnabled(id, enabled) {
+        assert.equal(id, pluginId);
+        activePlugin = { ...activePlugin, enabled };
+        calls.push(`enabled:${enabled}`);
+      },
+    },
+    packageStore: {
+      async initialize() {},
+      async install(_archivePath, options) {
+        await options.beforeActivate({
+          pluginId,
+          version: "2.0.0",
+          previousPlugin: { ...activePlugin },
+          reason: "replace-active-files",
+        });
+        throw new Error("replacement failed");
+      },
+    },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async stop() { calls.push("stop"); },
+      async start() {
+        calls.push("start:failed");
+        throw new Error("previous package is invalid");
+      },
+    },
+  });
+
+  await assert.rejects(manager.install("/tmp/upgrade.ncpkg"), /replacement failed/);
+  assert.deepEqual(calls, [
+    "enabled:false",
+    "stop",
+    "enabled:true",
+    "start:failed",
+    "enabled:false",
+  ]);
+  assert.equal(activePlugin.enabled, false);
+});
+
+test("uninstall disables lazy activation before stopping and removing code", async () => {
+  const calls = [];
+  const pluginId = "com.example.remove";
+  const manager = new PluginManager({
+    database: {
+      close() {},
+      getActivePlugin: () => ({ id: pluginId, enabled: true }),
+      listPlugins: () => [],
+      setEnabled(id, enabled) { calls.push(`enabled:${id}:${enabled}`); },
+    },
+    packageStore: {
+      async initialize() {},
+      async uninstall(id) {
+        calls.push(`uninstall:${id}`);
+        return true;
+      },
+    },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async stop(id) { calls.push(`stop:${id}`); },
+    },
+  });
+  assert.equal(await manager.uninstall(pluginId), true);
+  assert.deepEqual(calls, [
+    `enabled:${pluginId}:false`,
+    `stop:${pluginId}`,
+    `uninstall:${pluginId}`,
+  ]);
 });

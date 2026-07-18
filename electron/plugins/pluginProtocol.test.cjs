@@ -23,6 +23,8 @@ function createRoots(context) {
   };
   for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(roots.packageRoot, "index.js"), "export default {};\n");
+  fs.mkdirSync(path.join(roots.packageRoot, ".runtime"));
+  fs.writeFileSync(path.join(roots.packageRoot, ".runtime", "index.js"), "export default {};\n");
   fs.writeFileSync(path.join(roots.runtimeDirectory, "browserRuntime.mjs"), "export {};\n");
   fs.writeFileSync(path.join(roots.sdkDirectory, "index.js"), "export {};\n");
   fs.writeFileSync(path.join(roots.contractDirectory, "index.js"), "export {};\n");
@@ -83,6 +85,12 @@ test("runtime-scoped protocol serves only registered package and host resources"
     url: `netcatty-plugin://${registration.token}/package/index.js`,
   });
   assert.equal(await packageResponse.text(), "export default {};\n");
+  const dotPackageResponse = await handler({
+    method: "GET",
+    url: `netcatty-plugin://${registration.token}/package/.runtime/index.js`,
+  });
+  assert.equal(dotPackageResponse.status, 200);
+  assert.equal(await dotPackageResponse.text(), "export default {};\n");
   const configResponse = await handler({
     method: "GET",
     url: `netcatty-plugin://${registration.token}/__host/runtime/config.json`,
@@ -95,4 +103,39 @@ test("runtime-scoped protocol serves only registered package and host resources"
   sessionRegistration.dispose();
   sessionRegistration.dispose();
   assert.equal(unhandled, true);
+});
+
+test("browser runtime import maps accept reviewed host modules without protocol changes", async (context) => {
+  const roots = createRoots(context);
+  const uiDirectory = path.join(path.dirname(roots.packageRoot), "ui");
+  fs.mkdirSync(uiDirectory);
+  fs.writeFileSync(path.join(uiDirectory, "index.js"), "export const ui = true;\n");
+  let handler;
+  const protocol = new PluginProtocol({
+    runtimeDirectory: roots.runtimeDirectory,
+    moduleResources: [
+      { specifier: "@netcatty/plugin-sdk", directory: roots.sdkDirectory },
+      { specifier: "@netcatty/plugin-contract", directory: roots.contractDirectory },
+      { specifier: "@netcatty/plugin-ui", directory: uiDirectory },
+    ],
+  });
+  protocol.registerSession({
+    protocol: {
+      handle(_scheme, callback) { handler = callback; },
+      unhandle() {},
+    },
+  });
+  const registration = protocol.registerRuntime({
+    pluginId: "com.example.modules",
+    packageRoot: roots.packageRoot,
+    config: {},
+  });
+  const page = await (await handler({ method: "GET", url: registration.url })).text();
+  assert.match(page, /@netcatty\/plugin-ui/);
+  assert.match(page, /__host\/modules\/m2\/index\.js/);
+  const moduleResponse = await handler({
+    method: "GET",
+    url: `netcatty-plugin://${registration.token}/__host/modules/m2/index.js`,
+  });
+  assert.equal(await moduleResponse.text(), "export const ui = true;\n");
 });

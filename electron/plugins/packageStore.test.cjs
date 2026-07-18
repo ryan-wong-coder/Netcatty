@@ -97,6 +97,60 @@ test("package install is idempotent for identical bytes and rejects version subs
   assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
 });
 
+test("package activation hook runs before the active version changes", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const first = await createPackage(fixture.root);
+  const second = await createPackage(fixture.root, {
+    manifest: { version: "2.0.0" },
+    source: "export default { version: 2 };\n",
+  });
+  await fixture.store.install(first.archive, { enable: true });
+  const observations = [];
+
+  const installed = await fixture.store.install(second.archive, {
+    beforeActivate(details) {
+      observations.push({
+        details,
+        activeVersion: fixture.database.getActivePlugin(first.manifest.id).activeVersion,
+      });
+    },
+  });
+
+  assert.equal(installed.activeVersion, "2.0.0");
+  assert.equal(installed.enabled, true);
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].activeVersion, "1.0.0");
+  assert.equal(observations[0].details.pluginId, first.manifest.id);
+  assert.equal(observations[0].details.version, "2.0.0");
+  assert.equal(observations[0].details.previousPlugin.activeVersion, "1.0.0");
+  assert.equal(observations[0].details.reason, "switch-active-version");
+});
+
+test("failed activation preparation preserves the previous database selection", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const first = await createPackage(fixture.root);
+  const second = await createPackage(fixture.root, { manifest: { version: "2.0.0" } });
+  await fixture.store.install(first.archive, { enable: true });
+
+  await assert.rejects(
+    fixture.store.install(second.archive, {
+      beforeActivate() { throw new Error("runtime did not stop"); },
+    }),
+    /runtime did not stop/,
+  );
+
+  const active = fixture.database.getActivePlugin(first.manifest.id);
+  assert.equal(active.activeVersion, "1.0.0");
+  assert.equal(active.enabled, true);
+  assert.equal(fixture.database.getVersion(first.manifest.id, "2.0.0"), null);
+  await assert.rejects(
+    fs.promises.stat(path.join(fixture.paths.packages, first.manifest.id, "2.0.0")),
+    { code: "ENOENT" },
+  );
+});
+
 test("startup recovery removes staging debris and reconstructs a committed orphan disabled", async (context) => {
   const fixture = createStore(context);
   await fixture.store.initialize();

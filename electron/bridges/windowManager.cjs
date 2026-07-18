@@ -32,6 +32,7 @@ const THEME_COLORS = {
 let mainWindow = null;
 const mainWindows = new Set();
 const appContentWindows = new Set();
+let appContentWindowClosedHandler = null;
 let lastFocusedMainWindow = null;
 let settingsWindow = null;
 let currentTheme = "light";
@@ -88,6 +89,17 @@ function debugLog(...args) {
 
 function setIsQuitting(nextValue) {
   isQuitting = Boolean(nextValue);
+}
+
+function setAppContentWindowClosedHandler(handler) {
+  if (handler != null && typeof handler !== "function") {
+    throw new TypeError("App content window close handler must be a function");
+  }
+  appContentWindowClosedHandler = handler ?? null;
+}
+
+function notifyAppContentWindowClosed(win) {
+  appContentWindowClosedHandler?.(win);
 }
 
 function shouldCloseWindowFromInput(input) {
@@ -898,6 +910,8 @@ const mainWindowApi = createMainWindowApi({
   unregisterMainWindow,
   registerAppContentWindow,
   unregisterAppContentWindow,
+  notifyAppContentWindowClosed,
+  setAppContentWindowClosedHandler,
   getMainWindowCount,
   applyWindowOpacityToWindow,
   resolveLiveAppIcon,
@@ -1317,6 +1331,7 @@ module.exports = {
   unregisterMainWindow,
   registerAppContentWindow,
   unregisterAppContentWindow,
+  setAppContentWindowClosedHandler,
   getSettingsWindow,
   isWindowUsable,
   registerWindowHandlers,

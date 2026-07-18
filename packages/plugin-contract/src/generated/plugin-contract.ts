@@ -265,6 +265,8 @@ export type RpcFailure = {
 
 export type RpcId = (string) | (SafeUnsignedInteger);
 
+export type RpcLimits = {"maxJsonBytes":1048576};
+
 export type RpcMessage = (RpcRequest) | (RpcNotification) | (RpcSuccess) | (RpcFailure) | (RpcCancel) | (RpcProgressNotification) | (RuntimeInitializeRequest);
 
 export type RpcNotification = {
@@ -415,7 +417,7 @@ export type StreamFrame = ({
 
 export type StreamId = string;
 
-export type StreamLimits = {"maxStreamIdLength":128,"maxChunkBytes":16777216,"minWindowBytes":1024,"maxWindowBytes":16777216,"maxCreditBytes":16777216};
+export type StreamLimits = {"maxStreamIdLength":128,"maxChunkBytes":16777216,"maxFrameJsonBytes":25165824,"minWindowBytes":1024,"maxWindowBytes":16777216,"maxCreditBytes":16777216};
 
 export type StreamWindowBytes = number;
 

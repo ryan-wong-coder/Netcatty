@@ -50,3 +50,26 @@ test("before-quit keeps the original event cancelled while plugin shutdown runs 
     "the original quit must be cancelled before asynchronous plugin shutdown starts",
   );
 });
+
+test("all app content windows use the WindowManager-level last-window close handler", () => {
+  const mainSource = readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const windowSource = readFileSync(path.join(
+    __dirname,
+    "bridges",
+    "windowManager",
+    "mainWindow.cjs",
+  ), "utf8");
+  const createWindowIndex = mainSource.indexOf("async function createWindow()");
+  const setHandlerIndex = mainSource.indexOf("setAppContentWindowClosedHandler", createWindowIndex);
+  const managerCreateIndex = mainSource.indexOf("windowManager.createWindow", createWindowIndex);
+
+  assert.notEqual(setHandlerIndex, -1);
+  assert.notEqual(managerCreateIndex, -1);
+  assert.ok(setHandlerIndex < managerCreateIndex);
+  const closedIndex = windowSource.indexOf("win.on('closed'");
+  const appContentBranchIndex = windowSource.indexOf("if (registerAsAppContentWindow)", closedIndex);
+  const notifyIndex = windowSource.indexOf("notifyAppContentWindowClosed(win)", appContentBranchIndex);
+  assert.notEqual(closedIndex, -1);
+  assert.notEqual(appContentBranchIndex, -1);
+  assert.notEqual(notifyIndex, -1);
+});

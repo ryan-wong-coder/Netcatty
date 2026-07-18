@@ -25,7 +25,7 @@ class PluginDatabase {
     const ownsDatabase = !options.database;
     this.db = options.database ?? new DatabaseSync(databasePath);
     try {
-      this.#migrate();
+      this.#initializeSchema();
     } catch (error) {
       if (ownsDatabase) {
         try { this.db.close(); } catch {}
@@ -34,7 +34,7 @@ class PluginDatabase {
     }
   }
 
-  #migrate() {
+  #initializeSchema() {
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
     const version = Number(this.db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
     if (version > SCHEMA_VERSION) {
@@ -60,19 +60,26 @@ class PluginDatabase {
             PRIMARY KEY (plugin_id, version)
           );
           CREATE TABLE plugin_runtime_state (
-            plugin_id TEXT PRIMARY KEY REFERENCES plugins(id) ON DELETE CASCADE,
+            plugin_id TEXT NOT NULL,
+            plugin_version TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'stopped',
             runtime_kind TEXT,
             last_error TEXT,
             quarantined_at INTEGER,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (plugin_id, plugin_version),
+            FOREIGN KEY (plugin_id, plugin_version)
+              REFERENCES plugin_versions(plugin_id, version) ON DELETE CASCADE
           );
           CREATE TABLE plugin_crashes (
-            plugin_id TEXT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
-            crashed_at INTEGER NOT NULL
+            plugin_id TEXT NOT NULL,
+            plugin_version TEXT NOT NULL,
+            crashed_at INTEGER NOT NULL,
+            FOREIGN KEY (plugin_id, plugin_version)
+              REFERENCES plugin_versions(plugin_id, version) ON DELETE CASCADE
           );
           CREATE INDEX plugin_crashes_lookup
-            ON plugin_crashes(plugin_id, crashed_at);
+            ON plugin_crashes(plugin_id, plugin_version, crashed_at);
           CREATE TABLE plugin_kv (
             plugin_id TEXT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
             key TEXT NOT NULL,
@@ -90,6 +97,9 @@ class PluginDatabase {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = callback();
+      if (result && typeof result.then === "function") {
+        throw new TypeError("Plugin database transactions must be synchronous");
+      }
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -140,10 +150,10 @@ class PluginDatabase {
         now,
       );
       this.db.prepare(`
-        INSERT INTO plugin_runtime_state(plugin_id, status, updated_at)
-        VALUES (?, 'stopped', ?)
-        ON CONFLICT(plugin_id) DO NOTHING
-      `).run(record.pluginId, now);
+        INSERT INTO plugin_runtime_state(plugin_id, plugin_version, status, updated_at)
+        VALUES (?, ?, 'stopped', ?)
+        ON CONFLICT(plugin_id, plugin_version) DO NOTHING
+      `).run(record.pluginId, record.version, now);
     });
   }
 
@@ -165,6 +175,7 @@ class PluginDatabase {
       LEFT JOIN plugin_versions v
         ON v.plugin_id = p.id AND v.version = p.active_version
       LEFT JOIN plugin_runtime_state r ON r.plugin_id = p.id
+        AND r.plugin_version = p.active_version
       WHERE p.id = ?
     `).get(pluginId);
     return row ? this.#mapPlugin(row) : null;
@@ -179,6 +190,7 @@ class PluginDatabase {
       LEFT JOIN plugin_versions v
         ON v.plugin_id = p.id AND v.version = p.active_version
       LEFT JOIN plugin_runtime_state r ON r.plugin_id = p.id
+        AND r.plugin_version = p.active_version
       ORDER BY p.id COLLATE BINARY
     `).all().map((row) => this.#mapPlugin(row));
   }
@@ -220,11 +232,20 @@ class PluginDatabase {
   }
 
   setRuntimeState(pluginId, status, options = {}) {
+    const activeVersion = this.db.prepare(
+      "SELECT active_version FROM plugins WHERE id = ?",
+    ).get(pluginId)?.active_version;
+    const pluginVersion = options.pluginVersion ?? activeVersion;
+    if (!pluginVersion) throw new Error(`Plugin is not installed: ${pluginId}`);
+    if (!this.getVersion(pluginId, pluginVersion)) {
+      throw new Error(`Plugin version is not installed: ${pluginId}@${pluginVersion}`);
+    }
     this.db.prepare(`
       INSERT INTO plugin_runtime_state(
-        plugin_id, status, runtime_kind, last_error, quarantined_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(plugin_id) DO UPDATE SET
+        plugin_id, plugin_version, status, runtime_kind,
+        last_error, quarantined_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(plugin_id, plugin_version) DO UPDATE SET
         status = excluded.status,
         runtime_kind = excluded.runtime_kind,
         last_error = excluded.last_error,
@@ -232,6 +253,7 @@ class PluginDatabase {
         updated_at = excluded.updated_at
     `).run(
       pluginId,
+      pluginVersion,
       status,
       options.kind ?? null,
       options.error == null ? null : String(options.error).slice(0, 4_096),
@@ -240,36 +262,53 @@ class PluginDatabase {
     );
   }
 
-  recordCrash(pluginId, windowMs, threshold) {
+  recordCrash(pluginId, pluginVersion, windowMs, threshold) {
     const now = this.clock();
     return this.transaction(() => {
-      this.db.prepare("DELETE FROM plugin_crashes WHERE plugin_id = ? AND crashed_at < ?")
-        .run(pluginId, now - windowMs);
-      this.db.prepare("INSERT INTO plugin_crashes(plugin_id, crashed_at) VALUES (?, ?)")
-        .run(pluginId, now);
+      if (!this.getVersion(pluginId, pluginVersion)) {
+        throw new Error(`Plugin version is not installed: ${pluginId}@${pluginVersion}`);
+      }
+      this.db.prepare(`
+        DELETE FROM plugin_crashes
+        WHERE plugin_id = ? AND plugin_version = ? AND crashed_at < ?
+      `).run(pluginId, pluginVersion, now - windowMs);
+      this.db.prepare(`
+        INSERT INTO plugin_crashes(plugin_id, plugin_version, crashed_at)
+        VALUES (?, ?, ?)
+      `).run(pluginId, pluginVersion, now);
       const count = Number(this.db.prepare(
-        "SELECT COUNT(*) AS count FROM plugin_crashes WHERE plugin_id = ?",
-      ).get(pluginId)?.count ?? 0);
+        "SELECT COUNT(*) AS count FROM plugin_crashes WHERE plugin_id = ? AND plugin_version = ?",
+      ).get(pluginId, pluginVersion)?.count ?? 0);
       if (count >= threshold) {
         this.db.prepare(`
           UPDATE plugin_runtime_state
           SET status = 'quarantined', quarantined_at = ?, updated_at = ?
-          WHERE plugin_id = ?
-        `).run(now, now, pluginId);
+          WHERE plugin_id = ? AND plugin_version = ?
+        `).run(now, now, pluginId, pluginVersion);
       }
       return { count, quarantined: count >= threshold, quarantinedAt: count >= threshold ? now : null };
     });
   }
 
-  clearQuarantine(pluginId) {
+  clearQuarantine(pluginId, pluginVersion) {
     const now = this.clock();
     this.transaction(() => {
-      this.db.prepare("DELETE FROM plugin_crashes WHERE plugin_id = ?").run(pluginId);
+      const activeVersion = this.db.prepare(
+        "SELECT active_version FROM plugins WHERE id = ?",
+      ).get(pluginId)?.active_version;
+      const targetVersion = pluginVersion ?? activeVersion;
+      if (!targetVersion) throw new Error(`Plugin is not installed: ${pluginId}`);
+      if (!this.getVersion(pluginId, targetVersion)) {
+        throw new Error(`Plugin version is not installed: ${pluginId}@${targetVersion}`);
+      }
+      this.db.prepare(`
+        DELETE FROM plugin_crashes WHERE plugin_id = ? AND plugin_version = ?
+      `).run(pluginId, targetVersion);
       this.db.prepare(`
         UPDATE plugin_runtime_state
         SET status = 'stopped', last_error = NULL, quarantined_at = NULL, updated_at = ?
-        WHERE plugin_id = ?
-      `).run(now, pluginId);
+        WHERE plugin_id = ? AND plugin_version = ?
+      `).run(now, pluginId, targetVersion);
     });
   }
 

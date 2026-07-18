@@ -8,11 +8,10 @@ const { PluginStreamRouter } = require("./streamRouter.cjs");
 test("incoming stream credit is returned only after the consumer releases a chunk", async () => {
   const sent = [];
   const received = [];
-  let router;
-  router = new PluginStreamRouter({
+  const router = new PluginStreamRouter({
     send(message) { sent.push(message); },
-    onIncomingStream({ streamId }) {
-      router.bindIncoming(streamId, {
+    onIncomingStream({ bind }) {
+      bind({
         async onChunk(chunk, release) {
           received.push(chunk.value);
           assert.equal(sent.length, 0);
@@ -44,11 +43,10 @@ test("incoming stream credit is returned only after the consumer releases a chun
 test("incoming binary streams return their declared byte credit after release", async () => {
   const sent = [];
   const received = [];
-  let router;
-  router = new PluginStreamRouter({
+  const router = new PluginStreamRouter({
     send(message) { sent.push(message); },
-    onIncomingStream({ streamId }) {
-      router.bindIncoming(streamId, {
+    onIncomingStream({ bind }) {
+      bind({
         onChunk(chunk, release) {
           received.push([...chunk.bytes]);
           release();
@@ -115,6 +113,29 @@ test("unhandled incoming streams are cancelled immediately", async () => {
   assert.equal(sent[0].frame.kind, "cancel");
 });
 
+test("incoming streams require an explicit accept and a chunk handler", async () => {
+  const sent = [];
+  const router = new PluginStreamRouter({
+    send(message) { sent.push(message); },
+    onIncomingStream() {},
+  });
+  await router.accept({ frame: { streamId: "implicit", sequence: 0, kind: "open", windowBytes: 1024 } });
+  assert.equal(sent[0].frame.kind, "cancel");
+
+  const invalid = new PluginStreamRouter({
+    send() {},
+    onIncomingStream({ bind }) {
+      bind({});
+      return true;
+    },
+  });
+  await assert.rejects(
+    invalid.accept({ frame: { streamId: "invalid", sequence: 0, kind: "open", windowBytes: 1024 } }),
+    /onChunk handler is required/,
+  );
+  assert.equal(invalid.incoming.size, 0);
+});
+
 test("stream envelopes reject extra fields and accessors before state changes", async () => {
   const router = new PluginStreamRouter({ send() {} });
   await assert.rejects(router.accept({
@@ -140,4 +161,169 @@ test("peer cancellation closes only the matching outgoing stream", async () => {
   const other = await router.openOutgoing("other", 1024);
   await other.write(new Uint8Array([2]));
   assert.equal(sent.at(-1).frame.streamId, "other");
+});
+
+test("transport failure while opening a stream releases its identity", async () => {
+  const router = new PluginStreamRouter({
+    send() { throw new Error("transport closed"); },
+  });
+  await assert.rejects(router.openOutgoing("failed-open", 1024), /transport closed/);
+  assert.equal(router.outgoing.size, 0);
+});
+
+test("transport failure while returning credit closes the incoming stream", async () => {
+  const closed = [];
+  let releaseChunk;
+  const router = new PluginStreamRouter({
+    send() { throw new Error("transport closed"); },
+    onIncomingStream({ bind }) {
+      bind({
+        onChunk(_chunk, release) { releaseChunk = release; },
+        onClose(reason) { closed.push(reason); },
+      });
+      return true;
+    },
+  });
+  const contract = await import("@netcatty/plugin-contract");
+  await router.accept({ frame: { streamId: "failed-credit", sequence: 0, kind: "open", windowBytes: 1024 } });
+  await router.accept({
+    frame: {
+      streamId: "failed-credit",
+      sequence: 1,
+      kind: "chunk",
+      data: contract.createJsonStreamChunk({ value: 1 }),
+    },
+  });
+  assert.throws(() => releaseChunk(), /transport closed/);
+  assert.equal(router.incoming.size, 0);
+  assert.equal(closed.length, 1);
+  assert.match(closed[0].message, /transport closed/);
+});
+
+test("incoming stream completion waits for asynchronous owner cleanup", async () => {
+  const sent = [];
+  let releaseCleanup;
+  const cleanup = new Promise((resolve) => { releaseCleanup = resolve; });
+  let cleanupFinished = false;
+  const router = new PluginStreamRouter({
+    send(message) { sent.push(message); },
+    onIncomingStream(stream) {
+      stream.bind({
+        onChunk() {},
+        async onClose() {
+          await cleanup;
+          cleanupFinished = true;
+        },
+      });
+      return true;
+    },
+  });
+  await router.accept({ frame: { streamId: "cleanup", sequence: 0, kind: "open", windowBytes: 1_024 } });
+  let settled = false;
+  const ending = router.accept({ frame: { streamId: "cleanup", sequence: 1, kind: "end" } })
+    .then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  releaseCleanup();
+  await ending;
+  assert.equal(cleanupFinished, true);
+  assert.deepEqual(sent, []);
+});
+
+test("router shutdown contains rejected asynchronous owner cleanup", async () => {
+  const router = new PluginStreamRouter({
+    send() {},
+    onIncomingStream(stream) {
+      stream.bind({
+        onChunk() {},
+        async onClose() { throw new Error("cleanup failed"); },
+      });
+      return true;
+    },
+  });
+  await router.accept({ frame: { streamId: "shutdown-cleanup", sequence: 0, kind: "open", windowBytes: 1_024 } });
+  router.close();
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("transport failure rejects a write and closes its outgoing stream", async () => {
+  let sends = 0;
+  const router = new PluginStreamRouter({
+    send() {
+      sends += 1;
+      if (sends > 1) throw new Error("transport closed");
+    },
+  });
+  const stream = await router.openOutgoing("failed-write", 1024);
+  await assert.rejects(stream.write(new Uint8Array([1])), /transport closed/);
+  assert.equal(router.outgoing.size, 0);
+  await assert.rejects(stream.write(new Uint8Array([2])), /closed/);
+});
+
+test("transport failure while cancelling rejects every backpressured write", async () => {
+  let failSends = false;
+  const router = new PluginStreamRouter({
+    send() {
+      if (failSends) throw new Error("transport closed");
+    },
+  });
+  const stream = await router.openOutgoing("failed-cancel", 1024);
+  await stream.write(new Uint8Array(1024));
+  const queued = stream.write(new Uint8Array([1]));
+  failSends = true;
+  assert.throws(() => stream.cancel(), /transport closed/);
+  await assert.rejects(queued, /cancel/);
+  assert.equal(router.outgoing.size, 0);
+});
+
+test("closing a router invalidates retained incoming release callbacks", async () => {
+  const sent = [];
+  let releaseChunk;
+  let finishChunk;
+  const chunkBlocked = new Promise((resolve) => { finishChunk = resolve; });
+  const closed = [];
+  const router = new PluginStreamRouter({
+    send(message) { sent.push(message); },
+    onIncomingStream({ bind }) {
+      bind({
+        onChunk(_chunk, release) {
+          releaseChunk = release;
+          return chunkBlocked;
+        },
+        onClose(reason) { closed.push(reason); },
+      });
+      return true;
+    },
+  });
+  const contract = await import("@netcatty/plugin-contract");
+  await router.accept({ frame: { streamId: "closing", sequence: 0, kind: "open", windowBytes: 1024 } });
+  const accepting = router.accept({
+    frame: {
+      streamId: "closing",
+      sequence: 1,
+      kind: "chunk",
+      data: contract.createJsonStreamChunk({ value: 1 }),
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const closeError = new Error("runtime closed");
+  router.close(closeError);
+  releaseChunk();
+  finishChunk();
+  await accepting;
+  assert.deepEqual(sent, []);
+  assert.deepEqual(closed, [closeError]);
+});
+
+test("oversized binary writes fail before consuming stream credit", async () => {
+  const sent = [];
+  const router = new PluginStreamRouter({ send(message) { sent.push(message); } });
+  const contract = await import("@netcatty/plugin-contract");
+  const stream = await router.openOutgoing("oversized", contract.PLUGIN_STREAM_MAX_WINDOW_BYTES);
+  await assert.rejects(
+    stream.write(new Uint8Array(contract.PLUGIN_STREAM_MAX_CHUNK_BYTES + 1)),
+    /chunk exceeds/,
+  );
+  assert.equal(sent.length, 1);
+  assert.equal(router.outgoing.get("oversized").availableBytes, contract.PLUGIN_STREAM_MAX_WINDOW_BYTES);
 });

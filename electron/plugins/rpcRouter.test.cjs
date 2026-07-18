@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { PluginRpcError, PluginRpcRouter, RPC_ERRORS } = require("./rpcRouter.cjs");
+const { PLUGIN_RPC_MAX_JSON_BYTES } = require("./constants.cjs");
 
 function createRouter(options = {}) {
   const sent = [];
@@ -15,6 +16,8 @@ function createRouter(options = {}) {
       sent.push(message);
     },
     handlers: options.handlers,
+    requestHandlers: options.requestHandlers,
+    notificationHandlers: options.notificationHandlers,
     maxPending: options.maxPending,
     defaultTimeoutMs: options.defaultTimeoutMs ?? 100,
     onProtocolError(error) { protocolErrors.push(error); },
@@ -57,6 +60,32 @@ test("RPC deadline sends cancellation and rejects without leaking pending state"
   await assert.rejects(request, (error) => error instanceof PluginRpcError && error.code === RPC_ERRORS.deadlineExceeded);
   assert.equal(fixture.sent.at(-1).method, "$/cancelRequest");
   assert.equal(fixture.router.pending.size, 0);
+});
+
+test("one late response after cancellation is ignored without hiding duplicates", async () => {
+  const fixture = createRouter({ defaultTimeoutMs: 10 });
+  const request = fixture.router.request("provider.invoke", {});
+  const requestId = fixture.sent[0].id;
+  await assert.rejects(request, (error) => error?.code === RPC_ERRORS.deadlineExceeded);
+
+  await fixture.router.accept({ jsonrpc: "2.0", id: requestId, result: { late: true } });
+  assert.equal(fixture.router.closed, false);
+  await fixture.router.accept({ jsonrpc: "2.0", id: requestId, result: { duplicate: true } });
+  assert.equal(fixture.router.closed, true);
+  assert.equal(fixture.protocolErrors.length, 1);
+});
+
+test("retired response IDs are not reused for new requests", async () => {
+  const fixture = createRouter({ defaultTimeoutMs: 10 });
+  fixture.router.nextId = Number.MAX_SAFE_INTEGER;
+  const expired = fixture.router.request("provider.expired", {});
+  assert.equal(fixture.sent[0].id, Number.MAX_SAFE_INTEGER);
+  await assert.rejects(expired);
+  fixture.router.nextId = Number.MAX_SAFE_INTEGER;
+  const next = fixture.router.request("provider.next", {});
+  assert.equal(fixture.sent.at(-1).id, 0);
+  fixture.router.close();
+  await assert.rejects(next);
 });
 
 test("incoming request deadlines do not block later requests", async () => {
@@ -212,9 +241,84 @@ test("incoming requests retain host-assigned plugin identity and unsupported met
   assert.equal(fixture.sent[1].error.code, RPC_ERRORS.methodNotFound);
 });
 
+test("request and notification handler ownership cannot be confused", async () => {
+  const calls = [];
+  const fixture = createRouter({
+    requestHandlers: { "storage.set": async () => { calls.push("request"); return null; } },
+    notificationHandlers: { "log.write": async () => { calls.push("notification"); } },
+  });
+  await fixture.router.accept({ jsonrpc: "2.0", method: "storage.set", params: { key: "x", value: 1 } });
+  await fixture.router.accept({ jsonrpc: "2.0", id: "log", method: "log.write", params: {} });
+  assert.deepEqual(calls, []);
+  assert.equal(fixture.sent[0].error.code, RPC_ERRORS.methodNotFound);
+  await fixture.router.accept({ jsonrpc: "2.0", id: "write", method: "storage.set", params: {} });
+  await fixture.router.accept({ jsonrpc: "2.0", method: "log.write", params: {} });
+  assert.deepEqual(calls, ["request", "notification"]);
+});
+
+test("closing the router aborts in-flight notification handlers", async () => {
+  let observedSignal;
+  const fixture = createRouter({
+    notificationHandlers: {
+      "events.consume": async (_params, context) => {
+        observedSignal = context.signal;
+        await new Promise((resolve, reject) => {
+          context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+        });
+      },
+    },
+  });
+  const accepting = fixture.router.accept({
+    jsonrpc: "2.0",
+    method: "events.consume",
+    params: {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  fixture.router.close();
+  await accepting;
+  assert.equal(observedSignal.aborted, true);
+  assert.equal(fixture.router.inflightNotifications.size, 0);
+});
+
+test("outgoing requests validate method-specific plugin results before resolving", async () => {
+  const fixture = createRouter();
+  const response = fixture.router.request("provider.invoke", {}, {
+    validateResult(result) {
+      if (result?.status !== "ok") throw new TypeError("Invalid provider result");
+      return Object.freeze({ ...result });
+    },
+  });
+  await fixture.router.accept({
+    jsonrpc: "2.0",
+    id: fixture.sent[0].id,
+    result: { status: "failed" },
+  });
+  await assert.rejects(response, /Invalid provider result/);
+  await assert.rejects(
+    fixture.router.request("provider.invoke", {}, { validateResult: true }),
+    /validator must be a function/,
+  );
+});
+
 test("malformed RPC closes the peer instead of accepting a near-match", async () => {
   const fixture = createRouter();
   await fixture.router.accept({ jsonrpc: "2.0", id: -1, method: "plugin.activate" });
   assert.equal(fixture.protocolErrors.length, 1);
   assert.equal(fixture.router.closed, true);
+});
+
+test("oversized control messages close the peer before dispatch", async () => {
+  let calls = 0;
+  const fixture = createRouter({
+    handlers: { "storage.set": () => { calls += 1; } },
+  });
+  await fixture.router.accept({
+    jsonrpc: "2.0",
+    id: "oversized",
+    method: "storage.set",
+    params: { key: "value", value: "x".repeat(PLUGIN_RPC_MAX_JSON_BYTES) },
+  });
+  assert.equal(calls, 0);
+  assert.equal(fixture.router.closed, true);
+  assert.match(fixture.protocolErrors[0].message, /exceeds/);
 });

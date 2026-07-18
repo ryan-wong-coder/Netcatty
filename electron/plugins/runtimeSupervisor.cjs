@@ -1,5 +1,6 @@
 "use strict";
 
+const { randomUUID } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -10,6 +11,11 @@ const {
   PLUGIN_CRASH_WINDOW_MS,
 } = require("./constants.cjs");
 const { PluginLogger } = require("./pluginLogger.cjs");
+const { PluginRpcError, RPC_ERRORS, raceWithAbort } = require("./rpcRouter.cjs");
+const {
+  assertHostMethod,
+  createDefaultPluginHostRpcRegistry,
+} = require("./hostRpcRegistry.cjs");
 const { UtilityPluginRuntime } = require("./utilityPluginRuntime.cjs");
 
 function assertStorageParams(params, options = {}) {
@@ -21,6 +27,12 @@ function assertStorageParams(params, options = {}) {
   }
   if (options.value && !Object.hasOwn(params, "value")) throw new TypeError("Plugin storage value is required");
   return params;
+}
+
+function freezeJson(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const item of Array.isArray(value) ? value : Object.values(value)) freezeJson(item);
+  return Object.freeze(value);
 }
 
 class RuntimeSupervisor {
@@ -35,13 +47,108 @@ class RuntimeSupervisor {
     this.supportedFeatures = [...(options.supportedFeatures ?? [])];
     this.runtimeDirectory = options.runtimeDirectory;
     this.appRoot = options.appRoot;
+    this.rpcRegistry = options.rpcRegistry ?? createDefaultPluginHostRpcRegistry({
+      assertStorageParams,
+      database: this.database,
+    });
+    this.resolveRuntimeKind = options.resolveRuntimeKind ?? (({ plugin }) => (
+      plugin.manifest.main.browser ? "browser" : "utility"
+    ));
+    this.utilityModuleMappings = options.utilityModuleMappings ?? {
+      "@netcatty/plugin-sdk": pathToFileURL(path.join(
+        this.appRoot, "node_modules", "@netcatty", "plugin-sdk", "dist", "index.js",
+      )).href,
+      "@netcatty/plugin-contract": pathToFileURL(path.join(
+        this.appRoot, "node_modules", "@netcatty", "plugin-contract", "dist", "index.js",
+      )).href,
+    };
     this.runtimeFactories = options.runtimeFactories ?? {
       browser: (runtimeOptions) => new BrowserPluginRuntime(runtimeOptions),
       utility: (runtimeOptions) => new UtilityPluginRuntime(runtimeOptions),
     };
     this.runtimes = new Map();
+    this.runtimeIdentities = new Map();
     this.starting = new Map();
+    this.startControllers = new Map();
+    this.stopping = new Map();
+    this.runtimeListeners = new Set();
+    this.progressListeners = new Set();
     this.shuttingDown = false;
+  }
+
+  onDidChangeRuntime(listener) {
+    if (typeof listener !== "function") throw new TypeError("Plugin runtime listener must be a function");
+    this.runtimeListeners.add(listener);
+    let disposed = false;
+    return Object.freeze({
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        this.runtimeListeners.delete(listener);
+      },
+    });
+  }
+
+  onDidReportProgress(listener) {
+    if (typeof listener !== "function") throw new TypeError("Plugin progress listener must be a function");
+    this.progressListeners.add(listener);
+    let disposed = false;
+    return Object.freeze({
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        this.progressListeners.delete(listener);
+      },
+    });
+  }
+
+  #emitProgress(identity, params) {
+    identity.assertCurrent();
+    const event = Object.freeze({
+      type: "runtime-progress",
+      pluginId: identity.pluginId,
+      pluginVersion: identity.pluginVersion,
+      runtimeId: identity.runtimeId,
+      runtimeKind: identity.runtimeKind,
+      token: params.token,
+      value: freezeJson(structuredClone(params.value)),
+    });
+    for (const listener of [...this.progressListeners]) {
+      try { listener(event); } catch {}
+    }
+  }
+
+  #emitRuntimeState(identity, status, details = {}) {
+    const event = Object.freeze({
+      type: "runtime-state",
+      pluginId: identity?.pluginId ?? details.pluginId,
+      pluginVersion: identity?.pluginVersion ?? details.pluginVersion ?? null,
+      runtimeId: identity?.runtimeId ?? null,
+      runtimeKind: identity?.runtimeKind ?? details.kind ?? null,
+      status,
+      error: details.error == null ? null : String(details.error),
+      quarantinedAt: details.quarantinedAt ?? null,
+    });
+    for (const listener of [...this.runtimeListeners]) {
+      try { listener(event); } catch {}
+    }
+  }
+
+  #isInstalledVersion(identity) {
+    return Boolean(identity && this.database.getVersion(identity.pluginId, identity.pluginVersion));
+  }
+
+  #setRuntimeState(identity, status, details = {}) {
+    const pluginId = identity?.pluginId ?? details.pluginId;
+    if (!identity || this.#isInstalledVersion(identity)) {
+      this.database.setRuntimeState(pluginId, status, {
+        pluginVersion: identity?.pluginVersion ?? details.pluginVersion,
+        kind: identity?.runtimeKind ?? details.kind,
+        error: details.error,
+        quarantinedAt: details.quarantinedAt,
+      });
+    }
+    this.#emitRuntimeState(identity, status, details);
   }
 
   async startEnabled() {
@@ -53,19 +160,32 @@ class RuntimeSupervisor {
 
   async start(pluginId) {
     if (this.shuttingDown) throw new Error("Plugin runtime supervisor is shutting down");
-    if (this.runtimes.has(pluginId)) return this.runtimes.get(pluginId);
+    const stopping = this.stopping.get(pluginId);
+    if (stopping) await stopping;
+    if (this.shuttingDown) throw new Error("Plugin runtime supervisor is shutting down");
     if (this.starting.has(pluginId)) return this.starting.get(pluginId);
-    const promise = this.#start(pluginId).finally(() => this.starting.delete(pluginId));
+    if (this.runtimes.has(pluginId)) {
+      await this.#getRunningRuntime(pluginId);
+      return this.getRuntimeIdentity(pluginId);
+    }
+    const controller = new AbortController();
+    const promise = this.#start(pluginId, controller.signal).finally(() => {
+      this.starting.delete(pluginId);
+      this.startControllers.delete(pluginId);
+    });
     this.starting.set(pluginId, promise);
+    this.startControllers.set(pluginId, controller);
     return promise;
   }
 
-  async #start(pluginId) {
+  async #start(pluginId, signal) {
+    signal.throwIfAborted();
     const plugin = this.database.getActivePlugin(pluginId);
     if (!plugin?.manifest || !plugin.packageRelativePath) throw new Error(`Plugin is not installed: ${pluginId}`);
     if (!plugin.enabled) throw new Error(`Plugin is disabled: ${pluginId}`);
     if (plugin.runtime.quarantinedAt != null) throw new Error(`Plugin is quarantined: ${pluginId}`);
     const pluginCli = await import("@netcatty/plugin-cli");
+    signal.throwIfAborted();
     const compatibility = pluginCli.checkPluginCompatibility(plugin.manifest, {
       netcattyVersion: this.netcattyVersion,
       apiVersion: this.apiVersion,
@@ -73,21 +193,66 @@ class RuntimeSupervisor {
     });
     if (!compatibility.compatible) throw new Error(`Plugin is incompatible: ${compatibility.errors.join("; ")}`);
     const packageRoot = this.packageStore.resolvePackageRoot(plugin);
-    const kind = plugin.manifest.main.browser ? "browser" : "utility";
+    const availableKinds = Object.freeze([
+      ...(plugin.manifest.main.browser ? ["browser"] : []),
+      ...(plugin.manifest.main.node ? ["utility"] : []),
+    ]);
+    const placementPlugin = freezeJson(structuredClone(plugin));
+    const kind = await raceWithAbort(Promise.resolve(this.resolveRuntimeKind(Object.freeze({
+      plugin: placementPlugin,
+      availableKinds,
+      signal,
+    }))), signal);
+    signal.throwIfAborted();
+    if ((kind !== "browser" && kind !== "utility") || !availableKinds.includes(kind)) {
+      throw new Error(`Plugin runtime selection is unavailable: ${String(kind)}`);
+    }
+    const currentPlugin = this.database.getActivePlugin(pluginId);
+    if (
+      !currentPlugin?.enabled
+      || currentPlugin.activeVersion !== plugin.activeVersion
+      || currentPlugin.runtime.quarantinedAt != null
+    ) {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, "Plugin changed while runtime placement was resolved");
+    }
     const logger = new PluginLogger({ pluginId, logsDirectory: this.paths.logs });
-    const handlers = this.#createHandlers(pluginId, logger);
-    const onExit = (details) => { void this.#handleExit(pluginId, runtime, details); };
+    let runtime;
+    const identity = Object.freeze({
+      pluginId,
+      pluginVersion: plugin.activeVersion,
+      runtimeId: randomUUID(),
+      runtimeKind: kind,
+      manifest: freezeJson(structuredClone(plugin.manifest)),
+      packageRoot,
+      logger,
+      assertCurrent: () => {
+        const active = this.database.getActivePlugin(pluginId);
+        if (
+          this.runtimes.get(pluginId) !== runtime
+          || !active?.enabled
+          || active.activeVersion !== plugin.activeVersion
+          || (active.runtime.status !== "starting" && active.runtime.status !== "running")
+        ) {
+          throw new PluginRpcError(RPC_ERRORS.unavailable, "Plugin runtime identity is stale or inactive");
+        }
+      },
+    });
+    const routes = this.rpcRegistry.createRoutes(identity);
+    const onExit = (details) => { void this.#handleExit(pluginId, runtime, identity, details); };
     const onProtocolError = (error) => logger.write("error", "Plugin protocol violation", {
       error: error?.message ?? String(error),
     });
-    const runtime = kind === "browser"
+    runtime = kind === "browser"
       ? this.runtimeFactories.browser({
           electron: this.electron,
           protocol: this.protocol,
           plugin,
           packageRoot,
           preloadPath: path.join(this.runtimeDirectory, "browserPreload.cjs"),
-          handlers,
+          requestHandlers: routes.requestHandlers,
+          notificationHandlers: routes.notificationHandlers,
+          onIncomingStream: routes.onIncomingStream,
+          onProgress: (params) => this.#emitProgress(identity, params),
           logger,
           onExit,
           onProtocolError,
@@ -97,30 +262,27 @@ class RuntimeSupervisor {
           plugin,
           packageRoot,
           bootstrapPath: path.join(this.runtimeDirectory, "utilityRuntime.mjs"),
-          moduleMappings: {
-            "@netcatty/plugin-sdk": pathToFileURL(path.join(
-              this.appRoot, "node_modules", "@netcatty", "plugin-sdk", "dist", "index.js",
-            )).href,
-            "@netcatty/plugin-contract": pathToFileURL(path.join(
-              this.appRoot, "node_modules", "@netcatty", "plugin-contract", "dist", "index.js",
-            )).href,
-          },
-          handlers,
+          moduleMappings: this.utilityModuleMappings,
+          requestHandlers: routes.requestHandlers,
+          notificationHandlers: routes.notificationHandlers,
+          onIncomingStream: routes.onIncomingStream,
+          onProgress: (params) => this.#emitProgress(identity, params),
           logger,
           onExit,
           onProtocolError,
         });
     this.runtimes.set(pluginId, runtime);
-    this.database.setRuntimeState(pluginId, "starting", { kind });
+    this.runtimeIdentities.set(pluginId, identity);
+    this.#setRuntimeState(identity, "starting");
     try {
-      const initialized = await runtime.start({
+      const initialized = await raceWithAbort(Promise.resolve(runtime.start({
         pluginId,
         pluginVersion: plugin.activeVersion,
         netcattyVersion: this.netcattyVersion,
         apiVersion: this.apiVersion,
         supportedFeatures: this.supportedFeatures,
         enabledFeatures: compatibility.enabledFeatures,
-      });
+      }, { signal })), signal);
       if (
         initialized.pluginId !== pluginId
         || initialized.pluginVersion !== plugin.activeVersion
@@ -130,91 +292,91 @@ class RuntimeSupervisor {
       ) {
         throw new Error("Plugin initialization identity or feature negotiation mismatch");
       }
-      this.database.setRuntimeState(pluginId, "running", { kind });
-      return runtime;
+      identity.assertCurrent();
+      this.#setRuntimeState(identity, "running");
+      return this.getRuntimeIdentity(pluginId);
     } catch (error) {
       const stillOwned = this.runtimes.get(pluginId) === runtime;
-      if (stillOwned) this.runtimes.delete(pluginId);
-      try { await runtime.stop(); } catch {}
-      if (stillOwned) await this.#recordFailure(pluginId, kind, error);
+      if (stillOwned) {
+        this.runtimes.delete(pluginId);
+        this.runtimeIdentities.delete(pluginId);
+        try { await runtime.stop(); } catch {}
+      }
+      if (stillOwned) await this.#recordFailure(identity, error);
       throw error;
     }
   }
 
-  #createHandlers(pluginId, logger) {
-    return {
-      "storage.get": async (params) => {
-        const { key } = assertStorageParams(params);
-        const value = this.database.getValue(pluginId, key);
-        return value === undefined ? { found: false } : { found: true, value };
-      },
-      "storage.set": async (params) => {
-        const { key, value } = assertStorageParams(params, { value: true });
-        this.database.setValue(pluginId, key, value);
-        return null;
-      },
-      "storage.delete": async (params) => {
-        const { key } = assertStorageParams(params);
-        this.database.deleteValue(pluginId, key);
-        return null;
-      },
-      "storage.keys": async (params) => {
-        if (params && (typeof params !== "object" || Array.isArray(params) || Object.keys(params).length > 0)) {
-          throw new TypeError("storage.keys does not accept parameters");
-        }
-        return { keys: this.database.listKeys(pluginId) };
-      },
-      "log.write": async (params) => {
-        if (!params || typeof params !== "object" || Array.isArray(params)) return;
-        await logger.write(params.level, params.message, params.fields);
-      },
-    };
-  }
-
-  async #handleExit(pluginId, runtime, details) {
+  async #handleExit(pluginId, runtime, identity, details) {
     if (this.runtimes.get(pluginId) !== runtime) return;
     this.runtimes.delete(pluginId);
+    this.runtimeIdentities.delete(pluginId);
     if (details.expected || this.shuttingDown) {
-      this.database.setRuntimeState(pluginId, "stopped");
+      this.#setRuntimeState(identity, "stopped");
       return;
     }
-    const plugin = this.database.getActivePlugin(pluginId);
-    await this.#recordFailure(pluginId, plugin?.runtime?.kind, details.error);
+    await this.#recordFailure(identity, details.error);
   }
 
-  async #recordFailure(pluginId, kind, error) {
+  async #recordFailure(identity, error) {
+    const pluginId = identity.pluginId;
+    if (!this.#isInstalledVersion(identity)) {
+      this.#emitRuntimeState(identity, "error", {
+        error: error?.message ?? String(error),
+      });
+      return;
+    }
     const crash = this.database.recordCrash(
       pluginId,
+      identity.pluginVersion,
       PLUGIN_CRASH_WINDOW_MS,
       PLUGIN_CRASH_QUARANTINE_THRESHOLD,
     );
-    this.database.setRuntimeState(pluginId, crash.quarantined ? "quarantined" : "error", {
-      kind,
+    this.#setRuntimeState(identity, crash.quarantined ? "quarantined" : "error", {
       error: error?.message ?? String(error),
       quarantinedAt: crash.quarantinedAt,
     });
   }
 
-  async stop(pluginId) {
+  stop(pluginId) {
+    if (this.stopping.has(pluginId)) return this.stopping.get(pluginId);
+    const promise = this.#stop(pluginId).finally(() => this.stopping.delete(pluginId));
+    this.stopping.set(pluginId, promise);
+    return promise;
+  }
+
+  async #stop(pluginId) {
     const starting = this.starting.get(pluginId);
-    if (starting) {
-      try { await starting; } catch {}
-    }
+    this.startControllers.get(pluginId)?.abort(new PluginRpcError(
+      RPC_ERRORS.cancelled,
+      `Plugin startup was stopped: ${pluginId}`,
+    ));
     const plugin = this.database.getActivePlugin(pluginId);
     const runtime = this.runtimes.get(pluginId);
+    const identity = this.runtimeIdentities.get(pluginId);
     if (!runtime) {
-      if (plugin && plugin.runtime.quarantinedAt == null) this.database.setRuntimeState(pluginId, "stopped");
+      if (starting) {
+        try { await starting; } catch {}
+      }
+      if (plugin && plugin.runtime.quarantinedAt == null && plugin.runtime.status !== "stopped") {
+        this.#setRuntimeState(identity, "stopped", {
+          pluginId,
+          pluginVersion: plugin.activeVersion,
+          kind: plugin.runtime.kind,
+        });
+      }
       return;
     }
     this.runtimes.delete(pluginId);
+    this.runtimeIdentities.delete(pluginId);
     let stopError;
     try {
       await runtime.stop();
     } catch (error) {
       stopError = error;
     } finally {
-      this.database.setRuntimeState(pluginId, "stopped", {
-        kind: plugin.runtime?.kind,
+      this.#setRuntimeState(identity, "stopped", {
+        kind: plugin?.runtime?.kind,
         error: stopError?.message,
       });
     }
@@ -226,11 +388,96 @@ class RuntimeSupervisor {
     return this.start(pluginId);
   }
 
+  getRuntimeIdentity(pluginId) {
+    const identity = this.runtimeIdentities.get(pluginId);
+    if (!identity) return null;
+    return Object.freeze({
+      pluginId: identity.pluginId,
+      pluginVersion: identity.pluginVersion,
+      runtimeId: identity.runtimeId,
+      runtimeKind: identity.runtimeKind,
+    });
+  }
+
+  async #getRunningRuntime(pluginId) {
+    const starting = this.starting.get(pluginId);
+    if (starting) await starting;
+    const runtime = this.runtimes.get(pluginId);
+    const identity = this.runtimeIdentities.get(pluginId);
+    if (!runtime || !identity) {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime is unavailable: ${pluginId}`);
+    }
+    const active = this.database.getActivePlugin(pluginId);
+    if (
+      !active?.enabled
+      || active.activeVersion !== identity.pluginVersion
+      || active.runtime.status !== "running"
+    ) {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime identity is stale or inactive: ${pluginId}`);
+    }
+    return { identity, runtime };
+  }
+
+  async request(pluginId, method, params, options) {
+    assertHostMethod(method);
+    const { identity, runtime } = await this.#getRunningRuntime(pluginId);
+    if (typeof runtime.request !== "function") {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime cannot receive requests: ${pluginId}`);
+    }
+    const result = await runtime.request(method, params, options);
+    const current = await this.#getRunningRuntime(pluginId);
+    if (current.runtime !== runtime || current.identity.runtimeId !== identity.runtimeId) {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime changed while handling request: ${pluginId}`);
+    }
+    return result;
+  }
+
+  async notify(pluginId, method, params) {
+    assertHostMethod(method);
+    const { identity, runtime } = await this.#getRunningRuntime(pluginId);
+    if (typeof runtime.notify !== "function") {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime cannot receive notifications: ${pluginId}`);
+    }
+    runtime.notify(method, params);
+    const current = await this.#getRunningRuntime(pluginId);
+    if (current.runtime !== runtime || current.identity.runtimeId !== identity.runtimeId) {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime changed while sending notification: ${pluginId}`);
+    }
+  }
+
+  async openStream(pluginId, streamId, windowBytes) {
+    const { identity, runtime } = await this.#getRunningRuntime(pluginId);
+    if (typeof runtime.openStream !== "function") {
+      throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime cannot receive streams: ${pluginId}`);
+    }
+    const stream = await runtime.openStream(streamId, windowBytes);
+    try {
+      const current = await this.#getRunningRuntime(pluginId);
+      if (current.runtime !== runtime || current.identity.runtimeId !== identity.runtimeId) {
+        throw new PluginRpcError(RPC_ERRORS.unavailable, `Plugin runtime changed while opening stream: ${pluginId}`);
+      }
+      return stream;
+    } catch (error) {
+      try { stream?.cancel?.(); } catch {}
+      throw error;
+    }
+  }
+
   async shutdown() {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    for (const [pluginId, controller] of this.startControllers) {
+      controller.abort(new PluginRpcError(
+        RPC_ERRORS.unavailable,
+        `Plugin runtime supervisor is shutting down: ${pluginId}`,
+      ));
+    }
     await Promise.allSettled([...this.runtimes.keys()].map((pluginId) => this.stop(pluginId)));
+    await Promise.allSettled([...this.starting.values()]);
+    await Promise.allSettled([...this.stopping.values()]);
+    this.runtimeListeners.clear();
+    this.progressListeners.clear();
   }
 }
 
-module.exports = { RuntimeSupervisor, assertStorageParams };
+module.exports = { RuntimeSupervisor, assertStorageParams, freezeJson };

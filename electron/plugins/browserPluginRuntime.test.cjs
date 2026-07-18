@@ -132,6 +132,10 @@ test("browser host waits for preload and the installed plugin RPC listener", asy
   assert.equal(downloadPrevented, true);
   await runtime.stop();
   assert.equal(sessionDisposed, true);
+  assert.doesNotThrow(() => port1.emit("message", { data: {
+    jsonrpc: "2.0",
+    method: "late.notification",
+  } }));
 });
 
 test("browser console levels and source paths are normalized without runtime tokens", () => {
@@ -145,4 +149,39 @@ test("browser console levels and source paths are normalized without runtime tok
     sanitizePluginSource("netcatty-plugin://secret-runtime-token/package/dist/index.js"),
     "/package/dist/index.js",
   );
+});
+
+test("aborted browser startup cannot create a window after proxy setup resumes", async () => {
+  let releaseProxy;
+  const proxyBlocked = new Promise((resolve) => { releaseProxy = resolve; });
+  const pluginSession = new EventEmitter();
+  pluginSession.protocol = { handle() {}, unhandle() {} };
+  pluginSession.setProxy = () => proxyBlocked;
+  let windows = 0;
+  const runtime = new BrowserPluginRuntime({
+    electron: {
+      BrowserWindow: class { constructor() { windows += 1; } },
+      MessageChannelMain: class {},
+      session: { fromPartition: () => pluginSession },
+    },
+    protocol: {
+      registerSession: () => ({ dispose() {} }),
+      registerRuntime: () => ({ token: "token", dispose() {} }),
+    },
+    plugin: {
+      id: "com.example.cancelled-browser",
+      manifest: { main: { browser: "dist/index.js" } },
+    },
+    packageRoot: "/plugins/cancelled/package",
+    preloadPath: "/runtime/browserPreload.cjs",
+    handlers: {},
+  });
+  const controller = new AbortController();
+  const starting = runtime.start({}, { signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort(new Error("cancelled"));
+  await runtime.stop();
+  releaseProxy();
+  await assert.rejects(starting, /cancelled/);
+  assert.equal(windows, 0);
 });
