@@ -141,12 +141,17 @@ class PluginManager {
 
   async #shutdown() {
     this.shuttingDown = true;
+    let supervisorError;
+    const supervisorShutdown = Promise.resolve()
+      .then(() => this.runtimeSupervisor.shutdown())
+      .catch((error) => { supervisorError = error; });
     await this.mutationTail;
     if (this.initializePromise) {
       try { await this.initializePromise; } catch {}
     }
-    await this.runtimeSupervisor.shutdown();
+    await supervisorShutdown;
     this.database.close();
+    if (supervisorError) throw supervisorError;
   }
 }
 

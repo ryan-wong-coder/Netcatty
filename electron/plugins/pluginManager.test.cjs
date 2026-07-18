@@ -394,3 +394,51 @@ test("concurrent shutdown callers share one complete shutdown operation", async 
   assert.equal(supervisorShutdowns, 1);
   assert.equal(databaseCloses, 1);
 });
+
+test("shutdown cancels an in-flight runtime mutation before waiting for its queue", async () => {
+  const calls = [];
+  let rejectStart;
+  let markStartEntered;
+  const startEntered = new Promise((resolve) => { markStartEntered = resolve; });
+  const pluginId = "com.example.shutdown-placement";
+  const manager = new PluginManager({
+    database: {
+      close() { calls.push("database:close"); },
+      getActivePlugin: () => ({
+        id: pluginId,
+        activeVersion: "1.0.0",
+        enabled: false,
+        runtime: { quarantinedAt: null },
+      }),
+      listPlugins: () => [],
+      setEnabled(_id, enabled) { calls.push(`enabled:${enabled}`); },
+    },
+    packageStore: { async initialize() {} },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      start() {
+        calls.push("runtime:start");
+        markStartEntered();
+        return new Promise((_resolve, reject) => { rejectStart = reject; });
+      },
+      async shutdown() {
+        calls.push("runtime:shutdown");
+        rejectStart(new Error("placement cancelled by shutdown"));
+      },
+    },
+  });
+  await manager.initialize();
+
+  const enabling = manager.setEnabled(pluginId, true);
+  await startEntered;
+  const shuttingDown = manager.shutdown();
+  await assert.rejects(enabling, /placement cancelled by shutdown/);
+  await shuttingDown;
+  assert.deepEqual(calls, [
+    "enabled:true",
+    "runtime:start",
+    "runtime:shutdown",
+    "enabled:false",
+    "database:close",
+  ]);
+});

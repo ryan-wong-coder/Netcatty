@@ -611,6 +611,47 @@ test("containment failure disables the plugin and blocks replacement activation 
     /restart Netcatty before starting it again/,
   );
   assert.equal(factoryCalls, 1);
+  const stillQuarantined = fixture.database.getActivePlugin(fixture.manifest.id);
+  assert.equal(stillQuarantined.enabled, false);
+  assert.equal(stillQuarantined.runtime.status, "quarantined");
+  assert.notEqual(stillQuarantined.runtime.quarantinedAt, null);
+});
+
+test("startup cleanup containment failure blocks replacement activation", async (context) => {
+  let factoryCalls = 0;
+  const fixture = createFixture(context, () => {
+    factoryCalls += 1;
+    return {
+      async start() {
+        throw new Error("activation failed");
+      },
+      async stop() {
+        throw createContainmentError("failed startup process was not reaped");
+      },
+    };
+  });
+
+  await assert.rejects(
+    fixture.supervisor.start(fixture.manifest.id),
+    /failed startup process was not reaped/,
+  );
+  let plugin = fixture.database.getActivePlugin(fixture.manifest.id);
+  assert.equal(plugin.enabled, false);
+  assert.equal(plugin.runtime.status, "quarantined");
+  assert.match(plugin.runtime.lastError, /failed startup process was not reaped/);
+  assert.notEqual(plugin.runtime.quarantinedAt, null);
+
+  fixture.database.setEnabled(fixture.manifest.id, true);
+  fixture.database.clearQuarantine(fixture.manifest.id);
+  await assert.rejects(
+    fixture.supervisor.start(fixture.manifest.id),
+    /restart Netcatty before starting it again/,
+  );
+  assert.equal(factoryCalls, 1);
+  plugin = fixture.database.getActivePlugin(fixture.manifest.id);
+  assert.equal(plugin.enabled, false);
+  assert.equal(plugin.runtime.status, "quarantined");
+  assert.notEqual(plugin.runtime.quarantinedAt, null);
 });
 
 test("shutdown cancels unresolved placement and waits for startup cleanup", async (context) => {
@@ -631,6 +672,40 @@ test("shutdown cancels unresolved placement and waits for startup cleanup", asyn
   await fixture.supervisor.shutdown();
   await assert.rejects(pending, (error) => error?.code === -32014);
   assert.equal(signal.aborted, true);
+  assert.equal(fixture.supervisor.getRuntimeIdentity(fixture.manifest.id), null);
+});
+
+test("concurrent supervisor shutdown callers share complete runtime teardown", async (context) => {
+  let releaseStop;
+  let stopCalls = 0;
+  const stopReleased = new Promise((resolve) => { releaseStop = resolve; });
+  const fixture = createFixture(context, () => ({
+    async start(config) {
+      return {
+        pluginId: config.pluginId,
+        pluginVersion: config.pluginVersion,
+        apiVersion: config.apiVersion,
+        enabledFeatures: config.enabledFeatures,
+      };
+    },
+    async stop() {
+      stopCalls += 1;
+      await stopReleased;
+    },
+  }));
+  await fixture.supervisor.start(fixture.manifest.id);
+
+  const first = fixture.supervisor.shutdown();
+  const second = fixture.supervisor.shutdown();
+  assert.equal(first, second);
+  let secondSettled = false;
+  void second.finally(() => { secondSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(secondSettled, false);
+
+  releaseStop();
+  await Promise.all([first, second]);
+  assert.equal(stopCalls, 1);
   assert.equal(fixture.supervisor.getRuntimeIdentity(fixture.manifest.id), null);
 });
 

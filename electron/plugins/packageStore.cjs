@@ -142,6 +142,7 @@ class PackageStore {
     this.apiVersion = options.apiVersion;
     this.supportedFeatures = [...(options.supportedFeatures ?? [])];
     this.logger = options.logger ?? console;
+    this.syncDirectory = options.syncDirectory ?? syncDirectory;
     this.verifiedArchives = new Map();
   }
 
@@ -238,11 +239,11 @@ class PackageStore {
         contentSha256: validation.contentSha256,
       };
       await writeDurableMetadata(path.join(stagingDirectory, INSTALL_METADATA_FILE), metadata);
-      await syncDirectory(stagingDirectory);
+      await this.syncDirectory(stagingDirectory);
       await mkdir(path.dirname(targetDirectory), { recursive: true, mode: 0o700 });
       if (previousPlugin?.activeVersion !== version) await prepareActivation("switch-active-version");
       await rename(stagingDirectory, targetDirectory);
-      await syncDirectory(path.dirname(targetDirectory));
+      await this.syncDirectory(path.dirname(targetDirectory));
       const packageRelativePath = path.relative(
         this.paths.packages,
         path.join(targetDirectory, PACKAGE_DIRECTORY),
@@ -258,7 +259,7 @@ class PackageStore {
       } catch (error) {
         this.verifiedArchives.delete(this.#versionKey(pluginId, version));
         await rm(targetDirectory, { recursive: true, force: true });
-        await syncDirectory(path.dirname(targetDirectory));
+        await this.syncDirectory(path.dirname(targetDirectory));
         throw error;
       }
       this.verifiedArchives.set(this.#versionKey(pluginId, version), Object.freeze({
@@ -319,7 +320,7 @@ class PackageStore {
             throw new Error(`Pending plugin removal is incomplete: ${metadata.pluginId}`);
           }
           await rename(removedPluginPath, installedPluginPath);
-          await syncDirectory(this.paths.packages);
+          await this.syncDirectory(this.paths.packages);
         }
       }
       await rm(stagedPath, { recursive: true, force: true });
@@ -548,7 +549,8 @@ class PackageStore {
     try {
       await rename(pluginDirectory, removedPluginPath);
       moved = true;
-      await syncDirectory(removalDirectory);
+      await this.syncDirectory(removalDirectory);
+      await this.syncDirectory(this.paths.packages);
     } catch (error) {
       if (!(error && error.code === "ENOENT")) throw error;
     }
@@ -559,7 +561,7 @@ class PackageStore {
       if (moved) {
         try {
           await rename(removedPluginPath, pluginDirectory);
-          await syncDirectory(this.paths.packages);
+          await this.syncDirectory(this.paths.packages);
           restored = true;
         } catch {}
       }

@@ -42,7 +42,7 @@ async function createPackage(root, overrides = {}) {
   return { archive, manifest: pluginManifest };
 }
 
-function createStore(context) {
+function createStore(context, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-store-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const paths = createPluginPaths(root);
@@ -56,6 +56,7 @@ function createStore(context) {
     netcattyVersion: "0.0.0",
     apiVersion: "0.1.0-internal",
     supportedFeatures: [],
+    ...options,
   });
   return { root, paths, database, store };
 }
@@ -337,6 +338,26 @@ test("startup recovery completes or rolls back an interrupted uninstall", async 
   await assert.rejects(fs.promises.stat(completionDirectory), { code: "ENOENT" });
   await assert.rejects(fs.promises.stat(installedPluginPath), { code: "ENOENT" });
   assert.equal(fixture.database.getActivePlugin(installed.id), null);
+});
+
+test("uninstall syncs the package-store source before deleting its database row", async (context) => {
+  const synced = [];
+  const fixture = createStore(context, {
+    async syncDirectory(directory) { synced.push(directory); },
+  });
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  synced.length = 0;
+  const removePlugin = fixture.database.removePlugin.bind(fixture.database);
+  fixture.database.removePlugin = (pluginId) => {
+    assert.equal(pluginId, installed.id);
+    assert.equal(synced.at(-1), fixture.paths.packages);
+    removePlugin(pluginId);
+  };
+
+  assert.equal(await fixture.store.uninstall(installed.id), true);
+  assert.equal(synced.includes(fixture.paths.packages), true);
 });
 
 test("failed package validation removes every extracted staging file", async (context) => {

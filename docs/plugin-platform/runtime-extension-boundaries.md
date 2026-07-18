@@ -141,6 +141,10 @@ close handler; forced synchronous router shutdown contains a rejected cleanup
 promise so it cannot become an unhandled process rejection. Later provider code
 must still release consumed chunks promptly and must not retain a release
 callback as an application-level acknowledgement.
+An outgoing stream that has sent its terminal `end` retains only its bounded
+credit state until the peer releases the final chunks. Those ordinary late
+window updates retire the stream instead of being misclassified as protocol
+violations; writes remain closed as soon as `end` is sent.
 
 ## Placement, lifecycle, and packaged modules
 
@@ -154,6 +158,12 @@ shutdown cancel both a pending placement decision and an activation already in
 progress. Cancellation does not count as a plugin crash. A permission prompt
 introduced in phase 3 must honor this signal, so shutdown never waits for a
 renderer decision and no runtime can appear after the supervisor has closed.
+Manager shutdown starts supervisor cancellation before waiting for its serialized
+mutation queue, so a mutation currently blocked inside placement or activation
+cannot deadlock the quit path that is waiting for that same mutation.
+Concurrent manager or supervisor shutdown callers share the same completion
+promise. No caller may observe shutdown completion before runtime teardown and
+startup cancellation have both settled.
 Browser and utility runtimes recheck the same signal after every asynchronous
 resource-creation boundary; cancelling only the outer supervisor promise is not
 sufficient.
@@ -200,7 +210,7 @@ new protocol route. Plugin packages still cannot add mappings themselves.
 | PR 6 terminal pipeline | runtime identity and placement policy | direct MessagePort fast path, sensitive-input bypass, circuit breaker |
 | PR 7 connection/auth/import | requests, validated results, streams, crash containment | profiles, challenges, SecretLease, importer transactions |
 | PR 8 sync | streams, lifecycle identity, namespaced storage boundary | dynamic providers, encrypted sidecar, CRDT state and account baselines |
-| PR 9 distribution | retained immutable versions, placement resolver, module resources | signatures, trust, health checks, activation rollback, API 1.0 |
+| PR 9 distribution | retained immutable versions, compare-and-set restore, placement resolver, module resources | signatures, trust, health checks, audited update and user rollback policy, API 1.0 |
 
 ## Data-model decisions that must remain explicit
 

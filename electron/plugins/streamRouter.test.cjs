@@ -106,6 +106,44 @@ test("outgoing stream applies byte backpressure and ordered credit updates", asy
   );
 });
 
+test("outgoing JSON stream chunks preserve the exact contract shape", async () => {
+  const sent = [];
+  const router = new PluginStreamRouter({ send(message) { sent.push(message); } });
+  const stream = await router.openOutgoing("json-output", 1024);
+  const value = { nested: ["value", 1] };
+  const contract = await import("@netcatty/plugin-contract");
+
+  await stream.write(value);
+
+  assert.deepEqual(sent[1].frame.data, contract.createJsonStreamChunk(value));
+  assert.equal(Object.hasOwn(sent[1].frame.data, "transfer"), false);
+  assert.equal(Object.hasOwn(sent[1], "transfer"), false);
+});
+
+test("ended outgoing streams accept final receive credit before retiring", async () => {
+  const sent = [];
+  const router = new PluginStreamRouter({ send(message) { sent.push(message); } });
+  const stream = await router.openOutgoing("ended-output", 1024);
+  const contract = await import("@netcatty/plugin-contract");
+  const chunk = contract.createJsonStreamChunk({ final: true });
+  await stream.write({ final: true });
+
+  stream.end();
+  assert.equal(sent.at(-1).frame.kind, "end");
+  assert.equal(router.outgoing.has("ended-output"), true);
+  await assert.rejects(stream.write({ late: true }), /closed/);
+
+  await router.accept({
+    frame: {
+      streamId: "ended-output",
+      sequence: 0,
+      kind: "windowUpdate",
+      creditBytes: chunk.byteLength,
+    },
+  });
+  assert.equal(router.outgoing.has("ended-output"), false);
+});
+
 test("unhandled incoming streams are cancelled immediately", async () => {
   const sent = [];
   const router = new PluginStreamRouter({ send(message) { sent.push(message); } });

@@ -42,7 +42,8 @@ orphans are deleted.
 
 Uninstall uses the inverse two-phase move. The plugin directory first moves
 under a marked `staging/remove-*` transaction and the database row is deleted
-afterward. On restart, a remaining database row restores the directory, while
+after both rename parent directories have been synchronized. On restart, a
+remaining database row restores the directory, while
 an already-deleted row completes removal. A crash cannot leave a live database
 record pointing at a package that recovery discarded. A `remove-*` directory
 created before any package was moved is harmless debris and is deleted even if

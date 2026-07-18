@@ -130,7 +130,7 @@ class PluginStreamRouter {
     }
     if (frame.kind === "windowUpdate") {
       const outgoing = this.outgoing.get(frame.streamId);
-      if (!outgoing || outgoing.closed) throw new Error(`Unknown outgoing plugin stream: ${frame.streamId}`);
+      if (!outgoing) throw new Error(`Unknown outgoing plugin stream: ${frame.streamId}`);
       if (frame.sequence !== outgoing.lastUpdateSequence + 1) {
         throw new Error(`Out-of-order stream credit update: ${frame.streamId}`);
       }
@@ -139,6 +139,13 @@ class PluginStreamRouter {
       if (outgoing.availableBytes > outgoing.maxCreditBytes) {
         throw new Error(`Plugin stream credit exceeds its negotiated window: ${frame.streamId}`);
       }
+      if (outgoing.terminalKind === "end") {
+        if (outgoing.availableBytes === outgoing.maxCreditBytes) {
+          this.outgoing.delete(frame.streamId);
+        }
+        return;
+      }
+      if (outgoing.closed) throw new Error(`Unknown outgoing plugin stream: ${frame.streamId}`);
       this.#flushOutgoing(outgoing);
       return;
     }
@@ -260,6 +267,7 @@ class PluginStreamRouter {
       queue: [],
       queuedBytes: 0,
       closed: false,
+      terminalKind: null,
     };
     this.outgoing.set(streamId, state);
     try {
@@ -292,7 +300,7 @@ class PluginStreamRouter {
       }
       chunk = { encoding: "transfer", byteLength: buffer.byteLength, transfer: buffer };
     } else {
-      chunk = { ...contract.createJsonStreamChunk(data), transfer: undefined };
+      chunk = contract.createJsonStreamChunk(data);
     }
     if (state.queuedBytes + chunk.byteLength > state.maxCreditBytes) {
       throw new Error(`Plugin stream pending queue exceeds its negotiated window: ${state.streamId}`);
@@ -344,18 +352,27 @@ class PluginStreamRouter {
   #finishOutgoing(state, kind) {
     if (state.closed) return;
     state.closed = true;
-    this.outgoing.delete(state.streamId);
+    state.terminalKind = kind;
     const error = new Error(`Plugin stream ${kind}`);
+    let terminalSent = false;
     try {
       this.send(state.contract.createMessagePortStreamEnvelope({
         streamId: state.streamId,
         sequence: state.nextSequence,
         kind,
       }));
+      terminalSent = true;
     } finally {
       for (const pending of state.queue) pending.reject(error);
       state.queue.length = 0;
       state.queuedBytes = 0;
+      if (
+        !terminalSent
+        || kind !== "end"
+        || state.availableBytes === state.maxCreditBytes
+      ) {
+        this.outgoing.delete(state.streamId);
+      }
     }
   }
 

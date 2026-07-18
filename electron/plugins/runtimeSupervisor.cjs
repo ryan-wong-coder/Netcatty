@@ -82,6 +82,7 @@ class RuntimeSupervisor {
     this.progressListeners = new Set();
     this.uncontainedPlugins = new Set();
     this.shuttingDown = false;
+    this.shutdownPromise = null;
   }
 
   onDidChangeRuntime(listener) {
@@ -169,10 +170,7 @@ class RuntimeSupervisor {
   async start(pluginId) {
     if (this.shuttingDown) throw new Error("Plugin runtime supervisor is shutting down");
     if (this.uncontainedPlugins.has(pluginId)) {
-      throw new PluginRpcError(
-        RPC_ERRORS.unavailable,
-        `Plugin runtime containment failed; restart Netcatty before starting it again: ${pluginId}`,
-      );
+      throw this.#restoreContainmentBlock(pluginId);
     }
     const stopping = this.stopping.get(pluginId);
     if (stopping) await stopping;
@@ -318,14 +316,50 @@ class RuntimeSupervisor {
       return this.getRuntimeIdentity(pluginId);
     } catch (error) {
       const stillOwned = this.runtimes.get(pluginId) === runtime;
+      let cleanupError;
       if (stillOwned) {
         this.runtimes.delete(pluginId);
         this.runtimeIdentities.delete(pluginId);
-        try { await runtime.stop(); } catch {}
+        try { await runtime.stop(); } catch (stopError) { cleanupError = stopError; }
+      }
+      if (stillOwned && cleanupError?.code === PLUGIN_CONTAINMENT_ERROR_CODE) {
+        this.#recordContainmentFailure(identity, cleanupError);
+        throw cleanupError;
       }
       if (stillOwned) await this.#recordFailure(identity, error);
       throw error;
     }
+  }
+
+  #restoreContainmentBlock(pluginId) {
+    const error = new PluginRpcError(
+      RPC_ERRORS.unavailable,
+      `Plugin runtime containment failed; restart Netcatty before starting it again: ${pluginId}`,
+    );
+    const active = this.database.getActivePlugin(pluginId);
+    if (active?.activeVersion) {
+      if (active.enabled) this.database.setEnabled(pluginId, false);
+      this.#setRuntimeState(null, "quarantined", {
+        pluginId,
+        pluginVersion: active.activeVersion,
+        kind: active.runtime.kind,
+        error: active.runtime.lastError ?? error.message,
+        quarantinedAt: active.runtime.quarantinedAt ?? Date.now(),
+      });
+    }
+    return error;
+  }
+
+  #recordContainmentFailure(identity, error) {
+    this.uncontainedPlugins.add(identity.pluginId);
+    const active = this.database.getActivePlugin(identity.pluginId);
+    if (active?.activeVersion === identity.pluginVersion && active.enabled) {
+      this.database.setEnabled(identity.pluginId, false);
+    }
+    this.#setRuntimeState(identity, "quarantined", {
+      error: error?.message ?? String(error),
+      quarantinedAt: Date.now(),
+    });
   }
 
   async #handleExit(pluginId, runtime, identity, details) {
@@ -333,15 +367,7 @@ class RuntimeSupervisor {
     this.runtimes.delete(pluginId);
     this.runtimeIdentities.delete(pluginId);
     if (details.containmentFailed) {
-      this.uncontainedPlugins.add(pluginId);
-      const active = this.database.getActivePlugin(pluginId);
-      if (active?.activeVersion === identity.pluginVersion && active.enabled) {
-        this.database.setEnabled(pluginId, false);
-      }
-      this.#setRuntimeState(identity, "quarantined", {
-        error: details.error?.message ?? String(details.error),
-        quarantinedAt: Date.now(),
-      });
+      this.#recordContainmentFailure(identity, details.error);
       return;
     }
     if (details.expected || this.shuttingDown) {
@@ -409,18 +435,7 @@ class RuntimeSupervisor {
       stopError = error;
     } finally {
       if (stopError?.code === PLUGIN_CONTAINMENT_ERROR_CODE) {
-        this.uncontainedPlugins.add(pluginId);
-        const active = this.database.getActivePlugin(pluginId);
-        if (active?.activeVersion === identity?.pluginVersion && active.enabled) {
-          this.database.setEnabled(pluginId, false);
-        }
-        this.#setRuntimeState(identity, "quarantined", {
-          pluginId,
-          pluginVersion: identity?.pluginVersion ?? plugin?.activeVersion,
-          kind: plugin?.runtime?.kind,
-          error: stopError.message,
-          quarantinedAt: Date.now(),
-        });
+        this.#recordContainmentFailure(identity, stopError);
       } else {
         this.#setRuntimeState(identity, "stopped", {
           kind: plugin?.runtime?.kind,
@@ -512,8 +527,12 @@ class RuntimeSupervisor {
     }
   }
 
-  async shutdown() {
-    if (this.shuttingDown) return;
+  shutdown() {
+    this.shutdownPromise ??= this.#shutdown();
+    return this.shutdownPromise;
+  }
+
+  async #shutdown() {
     this.shuttingDown = true;
     for (const [pluginId, controller] of this.startControllers) {
       controller.abort(new PluginRpcError(
