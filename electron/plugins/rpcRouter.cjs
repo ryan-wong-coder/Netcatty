@@ -1,0 +1,342 @@
+"use strict";
+
+const { randomUUID } = require("node:crypto");
+
+const {
+  PLUGIN_RPC_DEFAULT_TIMEOUT_MS,
+  PLUGIN_RPC_MAX_PENDING,
+} = require("./constants.cjs");
+const { assertInitializeResult, assertRpcMessage } = require("./contractValidator.cjs");
+const { PluginStreamRouter } = require("./streamRouter.cjs");
+
+const RPC_ERRORS = Object.freeze({
+  methodNotFound: -32601,
+  invalidParams: -32602,
+  internal: -32603,
+  cancelled: -32001,
+  deadlineExceeded: -32004,
+  resourceExhausted: -32008,
+  unavailable: -32014,
+});
+
+class PluginRpcError extends Error {
+  constructor(code, message, data) {
+    super(message);
+    this.name = "PluginRpcError";
+    this.code = code;
+    this.data = data;
+  }
+}
+
+function rpcIdKey(id) {
+  return `${typeof id}:${String(id)}`;
+}
+
+function toRpcError(error) {
+  if (error instanceof PluginRpcError) {
+    return {
+      code: error.code,
+      message: error.message.slice(0, 2_048) || "Plugin RPC failed",
+      ...(error.data === undefined ? {} : { data: error.data }),
+    };
+  }
+  return { code: RPC_ERRORS.internal, message: "Plugin host request failed" };
+}
+
+function raceWithAbort(operation, signal) {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+class PluginRpcRouter {
+  constructor(options) {
+    this.pluginId = options.pluginId;
+    this.send = options.send;
+    this.handlers = new Map(Object.entries(options.handlers ?? {}));
+    this.pending = new Map();
+    this.pendingCancellationIds = new Set();
+    this.inflight = new Map();
+    this.inflightIds = new Set();
+    this.nextId = 0;
+    this.closed = false;
+    this.maxPending = options.maxPending ?? PLUGIN_RPC_MAX_PENDING;
+    this.defaultTimeoutMs = options.defaultTimeoutMs ?? PLUGIN_RPC_DEFAULT_TIMEOUT_MS;
+    this.onProtocolError = options.onProtocolError ?? (() => {});
+    this.progress = options.onProgress ?? (() => {});
+    this.streams = new PluginStreamRouter({
+      send: (message, transfer) => this.send(message, transfer),
+      onIncomingStream: options.onIncomingStream,
+      maxStreams: this.maxPending,
+    });
+    this.streamChain = Promise.resolve();
+  }
+
+  #sendRpc(message) {
+    assertRpcMessage(message);
+    this.send(message);
+  }
+
+  #sendFailure(id, error) {
+    try {
+      this.#sendRpc({ jsonrpc: "2.0", id, error: toRpcError(error) });
+    } catch {
+      this.#sendRpc({
+        jsonrpc: "2.0",
+        id,
+        error: { code: RPC_ERRORS.internal, message: "Plugin host request failed" },
+      });
+    }
+  }
+
+  #allocateRequestId() {
+    for (let attempt = 0; attempt <= this.maxPending; attempt += 1) {
+      const id = this.nextId;
+      this.nextId = this.nextId === Number.MAX_SAFE_INTEGER ? 0 : this.nextId + 1;
+      if (!this.pending.has(rpcIdKey(id))) return id;
+    }
+    throw new PluginRpcError(RPC_ERRORS.resourceExhausted, "No RPC correlation ID is available");
+  }
+
+  #allocateCancellationId() {
+    let cancellationId;
+    do cancellationId = `host-${randomUUID()}`;
+    while (this.pendingCancellationIds.has(cancellationId));
+    return cancellationId;
+  }
+
+  #forgetPending(id, pending) {
+    this.pending.delete(rpcIdKey(id));
+    this.pendingCancellationIds.delete(pending.cancellationId);
+    clearTimeout(pending.timer);
+    pending.abortCleanup?.();
+  }
+
+  accept(rawMessage) {
+    return this.#accept(rawMessage)
+      .catch((error) => {
+        this.onProtocolError(error);
+        this.close(error);
+      });
+  }
+
+  async #accept(rawMessage) {
+    if (this.closed) return;
+    const message = rawMessage;
+    if (message && typeof message === "object" && Object.hasOwn(message, "frame")) {
+      this.streamChain = this.streamChain.then(() => this.streams.accept(message));
+      await this.streamChain;
+      return;
+    }
+    assertRpcMessage(message);
+    if (Object.hasOwn(message, "id") && (Object.hasOwn(message, "result") || Object.hasOwn(message, "error"))) {
+      this.#acceptResponse(message);
+      return;
+    }
+    if (message.method === "$/progress") {
+      this.progress(message.params);
+      return;
+    }
+    if (message.method === "$/cancelRequest") {
+      this.#cancelInflight(message.params.cancellationId);
+      return;
+    }
+    if (Object.hasOwn(message, "id")) {
+      await this.#acceptRequest(message);
+      return;
+    }
+    await this.#acceptNotification(message);
+  }
+
+  #acceptResponse(message) {
+    const key = rpcIdKey(message.id);
+    const pending = this.pending.get(key);
+    if (!pending) throw new Error(`Plugin returned an unknown RPC response ID: ${String(message.id)}`);
+    this.#forgetPending(message.id, pending);
+    if (Object.hasOwn(message, "error")) {
+      pending.reject(new PluginRpcError(message.error.code, message.error.message, message.error.data));
+      return;
+    }
+    try {
+      const result = pending.method === "plugin.initialize"
+        ? assertInitializeResult(message.result)
+        : message.result;
+      pending.resolve(result);
+    } catch (error) {
+      pending.reject(error);
+    }
+  }
+
+  async #acceptRequest(message) {
+    if (this.inflight.size >= this.maxPending) {
+      this.#sendRpc({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: RPC_ERRORS.resourceExhausted, message: "Too many in-flight plugin requests" },
+      });
+      return;
+    }
+    const handler = this.handlers.get(message.method);
+    if (!handler) {
+      this.#sendRpc({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: RPC_ERRORS.methodNotFound, message: `Unsupported plugin method: ${message.method}` },
+      });
+      return;
+    }
+    const requestIdKey = rpcIdKey(message.id);
+    if (this.inflightIds.has(requestIdKey)) {
+      this.#sendFailure(message.id, new PluginRpcError(
+        RPC_ERRORS.invalidParams,
+        "Duplicate in-flight plugin request ID",
+      ));
+      return;
+    }
+    let cancellationId = message.cancellationId;
+    if (cancellationId && this.inflight.has(cancellationId)) {
+      this.#sendFailure(message.id, new PluginRpcError(
+        RPC_ERRORS.invalidParams,
+        "Duplicate in-flight plugin cancellation ID",
+      ));
+      return;
+    }
+    if (!cancellationId) {
+      do cancellationId = `host-${randomUUID()}`;
+      while (this.inflight.has(cancellationId));
+    }
+    const controller = new AbortController();
+    const timeoutMs = message.deadlineMs ?? this.defaultTimeoutMs;
+    const timer = setTimeout(() => controller.abort(new PluginRpcError(
+      RPC_ERRORS.deadlineExceeded,
+      "Plugin request deadline exceeded",
+    )), timeoutMs);
+    this.inflight.set(cancellationId, controller);
+    this.inflightIds.add(requestIdKey);
+    try {
+      const result = await raceWithAbort(Promise.resolve(handler(message.params, {
+        pluginId: this.pluginId,
+        signal: controller.signal,
+        cancellationId,
+      })), controller.signal);
+      this.#sendRpc({ jsonrpc: "2.0", id: message.id, result: result ?? null });
+    } catch (error) {
+      this.#sendFailure(message.id, error);
+    } finally {
+      clearTimeout(timer);
+      this.inflight.delete(cancellationId);
+      this.inflightIds.delete(requestIdKey);
+    }
+  }
+
+  async #acceptNotification(message) {
+    const handler = this.handlers.get(message.method);
+    if (!handler) return;
+    const signal = AbortSignal.timeout(this.defaultTimeoutMs);
+    await raceWithAbort(Promise.resolve(handler(message.params, {
+      pluginId: this.pluginId,
+      signal,
+    })), signal);
+  }
+
+  #cancelInflight(cancellationId) {
+    const controller = this.inflight.get(cancellationId);
+    controller?.abort(new PluginRpcError(RPC_ERRORS.cancelled, "Plugin request was cancelled"));
+  }
+
+  request(method, params, options = {}) {
+    if (this.closed) return Promise.reject(new PluginRpcError(RPC_ERRORS.unavailable, "Plugin runtime is closed"));
+    if (options.signal?.aborted) {
+      return Promise.reject(new PluginRpcError(RPC_ERRORS.cancelled, "Plugin request was cancelled"));
+    }
+    if (this.pending.size >= this.maxPending) {
+      return Promise.reject(new PluginRpcError(RPC_ERRORS.resourceExhausted, "Too many pending plugin requests"));
+    }
+    const id = this.#allocateRequestId();
+    const cancellationId = options.cancellationId ?? this.#allocateCancellationId();
+    if (this.pendingCancellationIds.has(cancellationId)) {
+      return Promise.reject(new PluginRpcError(
+        RPC_ERRORS.invalidParams,
+        "Plugin request cancellation ID is already in use",
+      ));
+    }
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+    const message = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      ...(params === undefined ? {} : { params }),
+      deadlineMs: timeoutMs,
+      cancellationId,
+    };
+    assertRpcMessage(message);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this.pending.get(rpcIdKey(id));
+        if (pending) this.#forgetPending(id, pending);
+        try {
+          this.#sendRpc({ jsonrpc: "2.0", method: "$/cancelRequest", params: { cancellationId } });
+        } catch {}
+        reject(new PluginRpcError(RPC_ERRORS.deadlineExceeded, `Plugin request timed out: ${method}`));
+      }, timeoutMs);
+      let abortCleanup;
+      if (options.signal) {
+        const onAbort = () => {
+          const pending = this.pending.get(rpcIdKey(id));
+          if (pending) this.#forgetPending(id, pending);
+          try {
+            this.#sendRpc({ jsonrpc: "2.0", method: "$/cancelRequest", params: { cancellationId } });
+          } catch {}
+          reject(new PluginRpcError(RPC_ERRORS.cancelled, "Plugin request was cancelled"));
+        };
+        options.signal.addEventListener("abort", onAbort, { once: true });
+        abortCleanup = () => options.signal.removeEventListener("abort", onAbort);
+      }
+      const pending = { method, cancellationId, resolve, reject, timer, abortCleanup };
+      this.pending.set(rpcIdKey(id), pending);
+      this.pendingCancellationIds.add(cancellationId);
+      try {
+        this.#sendRpc(message);
+      } catch (error) {
+        this.#forgetPending(id, pending);
+        reject(error);
+      }
+    });
+  }
+
+  notify(method, params) {
+    if (this.closed) return;
+    const message = { jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) };
+    this.#sendRpc(message);
+  }
+
+  close(error = new PluginRpcError(RPC_ERRORS.unavailable, "Plugin runtime closed")) {
+    if (this.closed) return;
+    this.closed = true;
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.abortCleanup?.();
+      pending.reject(error);
+    }
+    this.pending.clear();
+    this.pendingCancellationIds.clear();
+    for (const controller of this.inflight.values()) controller.abort(error);
+    this.inflight.clear();
+    this.inflightIds.clear();
+    this.streams.close(error);
+  }
+}
+
+module.exports = { PluginRpcError, PluginRpcRouter, RPC_ERRORS, raceWithAbort, rpcIdKey };

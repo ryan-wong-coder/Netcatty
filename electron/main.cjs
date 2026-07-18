@@ -88,6 +88,8 @@ const {
   writeSshDeepLinkEnabledPreference,
 } = require("./deepLink.cjs");
 const { getReusableMainWindow } = require("./mainWindowReuse.cjs");
+const { PLUGIN_PROTOCOL_SCHEME } = require("./plugins/constants.cjs");
+const { runPluginShutdown } = require("./plugins/shutdownCoordinator.cjs");
 const {
   OPEN_TERMINAL_PATH_CHANNEL,
   collectOpenTerminalPathArgs,
@@ -107,9 +109,19 @@ try {
         stream: true,
       },
     },
+    {
+      scheme: PLUGIN_PROTOCOL_SCHEME,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: false,
+        codeCache: true,
+      },
+    },
   ]);
 } catch (err) {
-  console.warn("[Main] Failed to register app:// scheme privileges:", err);
+  console.warn("[Main] Failed to register custom scheme privileges:", err);
 }
 
 // Apply ssh2 protocol patch needed for OpenSSH sk-* signature layouts.
@@ -1138,8 +1150,19 @@ if (!gotLock) {
   // !isQuitting would stop firing).
   const commitQuit = () => {
     getWindowManager().setIsQuitting(true);
-    quitConfirmed = true;
-    app.quit();
+    quitGuardChannelBusy = true;
+    void runPluginShutdown()
+      .then(({ timedOut }) => {
+        if (timedOut) console.warn("[Plugins] Shutdown deadline elapsed; continuing app quit");
+      })
+      .catch((error) => {
+        console.warn("[Plugins] Shutdown failed; continuing app quit:", error);
+      })
+      .finally(() => {
+        quitGuardChannelBusy = false;
+        quitConfirmed = true;
+        app.quit();
+      });
   };
 
   app.on("before-quit", (event) => {

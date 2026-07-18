@@ -1,6 +1,6 @@
 # Plugin platform threat model
 
-Status: phase 1 contract baseline
+Status: phase 2 internal runtime
 
 Plugins are untrusted code. A useful plugin may parse terminal output, display
 content, call remote services, or ship a native companion; none of those needs
@@ -8,7 +8,8 @@ imply trust in the author's code, update server, dependencies, or account.
 
 This threat model records the security properties that the nine-stage platform
 must preserve. Phase 1 enforces package-format properties and defines the wire
-types. Later phases implement process isolation and capability mediation.
+types. Phase 2 implements process isolation and lifecycle containment behind a
+development gate; later phases add capability mediation and distribution trust.
 
 ## Protected assets
 
@@ -92,15 +93,20 @@ validation therefore applies explicit depth and node-count budgets before the
 recursive JSON Schema validator runs. Exceeding either budget is an ordinary
 package validation failure, not an uncaught stack overflow.
 
-## Runtime attacks reserved for later phases
+## Runtime attacks and capability controls
 
 ### Renderer escape
 
-Normal plugins will run in a sandboxed Chromium context without Node,
+Normal plugins run in a sandboxed Chromium context without Node,
 `contextIsolation` bypasses, arbitrary Electron IPC, or direct access to the
 application React tree and xterm instance. Plugin documents use a dedicated
-protocol with a restrictive Content Security Policy. Privileged plugins run in
-separate utility processes rather than the Netcatty main process.
+protocol with a restrictive Content Security Policy. The bootstrap removes
+direct fetch, socket, WebRTC, transport and worker globals before importing
+plugin code. Its isolated session is also offline behind an unreachable proxy,
+with non-proxied WebRTC disabled, so a fresh iframe global cannot restore
+network authority. Network access can only be added later through a checked
+host broker. Privileged plugins run in separate utility processes rather than
+the Netcatty main process.
 
 ### Confused deputy
 
@@ -130,10 +136,10 @@ revalidate the calling plugin, resource ownership, permission, and operation.
 ### Denial of service
 
 RPC requests have deadlines and cancellation IDs. Streams have explicit byte
-windows. The runtime supervisor will enforce activation and shutdown deadlines,
-message-rate and memory quotas, crash quarantine, and terminal interceptor
-circuit breakers. A failed plugin must not stop unrelated plugins or terminal
-sessions.
+windows. The phase-2 supervisor enforces activation and shutdown deadlines,
+bounded pending work, bounded logs, and crash quarantine. Later permission and
+terminal phases add CPU/memory/rate quotas and interceptor circuit breakers. A
+failed plugin must not stop unrelated plugins or terminal sessions.
 
 Runtime decoders must apply exact schemas for reserved methods instead of
 accepting malformed reserved messages as generic RPC. Transferable stream data
@@ -177,10 +183,22 @@ The platform is not ready for public enablement unless all of these hold:
 10. Disabling every plugin restores the unextended Netcatty behavior and does
     not impose more than the agreed terminal throughput budget.
 
-## Phase 1 limitations
+## Phase 1 baseline
 
-No plugin code is loaded by this PR. The SDK context has interfaces but no host
-implementation. The schema bundle is committed for drift checking but is not
-wired into Electron. This limits phase 1's attack surface to developer tooling
-and package validation while allowing the runtime work to be reviewed
-separately.
+The first phase did not load plugin code. It introduced the SDK interfaces,
+committed Schema bundle, deterministic package format and package validation so
+the runtime boundary could be reviewed separately. Phase 2 now consumes those
+artifacts without changing the public contract version.
+
+## Phase 2 runtime boundary
+
+Phase 2 implements package installation, isolated browser and utility-process
+runtimes, bounded RPC/streams, lifecycle deadlines and crash quarantine. These
+paths remain disabled unless `NETCATTY_PLUGIN_DEV=1` is set. The browser path
+has no ambient Node, Electron, filesystem or network authority. The Node path is
+explicitly an advanced runtime and is not considered safe for public enablement
+until later phases add permission enforcement and signed trust policy.
+
+The phase does not synthesize grants or secret storage. Calls that would need
+those facilities fail closed, preserving the distinction between a manifest
+declaration, a future user grant, and actual host authority.

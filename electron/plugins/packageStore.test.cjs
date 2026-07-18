@@ -1,0 +1,160 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+
+const { PluginDatabase } = require("./database.cjs");
+const {
+  PackageStore,
+  REMOVAL_METADATA_FILE,
+  REMOVED_PLUGIN_DIRECTORY,
+} = require("./packageStore.cjs");
+const { createPluginPaths } = require("./paths.cjs");
+
+async function createPackage(root, overrides = {}) {
+  const source = path.join(root, `source-${Math.random().toString(16).slice(2)}`);
+  await fs.promises.mkdir(path.join(source, "dist"), { recursive: true });
+  const pluginManifest = {
+    manifestVersion: 1,
+    id: "com.example.runtime-test",
+    name: "runtime-test",
+    version: "1.0.0",
+    publisher: "example",
+    engines: { netcatty: ">=0.0.0", api: ">=0.1.0-internal <0.2.0" },
+    main: { browser: "dist/index.js" },
+    ...overrides.manifest,
+  };
+  await Promise.all([
+    fs.promises.writeFile(
+      path.join(source, "netcatty.plugin.json"),
+      `${JSON.stringify(pluginManifest, null, 2)}\n`,
+    ),
+    fs.promises.writeFile(path.join(source, "dist/index.js"), overrides.source ?? "export default {};\n"),
+  ]);
+  const archive = path.join(root, `${pluginManifest.id}-${Date.now()}-${Math.random()}.ncpkg`);
+  const { buildPluginPackage } = await import("@netcatty/plugin-cli");
+  await buildPluginPackage(source, archive);
+  return { archive, manifest: pluginManifest };
+}
+
+function createStore(context) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-store-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = createPluginPaths(root);
+  const database = new PluginDatabase(paths.database);
+  context.after(() => {
+    try { database.close(); } catch {}
+  });
+  const store = new PackageStore({
+    paths,
+    database,
+    netcattyVersion: "0.0.0",
+    apiVersion: "0.1.0-internal",
+    supportedFeatures: [],
+  });
+  return { root, paths, database, store };
+}
+
+test("package install stages, validates, atomically publishes, and records the active version", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  assert.equal(installed.id, pluginPackage.manifest.id);
+  assert.equal(installed.enabled, true);
+  const packageRoot = fixture.store.resolvePackageRoot(installed);
+  assert.equal(
+    await fs.promises.readFile(path.join(packageRoot, "dist/index.js"), "utf8"),
+    "export default {};\n",
+  );
+  assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
+});
+
+test("package install is idempotent for identical bytes and rejects version substitution", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const first = await createPackage(fixture.root);
+  await fixture.store.install(first.archive);
+  const secondVersion = await createPackage(fixture.root, {
+    manifest: { version: "2.0.0" },
+    source: "export default { version: 2 };\n",
+  });
+  await fixture.store.install(secondVersion.archive);
+  assert.equal(fixture.database.getActivePlugin(first.manifest.id).activeVersion, "2.0.0");
+  const reactivated = await fixture.store.install(first.archive, { enable: true });
+  assert.equal(reactivated.activeVersion, "1.0.0");
+  assert.equal(reactivated.enabled, true);
+
+  const changed = await createPackage(fixture.root, { source: "export default { changed: true };\n" });
+  await assert.rejects(
+    fixture.store.install(changed.archive),
+    /already installed with different contents/,
+  );
+  assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
+});
+
+test("startup recovery removes staging debris and reconstructs a committed orphan disabled", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  await fs.promises.mkdir(path.join(fixture.paths.staging, "partial"));
+  fixture.database.removePlugin(installed.id);
+
+  await fixture.store.recover();
+
+  assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
+  const recovered = fixture.database.getActivePlugin(installed.id);
+  assert.equal(recovered.activeVersion, "1.0.0");
+  assert.equal(recovered.enabled, false);
+});
+
+test("startup recovery completes or rolls back an interrupted uninstall", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  const installedPluginPath = path.join(fixture.paths.packages, installed.id);
+
+  const stageRemoval = async (name) => {
+    const removalDirectory = path.join(fixture.paths.staging, name);
+    await fs.promises.mkdir(removalDirectory, { mode: 0o700 });
+    await fs.promises.writeFile(
+      path.join(removalDirectory, REMOVAL_METADATA_FILE),
+      `${JSON.stringify({ pluginId: installed.id })}\n`,
+    );
+    await fs.promises.rename(
+      installedPluginPath,
+      path.join(removalDirectory, REMOVED_PLUGIN_DIRECTORY),
+    );
+    return removalDirectory;
+  };
+
+  const rollbackDirectory = await stageRemoval("remove-before-database");
+  await fixture.store.recover();
+  assert.equal((await fs.promises.stat(installedPluginPath)).isDirectory(), true);
+  await assert.rejects(fs.promises.stat(rollbackDirectory), { code: "ENOENT" });
+  assert.equal(fixture.database.getActivePlugin(installed.id).activeVersion, "1.0.0");
+
+  const completionDirectory = await stageRemoval("remove-after-database");
+  fixture.database.removePlugin(installed.id);
+  await fixture.store.recover();
+  await assert.rejects(fs.promises.stat(completionDirectory), { code: "ENOENT" });
+  await assert.rejects(fs.promises.stat(installedPluginPath), { code: "ENOENT" });
+  assert.equal(fixture.database.getActivePlugin(installed.id), null);
+});
+
+test("failed package validation removes every extracted staging file", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const invalid = path.join(fixture.root, "invalid.ncpkg");
+  await fs.promises.writeFile(invalid, "not a zip");
+
+  await assert.rejects(fixture.store.install(invalid));
+  assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
+  assert.deepEqual(fixture.database.listPlugins(), []);
+});

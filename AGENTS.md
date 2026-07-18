@@ -106,6 +106,31 @@ Placement rules (`resolveAgentKinds` in `toolSurfaces.cjs`):
 
 **Harness domain (`catalog/harness.cjs`):** Catty-only surface (`surfaces.catty.toolName`). Registered in the capability catalog but executed locally in `capabilityTools.executeLocalCattyCapability` (not MCP/CLI). `harness.web.search` is omitted when web search is not configured.
 
+## Plugin host runtime (internal preview)
+
+The phase-2 plugin host lives under `electron/plugins/` and is disabled unless
+`NETCATTY_PLUGIN_DEV=1` is present at application launch. Public wire and package
+types still come only from `packages/plugin-contract/schema/`; do not add a
+second private RPC shape when extending the host.
+
+- `PackageStore` validates an immutable `.ncpkg` snapshot, extracts only into
+  private staging, and atomically publishes an installed version.
+- `PluginManager` serializes install, enable/disable, restart and uninstall
+  mutations. Do not bypass it from renderer IPC.
+- Ordinary plugins run in a sandboxed, offline `BrowserWindow` session and can
+  reach only their runtime-scoped `netcatty-plugin://` authority.
+- Node-only plugins run in a dedicated `utilityProcess`; they remain an advanced
+  development-only path until permission and distribution phases land.
+- `PluginRpcRouter` owns correlation, cancellation, deadlines, stream credit and
+  protocol-failure containment. Runtime identity is assigned by the host and is
+  never accepted from request parameters.
+- App quit goes through `runPluginShutdown()` after the dirty-editor guard; do
+  not add another independent quit interception path.
+
+Run `npm run test:plugin-runtime` for main-process boundaries and
+`npm run test:plugin-runtime:electron` for real BrowserWindow/utilityProcess
+smoke coverage. Packaged-resource changes must also pass `npm run pack:dir`.
+
 ## Extending the System
 1) **New domain logic**: Add pure functions/types under `domain/`; avoid side effects.  
 2) **New stateful behavior**: Wrap it in a hook under `application/state/`; keep external I/O behind adapters.  

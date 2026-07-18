@@ -20,6 +20,7 @@ import test from "node:test";
 import {
   assertManifestSnapshotMatches,
   buildPluginPackage,
+  extractPluginPackage,
   hashFile,
   validatePluginPackage,
 } from "./archive.ts";
@@ -472,6 +473,33 @@ test("packing is deterministic and the archive validates", async (context) => {
   const validation = await validatePluginPackage(first);
   assert.equal(validation.manifest.id, "com.example.package-test");
   assert.equal(validation.fileCount, 3);
+});
+
+test("validated extraction creates an isolated tree and removes partial output on failure", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "netcatty-plugin-extract-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const directory = await createPlugin(root);
+  const archive = path.join(root, "plugin.ncpkg");
+  const extracted = path.join(root, "extracted");
+  await buildPluginPackage(directory, archive);
+
+  const result = await extractPluginPackage(archive, extracted);
+  assert.equal(result.manifest.id, "com.example.package-test");
+  assert.equal(
+    await readFile(path.join(extracted, "dist/index.js"), "utf8"),
+    "export default {};\n",
+  );
+  await assert.rejects(extractPluginPackage(archive, extracted));
+  assert.equal(
+    await readFile(path.join(extracted, "dist/index.js"), "utf8"),
+    "export default {};\n",
+  );
+
+  const invalidArchive = path.join(root, "invalid.ncpkg");
+  const failedDestination = path.join(root, "failed-extraction");
+  await writeFile(invalidArchive, "not a zip");
+  await assert.rejects(extractPluginPackage(invalidArchive, failedDestination));
+  await assert.rejects(readFile(failedDestination), /ENOENT/);
 });
 
 test("archive validation rejects oversized manifests before buffering", async (context) => {

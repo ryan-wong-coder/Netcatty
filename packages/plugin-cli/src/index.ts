@@ -1,6 +1,7 @@
 export { PACKAGE_LIMITS } from "./constants.js";
 export {
   buildPluginPackage,
+  extractPluginPackage,
   validatePluginDirectory,
   validatePluginPackage,
   type PackageBuildResult,

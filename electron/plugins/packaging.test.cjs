@@ -1,0 +1,23 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+
+test("packaged application declares every plugin host runtime dependency and resource", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../../package.json"), "utf8"));
+  for (const dependency of [
+    "@netcatty/plugin-cli",
+    "@netcatty/plugin-contract",
+    "@netcatty/plugin-sdk",
+  ]) {
+    assert.equal(packageJson.dependencies[dependency], "0.1.0-internal");
+  }
+  const builderSource = fs.readFileSync(path.join(__dirname, "../../electron-builder.config.cjs"), "utf8");
+  assert.match(builderSource, /node_modules\/@netcatty\/plugin-cli\/\*\*\/\*/);
+  assert.match(builderSource, /node_modules\/@netcatty\/plugin-contract\/\*\*\/\*/);
+  assert.match(builderSource, /node_modules\/@netcatty\/plugin-sdk\/\*\*\/\*/);
+  assert.match(builderSource, /electron\/plugins\/runtime\/\*\*\/\*/);
+  assert.match(builderSource, /!electron\/plugins\/fixtures\/\*\*\/\*/);
+});

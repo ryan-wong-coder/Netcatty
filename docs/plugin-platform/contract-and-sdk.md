@@ -3,6 +3,10 @@
 Status: internal preview (`0.1.0-internal`)
 Tracking issue: [#2269](https://github.com/binaricat/Netcatty/issues/2269)
 
+Phase 2 now consumes this contract in the isolated host runtime. See
+[isolated-runtime.md](./isolated-runtime.md) for installation transactions,
+runtime placement, RPC routing, lifecycle and crash quarantine.
+
 This document describes the contract delivered by phase 1 of the plugin
 platform. It deliberately does not expose a plugin loader. Package installation,
 runtime isolation, permissions, UI contributions, terminal providers, connection

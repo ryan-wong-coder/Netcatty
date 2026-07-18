@@ -254,7 +254,32 @@ declare global {
 
   type PortForwardStatusCallback = (status: 'inactive' | 'connecting' | 'active' | 'error', error?: string) => void;
 
-  interface NetcattyBridge {}
+  interface NetcattyPluginRuntimeStatus {
+    available: boolean;
+    experimental: true;
+  }
+
+  interface NetcattyInstalledPlugin {
+    id: string;
+    enabled: boolean;
+    activeVersion: string | null;
+    manifest: unknown;
+    runtime: {
+      status: string;
+      kind: 'browser' | 'utility' | null;
+      lastError: string | null;
+      quarantinedAt: number | null;
+    };
+  }
+
+  interface NetcattyBridge {
+    getPluginRuntimeStatus?(): Promise<NetcattyPluginRuntimeStatus>;
+    listPlugins?(): Promise<NetcattyInstalledPlugin[]>;
+    installPluginPackage?(archivePath: string, options?: { enable?: boolean }): Promise<NetcattyInstalledPlugin>;
+    setPluginEnabled?(pluginId: string, enabled: boolean): Promise<NetcattyInstalledPlugin>;
+    restartPlugin?(pluginId: string): Promise<NetcattyInstalledPlugin>;
+    uninstallPlugin?(pluginId: string): Promise<boolean>;
+  }
 
   interface Window {
     netcatty?: NetcattyBridge;

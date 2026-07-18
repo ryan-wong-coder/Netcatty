@@ -52,6 +52,18 @@ function createPreloadApi(ctx) {
   };
   with (ctx) {
     return {
+  getPluginRuntimeStatus: () => ipcRenderer.invoke("netcatty:plugins:status"),
+  listPlugins: () => ipcRenderer.invoke("netcatty:plugins:list"),
+  installPluginPackage: (archivePath, options) => ipcRenderer.invoke("netcatty:plugins:install", {
+    archivePath,
+    enable: options?.enable === true,
+  }),
+  setPluginEnabled: (pluginId, enabled) => ipcRenderer.invoke("netcatty:plugins:set-enabled", {
+    pluginId,
+    enabled: enabled === true,
+  }),
+  restartPlugin: (pluginId) => ipcRenderer.invoke("netcatty:plugins:restart", { pluginId }),
+  uninstallPlugin: (pluginId) => ipcRenderer.invoke("netcatty:plugins:uninstall", { pluginId }),
   getWindowsPtyInfo: () => {
     if (process.platform !== "win32") {
       return null;

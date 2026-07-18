@@ -54,6 +54,10 @@ module.exports = {
     files: [
         'dist/**/*',
         'electron/**/*',
+        // Runtime smoke fixtures are built test packages, not host resources.
+        // Keep them out of production ASARs so no example plugin can be
+        // mistaken for an installed or host-trusted package.
+        '!electron/plugins/fixtures/**/*',
         // Main-process terminal flow control reads shared thresholds from here
         // (terminalFlowAck.cjs). Must ship beside electron/ in app.asar.
         'infrastructure/config/terminalFlowConstants.cjs',
@@ -149,6 +153,10 @@ module.exports = {
         'lib/**/*.json',
         'node_modules/zod/**/*',
         'node_modules/zod-to-json-schema/**/*',
+        'node_modules/@netcatty/plugin-cli/**/*',
+        'node_modules/@netcatty/plugin-contract/**/*',
+        'node_modules/@netcatty/plugin-sdk/**/*',
+        'electron/plugins/runtime/**/*',
         'node_modules/ajv/**/*',
         'node_modules/ajv-formats/**/*',
         'node_modules/fast-deep-equal/**/*',
