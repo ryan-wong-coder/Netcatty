@@ -21,3 +21,20 @@ test("packaged application declares every plugin host runtime dependency and res
   assert.match(builderSource, /electron\/plugins\/runtime\/\*\*\/\*/);
   assert.match(builderSource, /!electron\/plugins\/fixtures\/\*\*\/\*/);
 });
+
+test("clean-checkout test entrypoints build plugin runtime workspaces first", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../../package.json"), "utf8"));
+  assert.equal(
+    packageJson.scripts["build:plugin-runtime-deps"],
+    "npm run build --workspace @netcatty/plugin-contract"
+      + " && npm run build --workspace @netcatty/plugin-sdk"
+      + " && npm run build --workspace @netcatty/plugin-cli",
+  );
+  for (const lifecycle of [
+    "pretest",
+    "pretest:plugin-runtime",
+    "pretest:plugin-runtime:electron",
+  ]) {
+    assert.equal(packageJson.scripts[lifecycle], "npm run build:plugin-runtime-deps");
+  }
+});
