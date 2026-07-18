@@ -12,8 +12,13 @@ function startDevelopmentPluginHost(options) {
     service = options.createService();
     const initialization = Promise.resolve(service.manager.initialize());
     options.registerShutdown(() => service.manager.shutdown());
-    void initialization.catch((error) => {
+    void initialization.catch(async (error) => {
       reportFailure("[Plugins] Failed to initialize plugin host:", error);
+      try {
+        await service.manager.shutdown();
+      } catch (shutdownError) {
+        reportFailure("[Plugins] Failed to close unavailable plugin host:", shutdownError);
+      }
     });
     return service;
   } catch (error) {

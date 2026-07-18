@@ -20,11 +20,45 @@ function createRouter(options = {}) {
     notificationHandlers: options.notificationHandlers,
     maxPending: options.maxPending,
     defaultTimeoutMs: options.defaultTimeoutMs ?? 100,
+    onBeforeMessage: options.onBeforeMessage,
     onIncomingStream: options.onIncomingStream,
     onProtocolError(error) { protocolErrors.push(error); },
   });
   return { router, sent, protocolErrors };
 }
+
+test("raw message guards run before schema work and can contain every transport message class", async () => {
+  const messages = [
+    { malformed: true },
+    { jsonrpc: "2.0", id: 1, method: "storage.get", params: { key: "x" } },
+    { jsonrpc: "2.0", method: "log.write", params: {} },
+    { jsonrpc: "2.0", id: 2, result: null },
+    { jsonrpc: "2.0", method: "$/progress", params: { token: "x", value: null } },
+    { jsonrpc: "2.0", method: "$/cancelRequest", params: { cancellationId: "x" } },
+    { frame: { streamId: "x", sequence: 0, kind: "open", windowBytes: 1 } },
+  ];
+  for (const guarded of messages) {
+    let seen;
+    const fixture = createRouter({
+      onBeforeMessage(message) {
+        seen = message;
+        throw new PluginRpcError(RPC_ERRORS.resourceExhausted, "runtime message quota exceeded");
+      },
+    });
+
+    await fixture.router.accept(guarded);
+    assert.equal(seen, guarded);
+    assert.equal(fixture.router.closed, true);
+    assert.equal(fixture.protocolErrors[0].code, RPC_ERRORS.resourceExhausted);
+  }
+});
+
+test("raw message guards must remain synchronous", async () => {
+  const fixture = createRouter({ onBeforeMessage: async () => true });
+  await fixture.router.accept({ jsonrpc: "2.0", method: "log.write", params: {} });
+  assert.equal(fixture.router.closed, true);
+  assert.match(fixture.protocolErrors[0].message, /must be synchronous/);
+});
 
 test("RPC correlation validates initialize results against the reserved contract", async () => {
   const fixture = createRouter();

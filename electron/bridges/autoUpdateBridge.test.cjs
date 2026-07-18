@@ -191,6 +191,7 @@ function makeWindowManagerWithMainWindows(count, options = {}) {
     calls: [],
     windows,
     appContentWindows: options.appContentWindows || windows,
+    dirtyEditorWindows: options.dirtyEditorWindows || windows,
     setQuittingForUpdate(value) {
       this.calls.push(value);
     },
@@ -205,6 +206,9 @@ function makeWindowManagerWithMainWindows(count, options = {}) {
     },
     getAppContentWindows() {
       return this.appContentWindows;
+    },
+    getDirtyEditorWindows() {
+      return this.dirtyEditorWindows;
     },
   };
 }
@@ -443,7 +447,7 @@ test("install handler aborts and notifies when the renderer reports dirty editor
   );
 });
 
-test("install handler checks every app content window before installing", async () => {
+test("install handler checks every registered dirty-editor window before installing", async () => {
   const order = [];
   const autoUpdater = {
     autoDownload: true,
@@ -474,7 +478,20 @@ test("install handler checks every app content window before installing", async 
       return false;
     },
   };
-  fakeWindowManager.appContentWindows = [fakeWindowManager.windows[0], peerWindow];
+  const lifecycleOnlyWindow = {
+    webContents: {
+      id: 3,
+      isDestroyed: () => false,
+      isCrashed: () => false,
+    },
+    isDestroyed: () => false,
+  };
+  fakeWindowManager.appContentWindows = [
+    fakeWindowManager.windows[0],
+    peerWindow,
+    lifecycleOnlyWindow,
+  ];
+  fakeWindowManager.dirtyEditorWindows = [fakeWindowManager.windows[0], peerWindow];
   const queriedWebContents = [];
   const fakeDirtyEditorGuard = {
     queryDirtyEditors(webContents) {
@@ -497,7 +514,7 @@ test("install handler checks every app content window before installing", async 
       bridge.registerHandlers(ipcMain);
       await ipcMain.invoke("netcatty:update:install");
 
-      assert.deepEqual(queriedWebContents, fakeWindowManager.appContentWindows.map((window) => window.webContents));
+      assert.deepEqual(queriedWebContents, fakeWindowManager.dirtyEditorWindows.map((window) => window.webContents));
       assert.equal(order.includes("quitAndInstall"), false);
       assert.deepEqual(fakeWindowManager.calls, []);
       assert.equal(fakeGlobalShortcut.cleanupCount, 0);

@@ -44,3 +44,15 @@ test("async host RPC registry configuration fails before a service can start", (
     /must be synchronous/,
   );
 });
+
+test("host service forwards the transport quota guard to the runtime supervisor", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-host-service-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runtimeMessageGuard = () => {};
+  const service = createPluginHostService({
+    ...createOptions(root),
+    runtimeMessageGuard,
+  });
+  context.after(() => service.database.close());
+  assert.equal(service.runtimeSupervisor.runtimeMessageGuard, runtimeMessageGuard);
+});

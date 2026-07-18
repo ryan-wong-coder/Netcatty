@@ -77,6 +77,7 @@ test("browser host waits for preload and the installed plugin RPC listener", asy
   }
   const port1 = new FakePort();
   const port2 = new FakePort();
+  const onBeforeMessage = () => {};
   let sessionDisposed = false;
   const runtime = new BrowserPluginRuntime({
     electron: {
@@ -99,6 +100,7 @@ test("browser host waits for preload and the installed plugin RPC listener", asy
     packageRoot: "/plugins/com.example.browser-runtime/1.0.0/package",
     preloadPath: "/runtime/browserPreload.cjs",
     handlers: {},
+    onBeforeMessage,
   });
 
   const started = runtime.start({
@@ -119,6 +121,7 @@ test("browser host waits for preload and the installed plugin RPC listener", asy
   contents.emit("ipc-message", {}, "netcatty-plugin:runtime-connected");
   const initialized = await started;
   assert.equal(initialized.pluginId, "com.example.browser-runtime");
+  assert.equal(runtime.router.onBeforeMessage, onBeforeMessage);
   assert.deepEqual(port1.sent.map((message) => message.method), ["plugin.initialize", "plugin.activate"]);
   assert.equal(windowOptions.webPreferences.sandbox, true);
   assert.equal(windowOptions.webPreferences.nodeIntegration, false);

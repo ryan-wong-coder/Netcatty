@@ -57,6 +57,7 @@ function createPluginHostService(options) {
       appRoot,
       rpcRegistry,
       resolveRuntimeKind: options.resolveRuntimeKind,
+      runtimeMessageGuard: options.runtimeMessageGuard,
       utilityModuleMappings: options.utilityModuleMappings ?? createUtilityModuleMappings(moduleResources),
     });
     const manager = new PluginManager({ database, packageStore, runtimeSupervisor });

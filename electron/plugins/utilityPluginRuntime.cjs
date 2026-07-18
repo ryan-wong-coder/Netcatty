@@ -76,6 +76,7 @@ class UtilityPluginRuntime {
     this.requestHandlers = options.requestHandlers ?? options.handlers;
     this.notificationHandlers = options.notificationHandlers ?? options.handlers;
     this.onIncomingStream = options.onIncomingStream;
+    this.onBeforeMessage = options.onBeforeMessage;
     this.onProgress = options.onProgress;
     this.logger = options.logger;
     this.onExit = options.onExit ?? (() => {});
@@ -141,6 +142,7 @@ class UtilityPluginRuntime {
       send: (message) => this.child?.postMessage(message),
       requestHandlers: this.requestHandlers,
       notificationHandlers: this.notificationHandlers,
+      onBeforeMessage: this.onBeforeMessage,
       onIncomingStream: this.onIncomingStream,
       onProgress: this.onProgress,
       onProtocolError: (error) => {

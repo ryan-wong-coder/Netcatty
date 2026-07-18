@@ -64,6 +64,7 @@ test("utility runtime launches without a shell using a minimal environment", asy
     kill() { return true; }
   }
   const child = new FakeChild();
+  const onBeforeMessage = () => {};
   const runtime = new UtilityPluginRuntime({
     utilityProcess: {
       fork(_bootstrap, _args, options) {
@@ -79,6 +80,7 @@ test("utility runtime launches without a shell using a minimal environment", asy
     bootstrapPath: path.join(root, "utilityRuntime.mjs"),
     moduleMappings: {},
     handlers: {},
+    onBeforeMessage,
     logger: { write() {} },
   });
   await runtime.start({
@@ -90,6 +92,7 @@ test("utility runtime launches without a shell using a minimal environment", asy
     enabledFeatures: [],
   });
   assert.equal(forkOptions.cwd, packageRoot);
+  assert.equal(runtime.router.onBeforeMessage, onBeforeMessage);
   assert.deepEqual(forkOptions.stdio, ["ignore", "pipe", "pipe"]);
   assert.equal(forkOptions.allowLoadingUnsignedLibraries, false);
   assert.equal(forkOptions.disclaim, process.platform === "darwin");

@@ -50,6 +50,7 @@ test("plugin management bridge checks sender ownership before invoking manager",
   const ipcMain = createIpcMain();
   registerPluginBridge(ipcMain, {
     manager: {
+      initialize: async () => {},
       list: async () => [],
       install: async (...args) => calls.push(args),
       setEnabled: async () => null,
@@ -66,4 +67,27 @@ test("plugin management bridge checks sender ownership before invoking manager",
     ipcMain.handlers.get(CHANNELS.list)({ senderFrame: { url: "https://attacker.invalid/" } }),
     /Untrusted/,
   );
+});
+
+test("plugin management availability follows asynchronous host initialization", async () => {
+  const ipcMain = createIpcMain();
+  let listCalls = 0;
+  const initializationError = new Error("package recovery failed");
+  registerPluginBridge(ipcMain, {
+    manager: {
+      initialize: async () => { throw initializationError; },
+      list: async () => { listCalls += 1; return []; },
+    },
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+
+  assert.deepEqual(await ipcMain.handlers.get(CHANNELS.status)({}), {
+    available: false,
+    experimental: true,
+  });
+  await assert.rejects(ipcMain.handlers.get(CHANNELS.list)({}), (error) => (
+    error.message.includes("disabled or unavailable") && error.cause === initializationError
+  ));
+  assert.equal(listCalls, 0);
 });

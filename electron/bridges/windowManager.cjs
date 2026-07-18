@@ -32,6 +32,7 @@ const THEME_COLORS = {
 let mainWindow = null;
 const mainWindows = new Set();
 const appContentWindows = new Set();
+const dirtyEditorWindows = new Set();
 let appContentWindowClosedHandler = null;
 let lastFocusedMainWindow = null;
 let settingsWindow = null;
@@ -306,7 +307,11 @@ function pruneAppContentWindows() {
   for (const win of Array.from(appContentWindows)) {
     if (!win || win.isDestroyed?.()) {
       appContentWindows.delete(win);
+      dirtyEditorWindows.delete(win);
     }
+  }
+  for (const win of Array.from(dirtyEditorWindows)) {
+    if (!appContentWindows.has(win)) dirtyEditorWindows.delete(win);
   }
 }
 
@@ -320,25 +325,32 @@ function getAppContentWindowList() {
   return Array.from(appContentWindows).filter((win) => isWindowUsable(win));
 }
 
+function getDirtyEditorWindowList() {
+  pruneAppContentWindows();
+  return Array.from(dirtyEditorWindows).filter((win) => isWindowUsable(win));
+}
+
 function rememberMainWindow(win) {
   if (!win || win.isDestroyed?.()) return;
   lastFocusedMainWindow = win;
   mainWindow = win;
 }
 
-function registerAppContentWindow(win) {
+function registerAppContentWindow(win, options = {}) {
   if (!win || win.isDestroyed?.()) return;
   appContentWindows.add(win);
+  if (options.queryDirtyEditors === true) dirtyEditorWindows.add(win);
 }
 
 function unregisterAppContentWindow(win) {
   if (!win) return;
   appContentWindows.delete(win);
+  dirtyEditorWindows.delete(win);
 }
 
 function registerMainWindow(win) {
   if (!win || win.isDestroyed?.()) return;
-  registerAppContentWindow(win);
+  registerAppContentWindow(win, { queryDirtyEditors: true });
   mainWindows.add(win);
   rememberMainWindow(win);
   try {
@@ -1328,6 +1340,7 @@ module.exports = {
   getMainWindow,
   getMainWindows: getMainWindowList,
   getAppContentWindows: getAppContentWindowList,
+  getDirtyEditorWindows: getDirtyEditorWindowList,
   getMainWindowCount,
   isMainWindow,
   registerMainWindow,

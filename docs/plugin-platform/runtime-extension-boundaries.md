@@ -78,6 +78,16 @@ does not mutate a live plugin's authority invisibly; it applies on the next
 activation. This is important when a new Netcatty build adds a capability or a
 grant changes the available surface.
 
+Capability middleware is not the transport quota boundary: reserved progress,
+cancellation, lifecycle, and stream frames do not enter a business-method
+handler. The supervisor therefore binds an optional synchronous raw-message
+guard to the same host-generated runtime identity. It runs before JSON budget
+walking and protocol dispatch for every message class. Phase 3 uses this seam
+for per-activation rate and resource accounting, while capability middleware
+continues to own permission and operation-specific policy. The guard must be
+synchronous so an untrusted message cannot accumulate an unbounded queue of
+pending quota decisions.
+
 ## Bidirectional invocation and validation
 
 `RuntimeSupervisor.request()`, `notify()`, and `openStream()` are the only
@@ -184,7 +194,7 @@ new protocol route. Plugin packages still cannot add mappings themselves.
 
 | Phase | Depends on phase-2 seam | Work intentionally left to that phase |
 | --- | --- | --- |
-| PR 3 permissions | RPC middleware, immutable runtime identity, placement resolver, runtime stop events | grants, resource canonicalization, secrets, credentials, companions, quotas |
+| PR 3 permissions | RPC middleware, immutable runtime identity, raw-message guard, placement resolver, runtime stop events | grants, resource canonicalization, secrets, credentials, companions, quotas |
 | PR 4 contributions | host-to-plugin request/notify, runtime events, host module resources | activation-event policy, command/settings/view registries, UI SDK |
 | PR 5 terminal Providers | validated host requests, cancellation, lifecycle events | Provider ranking, deadlines, snapshots, built-in highlighter/autocomplete adapters |
 | PR 6 terminal pipeline | runtime identity and placement policy | direct MessagePort fast path, sensitive-input bypass, circuit breaker |
@@ -194,9 +204,11 @@ new protocol route. Plugin packages still cannot add mappings themselves.
 
 ## Data-model decisions that must remain explicit
 
-The phase-2 database retains every installed immutable version, so phase 9 can
-add an audited active-version switch and rollback without changing package
-layout. It does not implement that policy early.
+The phase-2 database retains every installed immutable version and provides a
+compare-and-set pointer restore used only when a just-installed version fails
+activation. Phase 9 can build audited update, health-check, and user-initiated
+rollback policy on this primitive without changing package layout; phase 2 does
+not expose that broader policy.
 
 Crash history is keyed by plugin and version. Changing the active version
 starts with clean runtime state, while reinstalling identical version bytes

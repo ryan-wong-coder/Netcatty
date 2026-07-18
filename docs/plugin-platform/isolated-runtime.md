@@ -71,8 +71,11 @@ temporary disabled state and fully stops the old runtime, then switches the
 active-version pointer and restores the requested enabled state in the same
 database transaction. Lazy activation cannot recreate the old runtime between
 those steps. A failure before the pointer switch restores the prior enabled
-runtime; activation failure after the switch preserves the installed package
-for diagnosis but leaves it disabled.
+runtime. If the new version fails activation after the switch, a compare-and-set
+transaction restores and restarts the prior version while retaining the failed
+package and its version-scoped error state for diagnosis. If the prior runtime
+can no longer start, that restored version remains disabled instead of entering
+an activation loop.
 
 ## Database ownership
 
@@ -175,6 +178,14 @@ limited to 1 MiB; larger payloads use a stream. Stream frames have their own
 Reserved initialize, cancellation, progress and stream messages cannot fall
 through as generic methods.
 
+An internal synchronous raw-message guard runs before schema traversal for all
+RPC, progress, cancellation and stream messages. It is intentionally policy
+free in this phase and gives phase 3 one bounded place to enforce per-runtime
+transport quotas without weakening capability middleware. The guard either
+returns synchronously or throws to reject the peer; Promise-returning guards are
+treated as a host configuration error so untrusted messages cannot build an
+unbounded queue of pending quota checks.
+
 The router provides:
 
 - safe integer/string request correlation;
@@ -222,9 +233,10 @@ cleared only by an explicit restart or re-enable action. One plugin's state,
 process and pending requests are never shared with another plugin.
 
 Plugin-host construction and recovery remain behind the development gate. A
-damaged plugin database or missing host resource disables that subsystem and
-leaves the rest of Netcatty running; an optional plugin host failure must not
-become an application startup failure.
+damaged plugin database or missing host resource closes and disables that
+subsystem while leaving the rest of Netcatty running. The management status
+waits for initialization and reports the host unavailable after rejection; it
+does not expose a permanently rejected manager as usable.
 
 Runtime logs are per-plugin, bounded and rotated. Structured fields whose names
 look like credentials, passwords, tokens, secrets or private keys are redacted.
@@ -238,7 +250,9 @@ cannot make the application impossible to quit. The original `before-quit`
 event remains cancelled until that asynchronous deadline finishes. On Windows
 and Linux, closing the last tracked Netcatty content window initiates the same
 quit path directly; hidden plugin host windows are deliberately excluded from
-that count, so they cannot leave a headless application running.
+that count, so they cannot leave a headless application running. Terminal
+popups participate in this last-window lifecycle but are not dirty-editor
+owners, so they are never sent a query their renderer cannot answer.
 
 ## Development management bridge
 

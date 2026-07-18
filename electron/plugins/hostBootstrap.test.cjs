@@ -53,6 +53,29 @@ test("created plugin host initializes and registers one shutdown owner", async (
   assert.equal(shutdown, 1);
 });
 
+test("asynchronous initialization failure closes and leaves the host unavailable", async () => {
+  let shutdown = 0;
+  let shutdownHandler;
+  const errors = [];
+  const service = {
+    manager: {
+      initialize: async () => { throw new Error("recovery failed"); },
+      shutdown: async () => { shutdown += 1; },
+    },
+  };
+  assert.equal(startDevelopmentPluginHost({
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    createService: () => service,
+    registerShutdown(handler) { shutdownHandler = handler; },
+    logger: { error(...args) { errors.push(args); } },
+  }), service);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(shutdown, 1);
+  assert.match(errors[0][1].message, /recovery failed/);
+  await shutdownHandler();
+  assert.equal(shutdown, 2);
+});
+
 test("failure while registering shutdown closes the constructed host", async () => {
   let shutdown = 0;
   const errors = [];

@@ -227,6 +227,35 @@ test("supervisor composes host routes with immutable activation identity for dow
   assert.equal(result.runtimeId, fixture.supervisor.getRuntimeIdentity(fixture.manifest.id).runtimeId);
 });
 
+test("supervisor binds the raw transport guard to the host-owned activation identity", async (context) => {
+  const guarded = [];
+  const fixture = createFixture(context, () => ({
+    async start(config) {
+      return {
+        pluginId: config.pluginId,
+        pluginVersion: config.pluginVersion,
+        apiVersion: config.apiVersion,
+        enabledFeatures: config.enabledFeatures,
+      };
+    },
+    async stop() {},
+  }), {
+    runtimeMessageGuard(identity, message) {
+      guarded.push({ identity, message });
+    },
+  });
+  await fixture.supervisor.start(fixture.manifest.id);
+  const message = { jsonrpc: "2.0", method: "$/progress" };
+  fixture.runtimeOptions[0].onBeforeMessage(message);
+
+  assert.equal(guarded.length, 1);
+  assert.equal(guarded[0].message, message);
+  assert.equal(guarded[0].identity.pluginId, fixture.manifest.id);
+  assert.equal(guarded[0].identity.runtimeId, fixture.supervisor.getRuntimeIdentity(fixture.manifest.id).runtimeId);
+  assert.equal(Object.isFrozen(guarded[0].identity), true);
+  assert.equal(Object.isFrozen(guarded[0].identity.manifest), true);
+});
+
 test("supervisor exposes bounded host-to-plugin calls and rejects stale active versions", async (context) => {
   const calls = [];
   let runtimeOptions;

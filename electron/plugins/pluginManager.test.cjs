@@ -194,6 +194,105 @@ test("failed version preparation restores the previously enabled runtime", async
   assert.equal(activePlugin.enabled, true);
 });
 
+test("failed upgraded-version activation restores and restarts the previous version", async () => {
+  const calls = [];
+  const pluginId = "com.example.upgrade-activation-rollback";
+  let activePlugin = {
+    id: pluginId,
+    enabled: true,
+    activeVersion: "1.0.0",
+  };
+  const manager = new PluginManager({
+    database: {
+      close() {},
+      getActivePlugin: () => ({ ...activePlugin }),
+      listPlugins: () => [],
+      setActiveVersion(id, version, options) {
+        assert.equal(id, pluginId);
+        assert.deepEqual(options, { enabled: true, expectedActiveVersion: "2.0.0" });
+        activePlugin = { ...activePlugin, activeVersion: version, enabled: options.enabled };
+        calls.push(`active:${version}:${options.enabled}`);
+      },
+      setEnabled(id, enabled) {
+        assert.equal(id, pluginId);
+        activePlugin = { ...activePlugin, enabled };
+        calls.push(`enabled:${enabled}`);
+      },
+    },
+    packageStore: {
+      async initialize() {},
+      async install(_archivePath, options) {
+        await options.beforeActivate({
+          pluginId,
+          version: "2.0.0",
+          previousPlugin: { ...activePlugin },
+          reason: "switch-active-version",
+        });
+        activePlugin = { ...activePlugin, activeVersion: "2.0.0", enabled: true };
+        calls.push("active:2.0.0:true");
+        return { ...activePlugin };
+      },
+    },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async stop(id) { calls.push(`stop:${id}`); },
+      async start(id) {
+        calls.push(`start:${id}@${activePlugin.activeVersion}`);
+        if (activePlugin.activeVersion === "2.0.0") throw new Error("new activation failed");
+      },
+    },
+  });
+
+  await assert.rejects(manager.install("/tmp/upgrade.ncpkg"), /new activation failed/);
+  assert.deepEqual(calls, [
+    "enabled:false",
+    `stop:${pluginId}`,
+    "active:2.0.0:true",
+    `start:${pluginId}@2.0.0`,
+    "enabled:false",
+    "active:1.0.0:true",
+    `start:${pluginId}@1.0.0`,
+  ]);
+  assert.deepEqual(activePlugin, { id: pluginId, enabled: true, activeVersion: "1.0.0" });
+});
+
+test("failed previous-version restart leaves the restored version disabled", async () => {
+  const pluginId = "com.example.upgrade-rollback-fails";
+  let activePlugin = { id: pluginId, enabled: true, activeVersion: "1.0.0" };
+  const manager = new PluginManager({
+    database: {
+      close() {},
+      getActivePlugin: () => ({ ...activePlugin }),
+      listPlugins: () => [],
+      setActiveVersion(_id, version, options) {
+        activePlugin = { ...activePlugin, activeVersion: version, enabled: options.enabled };
+      },
+      setEnabled(_id, enabled) { activePlugin = { ...activePlugin, enabled }; },
+    },
+    packageStore: {
+      async initialize() {},
+      async install(_archivePath, options) {
+        await options.beforeActivate({
+          pluginId,
+          version: "2.0.0",
+          previousPlugin: { ...activePlugin },
+          reason: "switch-active-version",
+        });
+        activePlugin = { ...activePlugin, activeVersion: "2.0.0", enabled: true };
+        return { ...activePlugin };
+      },
+    },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async stop() {},
+      async start() { throw new Error("runtime unavailable"); },
+    },
+  });
+
+  await assert.rejects(manager.install("/tmp/upgrade.ncpkg"), /runtime unavailable/);
+  assert.deepEqual(activePlugin, { id: pluginId, enabled: false, activeVersion: "1.0.0" });
+});
+
 test("failed restoration leaves the previous plugin disabled", async () => {
   const calls = [];
   const pluginId = "com.example.upgrade-broken-rollback";
@@ -270,4 +369,28 @@ test("uninstall disables lazy activation before stopping and removing code", asy
     `stop:${pluginId}`,
     `uninstall:${pluginId}`,
   ]);
+});
+
+test("concurrent shutdown callers share one complete shutdown operation", async () => {
+  let databaseCloses = 0;
+  let supervisorShutdowns = 0;
+  const manager = new PluginManager({
+    database: {
+      close() { databaseCloses += 1; },
+      listPlugins: () => [],
+    },
+    packageStore: { async initialize() {} },
+    runtimeSupervisor: {
+      async startEnabled() {},
+      async shutdown() { supervisorShutdowns += 1; },
+    },
+  });
+  await manager.initialize();
+
+  const first = manager.shutdown();
+  const second = manager.shutdown();
+  assert.equal(first, second);
+  await Promise.all([first, second]);
+  assert.equal(supervisorShutdowns, 1);
+  assert.equal(databaseCloses, 1);
 });

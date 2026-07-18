@@ -83,6 +83,10 @@ class PluginRpcRouter {
     this.maxPending = options.maxPending ?? PLUGIN_RPC_MAX_PENDING;
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? PLUGIN_RPC_DEFAULT_TIMEOUT_MS;
     this.onProtocolError = options.onProtocolError ?? (() => {});
+    this.onBeforeMessage = options.onBeforeMessage ?? (() => {});
+    if (typeof this.onBeforeMessage !== "function") {
+      throw new TypeError("Plugin RPC message guard must be a function");
+    }
     this.progress = options.onProgress ?? (() => {});
     this.streams = new PluginStreamRouter({
       send: (message, transfer) => this.send(message, transfer),
@@ -154,6 +158,11 @@ class PluginRpcRouter {
 
   async #accept(rawMessage) {
     if (this.closed) return;
+    const guardResult = this.onBeforeMessage(rawMessage);
+    if (guardResult && typeof guardResult.then === "function") {
+      void Promise.resolve(guardResult).catch(() => {});
+      throw new TypeError("Plugin RPC message guard must be synchronous");
+    }
     const message = rawMessage;
     if (message && typeof message === "object" && Object.hasOwn(message, "frame")) {
       assertStreamEnvelopeShape(message);

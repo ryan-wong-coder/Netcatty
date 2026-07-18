@@ -237,17 +237,17 @@ function setQuittingForUpdate(enabled) {
 }
 
 /**
- * The webContents for usable app-content windows. Used by the install handler to ask
- * every renderer that can own editor tabs about unsaved work before committing
- * to a quit. Targets registered app-content windows specifically (not
+ * The webContents for usable dirty-editor windows. Used by the install handler
+ * to ask every renderer that can own editor tabs about unsaved work before
+ * committing to a quit. Targets registered editor owners specifically (not
  * getAllWindows()[0]) so we never query tray/settings windows, whose renderers
  * don't participate in the dirty-editor protocol.
  */
-function getAppContentWebContentsList() {
+function getDirtyEditorWebContentsList() {
   try {
     const windowManager = require("./windowManager.cjs");
-    const windows = typeof windowManager.getAppContentWindows === "function"
-      ? windowManager.getAppContentWindows()
+    const windows = typeof windowManager.getDirtyEditorWindows === "function"
+      ? windowManager.getDirtyEditorWindows()
       : typeof windowManager.getMainWindows === "function"
         ? windowManager.getMainWindows()
         : [windowManager.getMainWindow?.()].filter(Boolean);
@@ -494,10 +494,10 @@ function registerHandlers(ipcMain) {
     // afterwards. If no main window is reachable (no window / crashed
     // renderer) there's no user to ask, so we install directly — matching the
     // before-quit fail-open path.
-    const mainWebContents = getAppContentWebContentsList();
-    if (mainWebContents.length > 0) {
+    const editorWebContents = getDirtyEditorWebContentsList();
+    if (editorWebContents.length > 0) {
       const dirtyResults = await Promise.all(
-        mainWebContents.map((webContents) => queryDirtyEditorsSafe(webContents, ipcMain)),
+        editorWebContents.map((webContents) => queryDirtyEditorsSafe(webContents, ipcMain)),
       );
       if (dirtyResults.some(Boolean)) {
         // Broadcast so the notice reaches whichever window the user clicked

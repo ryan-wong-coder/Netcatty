@@ -148,7 +148,7 @@ function createMainWindowApi(ctx) {
           mainWindow = win;
         }
       } else if (registerAsAppContentWindow && typeof registerAppContentWindow === "function") {
-        registerAppContentWindow(win);
+        registerAppContentWindow(win, { queryDirtyEditors: true });
       }
     
       // Clear reference when the main window is destroyed

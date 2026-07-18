@@ -231,6 +231,31 @@ class PluginDatabase {
     if (Number(result.changes) !== 1) throw new Error(`Plugin is not installed: ${pluginId}`);
   }
 
+  setActiveVersion(pluginId, version, options = {}) {
+    this.transaction(() => {
+      if (!this.getVersion(pluginId, version)) {
+        throw new Error(`Plugin version is not installed: ${pluginId}@${version}`);
+      }
+      const enabled = options.enabled === true ? 1 : 0;
+      const expectedActiveVersion = options.expectedActiveVersion;
+      const result = expectedActiveVersion === undefined
+        ? this.db.prepare(`
+            UPDATE plugins
+            SET active_version = ?, enabled = ?, updated_at = ?
+            WHERE id = ?
+          `).run(version, enabled, this.clock(), pluginId)
+        : this.db.prepare(`
+            UPDATE plugins
+            SET active_version = ?, enabled = ?, updated_at = ?
+            WHERE id = ? AND active_version = ?
+          `).run(version, enabled, this.clock(), pluginId, expectedActiveVersion);
+      if (Number(result.changes) !== 1) {
+        throw new Error(`Plugin active version changed before it could be restored: ${pluginId}`);
+      }
+    });
+    return this.getActivePlugin(pluginId);
+  }
+
   setRuntimeState(pluginId, status, options = {}) {
     const activeVersion = this.db.prepare(
       "SELECT active_version FROM plugins WHERE id = ?",

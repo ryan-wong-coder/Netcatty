@@ -9,6 +9,7 @@ class PluginManager {
     this.initializePromise = null;
     this.mutationTail = Promise.resolve();
     this.shuttingDown = false;
+    this.shutdownPromise = null;
   }
 
   initialize() {
@@ -72,6 +73,20 @@ class PluginManager {
           await this.runtimeSupervisor.start(plugin.id);
         } catch (error) {
           this.database.setEnabled(plugin.id, false);
+          if (stoppedPlugin && stoppedPlugin.version !== plugin.activeVersion) {
+            try {
+              this.database.setActiveVersion(stoppedPlugin.pluginId, stoppedPlugin.version, {
+                enabled: true,
+                expectedActiveVersion: plugin.activeVersion,
+              });
+              await this.runtimeSupervisor.start(stoppedPlugin.pluginId);
+            } catch {
+              const restored = this.database.getActivePlugin(stoppedPlugin.pluginId);
+              if (restored?.activeVersion === stoppedPlugin.version && restored.enabled) {
+                this.database.setEnabled(stoppedPlugin.pluginId, false);
+              }
+            }
+          }
           throw error;
         }
       }
@@ -119,8 +134,12 @@ class PluginManager {
     });
   }
 
-  async shutdown() {
-    if (this.shuttingDown) return;
+  shutdown() {
+    this.shutdownPromise ??= this.#shutdown();
+    return this.shutdownPromise;
+  }
+
+  async #shutdown() {
     this.shuttingDown = true;
     await this.mutationTail;
     if (this.initializePromise) {

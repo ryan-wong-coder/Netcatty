@@ -29,23 +29,45 @@ function registerPluginBridge(ipcMain, options) {
   const manager = options.manager;
   const env = options.env ?? process.env;
   const isTrustedSender = options.isTrustedSender;
-  const available = isPluginDevelopmentEnabled(env) && Boolean(manager);
+  const configured = isPluginDevelopmentEnabled(env)
+    && Boolean(manager)
+    && typeof manager.initialize === "function";
+  const resolveManager = async () => {
+    if (!configured) throw new Error("Plugin development runtime is disabled or unavailable");
+    try {
+      await manager.initialize();
+    } catch (cause) {
+      throw new Error("Plugin development runtime is disabled or unavailable", { cause });
+    }
+    return manager;
+  };
   const handle = (channel, callback) => {
     ipcMain.handle(channel, async (event, payload) => {
-      if (!available) throw new Error("Plugin development runtime is disabled or unavailable");
       if (!isTrustedSender(event)) throw new Error("Untrusted plugin management sender");
-      return callback(payload);
+      const activeManager = await resolveManager();
+      return callback(activeManager, payload);
     });
   };
   ipcMain.handle(CHANNELS.status, async (event) => {
     if (!isTrustedSender(event)) throw new Error("Untrusted plugin management sender");
+    let available = false;
+    try {
+      await resolveManager();
+      available = true;
+    } catch {}
     return { available, experimental: true };
   });
-  handle(CHANNELS.list, async () => manager.list());
-  handle(CHANNELS.install, async (payload) => manager.install(payload?.archivePath, { enable: payload?.enable === true }));
-  handle(CHANNELS.setEnabled, async (payload) => manager.setEnabled(payload?.pluginId, payload?.enabled === true));
-  handle(CHANNELS.restart, async (payload) => manager.restart(payload?.pluginId));
-  handle(CHANNELS.uninstall, async (payload) => manager.uninstall(payload?.pluginId));
+  handle(CHANNELS.list, async (activeManager) => activeManager.list());
+  handle(CHANNELS.install, async (activeManager, payload) => activeManager.install(
+    payload?.archivePath,
+    { enable: payload?.enable === true },
+  ));
+  handle(CHANNELS.setEnabled, async (activeManager, payload) => activeManager.setEnabled(
+    payload?.pluginId,
+    payload?.enabled === true,
+  ));
+  handle(CHANNELS.restart, async (activeManager, payload) => activeManager.restart(payload?.pluginId));
+  handle(CHANNELS.uninstall, async (activeManager, payload) => activeManager.uninstall(payload?.pluginId));
 }
 
 module.exports = { CHANNELS, createTrustedPluginBridgeSender, registerPluginBridge };

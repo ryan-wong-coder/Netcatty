@@ -54,6 +54,10 @@ class RuntimeSupervisor {
       assertStorageParams,
       database: this.database,
     });
+    this.runtimeMessageGuard = options.runtimeMessageGuard ?? null;
+    if (this.runtimeMessageGuard != null && typeof this.runtimeMessageGuard !== "function") {
+      throw new TypeError("Plugin runtime message guard must be a function");
+    }
     this.resolveRuntimeKind = options.resolveRuntimeKind ?? (({ plugin }) => (
       plugin.manifest.main.browser ? "browser" : "utility"
     ));
@@ -262,6 +266,9 @@ class RuntimeSupervisor {
           preloadPath: path.join(this.runtimeDirectory, "browserPreload.cjs"),
           requestHandlers: routes.requestHandlers,
           notificationHandlers: routes.notificationHandlers,
+          onBeforeMessage: this.runtimeMessageGuard
+            ? (message) => this.runtimeMessageGuard(identity, message)
+            : undefined,
           onIncomingStream: routes.onIncomingStream,
           onProgress: (params) => this.#emitProgress(identity, params),
           logger,
@@ -276,6 +283,9 @@ class RuntimeSupervisor {
           moduleMappings: this.utilityModuleMappings,
           requestHandlers: routes.requestHandlers,
           notificationHandlers: routes.notificationHandlers,
+          onBeforeMessage: this.runtimeMessageGuard
+            ? (message) => this.runtimeMessageGuard(identity, message)
+            : undefined,
           onIncomingStream: routes.onIncomingStream,
           onProgress: (params) => this.#emitProgress(identity, params),
           logger,

@@ -132,6 +132,40 @@ test("recovered versions can atomically replace an enabled version while staying
   database.close();
 });
 
+test("active version rollback is compare-and-set and keeps version state isolated", (context) => {
+  const database = createDatabase(context);
+  const first = manifest();
+  const second = manifest(first.id, "2.0.0");
+  for (const [pluginManifest, archive] of [[first, "a"], [second, "b"]]) {
+    database.installVersion({
+      pluginId: pluginManifest.id,
+      version: pluginManifest.version,
+      manifest: pluginManifest,
+      archiveSha256: archive.repeat(64),
+      packageRelativePath: `${pluginManifest.id}/${pluginManifest.version}/package`,
+    }, { enable: true });
+  }
+  database.setRuntimeState(first.id, "error", {
+    pluginVersion: second.version,
+    error: "new version failed",
+  });
+
+  const restored = database.setActiveVersion(first.id, first.version, {
+    enabled: true,
+    expectedActiveVersion: second.version,
+  });
+  assert.equal(restored.activeVersion, first.version);
+  assert.equal(restored.enabled, true);
+  assert.equal(restored.runtime.status, "stopped");
+  assert.equal(database.getVersion(first.id, second.version).version, second.version);
+  assert.throws(() => database.setActiveVersion(first.id, second.version, {
+    enabled: true,
+    expectedActiveVersion: "3.0.0",
+  }), /changed before it could be restored/);
+  assert.throws(() => database.setActiveVersion(first.id, "9.0.0"), /version is not installed/);
+  database.close();
+});
+
 test("three crashes inside five minutes quarantine until explicit recovery", (context) => {
   let now = 10_000;
   const database = createDatabase(context, () => now);

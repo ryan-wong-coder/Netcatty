@@ -52,6 +52,7 @@ class BrowserPluginRuntime {
     this.requestHandlers = options.requestHandlers ?? options.handlers;
     this.notificationHandlers = options.notificationHandlers ?? options.handlers;
     this.onIncomingStream = options.onIncomingStream;
+    this.onBeforeMessage = options.onBeforeMessage;
     this.onProgress = options.onProgress;
     this.logger = options.logger ?? { write() {} };
     this.onExit = options.onExit ?? (() => {});
@@ -179,6 +180,7 @@ class BrowserPluginRuntime {
       send: (message) => port1.postMessage(message),
       requestHandlers: this.requestHandlers,
       notificationHandlers: this.notificationHandlers,
+      onBeforeMessage: this.onBeforeMessage,
       onIncomingStream: this.onIncomingStream,
       onProgress: this.onProgress,
       onProtocolError: (error) => {
