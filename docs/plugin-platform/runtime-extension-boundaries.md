@@ -157,6 +157,13 @@ Unexpected fatal and protocol failures likewise revoke RPC immediately but are
 published to the supervisor only after the process is reaped. Permission,
 connection, synchronization, and companion state can therefore treat the stop
 event as a real process-containment boundary rather than an intent signal.
+If the process ignores graceful termination, the host escalates to an OS-level
+forced termination after a bounded grace period and still waits for `exit`.
+Failure to reap after escalation disables and quarantines the plugin for the
+rest of the application process; no replacement activation is allowed until
+Netcatty restarts. This fail-closed state is deliberately in-memory as well as
+persisted, so clearing a normal crash quarantine cannot overlap a still-live
+advanced process.
 
 Runtime state listeners receive starting, running, stopped, error, and
 quarantined transitions with the stable activation identity. Permission scopes,

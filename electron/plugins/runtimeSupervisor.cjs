@@ -16,7 +16,10 @@ const {
   assertHostMethod,
   createDefaultPluginHostRpcRegistry,
 } = require("./hostRpcRegistry.cjs");
-const { UtilityPluginRuntime } = require("./utilityPluginRuntime.cjs");
+const {
+  PLUGIN_CONTAINMENT_ERROR_CODE,
+  UtilityPluginRuntime,
+} = require("./utilityPluginRuntime.cjs");
 
 function assertStorageParams(params, options = {}) {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -73,6 +76,7 @@ class RuntimeSupervisor {
     this.stopping = new Map();
     this.runtimeListeners = new Set();
     this.progressListeners = new Set();
+    this.uncontainedPlugins = new Set();
     this.shuttingDown = false;
   }
 
@@ -160,6 +164,12 @@ class RuntimeSupervisor {
 
   async start(pluginId) {
     if (this.shuttingDown) throw new Error("Plugin runtime supervisor is shutting down");
+    if (this.uncontainedPlugins.has(pluginId)) {
+      throw new PluginRpcError(
+        RPC_ERRORS.unavailable,
+        `Plugin runtime containment failed; restart Netcatty before starting it again: ${pluginId}`,
+      );
+    }
     const stopping = this.stopping.get(pluginId);
     if (stopping) await stopping;
     if (this.shuttingDown) throw new Error("Plugin runtime supervisor is shutting down");
@@ -312,6 +322,18 @@ class RuntimeSupervisor {
     if (this.runtimes.get(pluginId) !== runtime) return;
     this.runtimes.delete(pluginId);
     this.runtimeIdentities.delete(pluginId);
+    if (details.containmentFailed) {
+      this.uncontainedPlugins.add(pluginId);
+      const active = this.database.getActivePlugin(pluginId);
+      if (active?.activeVersion === identity.pluginVersion && active.enabled) {
+        this.database.setEnabled(pluginId, false);
+      }
+      this.#setRuntimeState(identity, "quarantined", {
+        error: details.error?.message ?? String(details.error),
+        quarantinedAt: Date.now(),
+      });
+      return;
+    }
     if (details.expected || this.shuttingDown) {
       this.#setRuntimeState(identity, "stopped");
       return;
@@ -376,11 +398,27 @@ class RuntimeSupervisor {
     } catch (error) {
       stopError = error;
     } finally {
-      this.#setRuntimeState(identity, "stopped", {
-        kind: plugin?.runtime?.kind,
-        error: stopError?.message,
-      });
+      if (stopError?.code === PLUGIN_CONTAINMENT_ERROR_CODE) {
+        this.uncontainedPlugins.add(pluginId);
+        const active = this.database.getActivePlugin(pluginId);
+        if (active?.activeVersion === identity?.pluginVersion && active.enabled) {
+          this.database.setEnabled(pluginId, false);
+        }
+        this.#setRuntimeState(identity, "quarantined", {
+          pluginId,
+          pluginVersion: identity?.pluginVersion ?? plugin?.activeVersion,
+          kind: plugin?.runtime?.kind,
+          error: stopError.message,
+          quarantinedAt: Date.now(),
+        });
+      } else {
+        this.#setRuntimeState(identity, "stopped", {
+          kind: plugin?.runtime?.kind,
+          error: stopError?.message,
+        });
+      }
     }
+    if (stopError?.code === PLUGIN_CONTAINMENT_ERROR_CODE) throw stopError;
   }
 
   async restart(pluginId) {

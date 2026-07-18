@@ -1,6 +1,10 @@
 "use strict";
 
-const { PLUGIN_DEACTIVATION_TIMEOUT_MS } = require("./constants.cjs");
+const {
+  PLUGIN_DEACTIVATION_TIMEOUT_MS,
+  PLUGIN_UTILITY_FORCE_EXIT_TIMEOUT_MS,
+  PLUGIN_UTILITY_TERMINATION_GRACE_MS,
+} = require("./constants.cjs");
 
 let shutdownHandler = null;
 let shutdownPromise = null;
@@ -17,7 +21,11 @@ function registerPluginShutdown(handler) {
 function runPluginShutdown(options = {}) {
   if (shutdownPromise) return shutdownPromise;
   if (!shutdownHandler) return Promise.resolve({ timedOut: false });
-  const timeoutMs = options.timeoutMs ?? PLUGIN_DEACTIVATION_TIMEOUT_MS + 500;
+  const timeoutMs = options.timeoutMs
+    ?? PLUGIN_DEACTIVATION_TIMEOUT_MS
+      + PLUGIN_UTILITY_TERMINATION_GRACE_MS
+      + PLUGIN_UTILITY_FORCE_EXIT_TIMEOUT_MS
+      + 500;
   let timer;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);

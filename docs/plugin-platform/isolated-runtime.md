@@ -153,6 +153,11 @@ and waits for the child `exit` event before a replacement activation may start.
 Fatal and protocol errors follow the same ordering: the old process is reaped
 before the supervisor publishes the crash. This prevents two privileged
 versions of one plugin from overlapping during restart, update, or quarantine.
+If the process ignores graceful termination, Netcatty escalates to an OS-level
+forced termination after a bounded grace period and still waits for `exit`.
+Failure to reap after escalation disables and quarantines the plugin for the
+remainder of the application process; a replacement activation is blocked
+until Netcatty restarts.
 
 The utility process is an isolation and failure-containment boundary, not the
 final permission boundary. Node plugins are still advanced code. Publisher

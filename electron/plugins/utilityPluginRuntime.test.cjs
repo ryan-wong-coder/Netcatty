@@ -172,6 +172,140 @@ test("utility runtime stop waits for the child exit before releasing the activat
   assert.equal(exitEvents, 0);
 });
 
+test("utility runtime force-kills a child that ignores graceful termination", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-utility-force-stop-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, "package");
+  fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "dist/index.js"), "export default {};\n");
+  let gracefulKills = 0;
+  const forcedPids = [];
+  class FakeChild extends EventEmitter {
+    constructor() {
+      super();
+      this.pid = 2468;
+      this.stdout = new EventEmitter();
+      this.stderr = new EventEmitter();
+    }
+    postMessage(message) {
+      if (message.type === "netcatty-plugin:bootstrap") {
+        queueMicrotask(() => this.emit("message", { type: "netcatty-plugin:ready" }));
+      } else if (message.method === "plugin.initialize") {
+        queueMicrotask(() => this.emit("message", {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            pluginId: "com.example.utility-force-stop",
+            pluginVersion: "1.0.0",
+            apiVersion: "0.1.0-internal",
+            enabledFeatures: [],
+          },
+        }));
+      } else if (message.method === "plugin.activate" || message.method === "plugin.deactivate") {
+        queueMicrotask(() => this.emit("message", { jsonrpc: "2.0", id: message.id, result: null }));
+      }
+    }
+    kill() {
+      gracefulKills += 1;
+      throw new Error("graceful termination unavailable");
+    }
+  }
+  const child = new FakeChild();
+  const runtime = new UtilityPluginRuntime({
+    utilityProcess: { fork: () => child },
+    plugin: {
+      id: "com.example.utility-force-stop",
+      manifest: { main: { node: "dist/index.js" } },
+    },
+    packageRoot,
+    bootstrapPath: path.join(root, "utilityRuntime.mjs"),
+    moduleMappings: {},
+    handlers: {},
+    logger: { write() {} },
+    terminationGraceMs: 5,
+    forceExitTimeoutMs: 50,
+    forceKillProcess(pid) {
+      forcedPids.push(pid);
+      queueMicrotask(() => {
+        child.pid = undefined;
+        child.emit("exit", 137);
+      });
+    },
+  });
+  await runtime.start({
+    pluginId: "com.example.utility-force-stop",
+    pluginVersion: "1.0.0",
+    netcattyVersion: "0.0.0",
+    apiVersion: "0.1.0-internal",
+    supportedFeatures: [],
+    enabledFeatures: [],
+  });
+
+  await runtime.stop();
+  assert.equal(gracefulKills, 1);
+  assert.deepEqual(forcedPids, [2468]);
+});
+
+test("utility runtime reports containment failure when forced termination is not reaped", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-utility-unreaped-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, "package");
+  fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "dist/index.js"), "export default {};\n");
+  class FakeChild extends EventEmitter {
+    constructor() {
+      super();
+      this.pid = 1357;
+      this.stdout = new EventEmitter();
+      this.stderr = new EventEmitter();
+    }
+    postMessage(message) {
+      if (message.type === "netcatty-plugin:bootstrap") {
+        queueMicrotask(() => this.emit("message", { type: "netcatty-plugin:ready" }));
+      } else if (message.method === "plugin.initialize") {
+        queueMicrotask(() => this.emit("message", {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            pluginId: "com.example.utility-unreaped",
+            pluginVersion: "1.0.0",
+            apiVersion: "0.1.0-internal",
+            enabledFeatures: [],
+          },
+        }));
+      } else if (message.method === "plugin.activate" || message.method === "plugin.deactivate") {
+        queueMicrotask(() => this.emit("message", { jsonrpc: "2.0", id: message.id, result: null }));
+      }
+    }
+    kill() { return true; }
+  }
+  const runtime = new UtilityPluginRuntime({
+    utilityProcess: { fork: () => new FakeChild() },
+    plugin: {
+      id: "com.example.utility-unreaped",
+      manifest: { main: { node: "dist/index.js" } },
+    },
+    packageRoot,
+    bootstrapPath: path.join(root, "utilityRuntime.mjs"),
+    moduleMappings: {},
+    handlers: {},
+    logger: { write() {} },
+    terminationGraceMs: 5,
+    forceExitTimeoutMs: 5,
+    forceKillProcess() {},
+  });
+  await runtime.start({
+    pluginId: "com.example.utility-unreaped",
+    pluginVersion: "1.0.0",
+    netcattyVersion: "0.0.0",
+    apiVersion: "0.1.0-internal",
+    supportedFeatures: [],
+    enabledFeatures: [],
+  });
+
+  await assert.rejects(runtime.stop(), /did not exit after forced termination/);
+});
+
 test("utility fatal errors are reported only after the child is reaped", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-utility-error-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));

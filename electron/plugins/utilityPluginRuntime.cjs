@@ -7,9 +7,19 @@ const path = require("node:path");
 const {
   PLUGIN_ACTIVATION_TIMEOUT_MS,
   PLUGIN_DEACTIVATION_TIMEOUT_MS,
+  PLUGIN_UTILITY_FORCE_EXIT_TIMEOUT_MS,
+  PLUGIN_UTILITY_TERMINATION_GRACE_MS,
 } = require("./constants.cjs");
 const { PluginRpcRouter } = require("./rpcRouter.cjs");
 const { isPathInside } = require("./paths.cjs");
+
+const PLUGIN_CONTAINMENT_ERROR_CODE = "ERR_PLUGIN_RUNTIME_CONTAINMENT_FAILED";
+
+function createContainmentError(message, cause) {
+  const error = new Error(message, cause === undefined ? undefined : { cause });
+  error.code = PLUGIN_CONTAINMENT_ERROR_CODE;
+  return error;
+}
 
 async function resolveUtilityEntrypoint(packageRoot, packagePath) {
   const candidate = path.resolve(packageRoot, ...packagePath.split("/"));
@@ -46,6 +56,16 @@ function waitForUtilityReady(child, timeoutMs) {
   });
 }
 
+function waitForExit(exitPromise, timeoutMs) {
+  let timer;
+  return Promise.race([
+    exitPromise.then(() => true),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 class UtilityPluginRuntime {
   constructor(options) {
     this.utilityProcess = options.utilityProcess;
@@ -60,6 +80,9 @@ class UtilityPluginRuntime {
     this.logger = options.logger;
     this.onExit = options.onExit ?? (() => {});
     this.onProtocolError = options.onProtocolError ?? (() => {});
+    this.forceKillProcess = options.forceKillProcess ?? ((pid) => process.kill(pid, "SIGKILL"));
+    this.terminationGraceMs = options.terminationGraceMs ?? PLUGIN_UTILITY_TERMINATION_GRACE_MS;
+    this.forceExitTimeoutMs = options.forceExitTimeoutMs ?? PLUGIN_UTILITY_FORCE_EXIT_TIMEOUT_MS;
     this.child = null;
     this.router = null;
     this.stopping = false;
@@ -68,7 +91,10 @@ class UtilityPluginRuntime {
     this.resolveExit = null;
     this.exited = false;
     this.terminationError = null;
+    this.gracefulTerminationError = null;
     this.terminationRequested = false;
+    this.terminationPromise = null;
+    this.exitReported = false;
   }
 
   #assertStarting(signal) {
@@ -155,8 +181,7 @@ class UtilityPluginRuntime {
       const router = this.router;
       this.router = null;
       router?.close();
-      this.#requestTermination();
-      if (this.exitPromise && !this.exited) await this.exitPromise;
+      await this.#terminateAndWait();
     }
   }
 
@@ -180,13 +205,48 @@ class UtilityPluginRuntime {
     const router = this.router;
     this.router = null;
     router?.close(error);
-    this.#requestTermination();
+    void this.#terminateAndWait().catch((terminationError) => {
+      if (this.stopping || this.exitReported) return;
+      this.exitReported = true;
+      this.onExit({ expected: false, error: terminationError, containmentFailed: true });
+    });
   }
 
   #requestTermination() {
     if (!this.child || this.exited || this.terminationRequested) return;
     this.terminationRequested = true;
-    this.child.kill();
+    try {
+      this.child.kill();
+    } catch (error) {
+      this.gracefulTerminationError = error;
+    }
+  }
+
+  #terminateAndWait() {
+    this.terminationPromise ??= this.#terminateAndWaitOnce();
+    return this.terminationPromise;
+  }
+
+  async #terminateAndWaitOnce() {
+    this.#requestTermination();
+    if (!this.exitPromise || this.exited) return;
+    if (await waitForExit(this.exitPromise, this.terminationGraceMs)) return;
+    const pid = this.child?.pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw createContainmentError(
+        "Plugin utility process did not expose a valid PID for forced termination",
+        this.gracefulTerminationError ?? undefined,
+      );
+    }
+    try {
+      this.forceKillProcess(pid);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw createContainmentError("Plugin utility process could not be forcibly terminated", error);
+      }
+    }
+    if (await waitForExit(this.exitPromise, this.forceExitTimeoutMs)) return;
+    throw createContainmentError("Plugin utility process did not exit after forced termination");
   }
 
   #finishExit(code) {
@@ -194,7 +254,8 @@ class UtilityPluginRuntime {
     this.exited = true;
     this.resolveExit?.(code);
     this.resolveExit = null;
-    if (this.stopping) return;
+    if (this.stopping || this.exitReported) return;
+    this.exitReported = true;
     const error = this.terminationError ?? new Error(`Plugin utility exited (${code})`);
     const router = this.router;
     this.router = null;
@@ -203,4 +264,11 @@ class UtilityPluginRuntime {
   }
 }
 
-module.exports = { UtilityPluginRuntime, resolveUtilityEntrypoint, waitForUtilityReady };
+module.exports = {
+  PLUGIN_CONTAINMENT_ERROR_CODE,
+  UtilityPluginRuntime,
+  createContainmentError,
+  resolveUtilityEntrypoint,
+  waitForExit,
+  waitForUtilityReady,
+};

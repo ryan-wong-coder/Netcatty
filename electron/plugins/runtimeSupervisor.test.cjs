@@ -10,6 +10,7 @@ const { PluginDatabase } = require("./database.cjs");
 const { PluginHostRpcRegistry } = require("./hostRpcRegistry.cjs");
 const { createPluginPaths } = require("./paths.cjs");
 const { RuntimeSupervisor } = require("./runtimeSupervisor.cjs");
+const { createContainmentError } = require("./utilityPluginRuntime.cjs");
 
 function pluginManifest(overrides = {}) {
   return {
@@ -544,6 +545,43 @@ test("lazy activation waits until the previous runtime has fully stopped", async
   const secondIdentity = await restarting;
   assert.equal(factoryCalls, 2);
   assert.notEqual(secondIdentity.runtimeId, firstIdentity.runtimeId);
+});
+
+test("containment failure disables the plugin and blocks replacement activation until restart", async (context) => {
+  let factoryCalls = 0;
+  const fixture = createFixture(context, () => {
+    factoryCalls += 1;
+    return {
+      async start(config) {
+        return {
+          pluginId: config.pluginId,
+          pluginVersion: config.pluginVersion,
+          apiVersion: config.apiVersion,
+          enabledFeatures: config.enabledFeatures,
+        };
+      },
+      async stop() {
+        throw createContainmentError("advanced process was not reaped");
+      },
+    };
+  });
+  await fixture.supervisor.start(fixture.manifest.id);
+
+  await assert.rejects(
+    fixture.supervisor.stop(fixture.manifest.id),
+    /advanced process was not reaped/,
+  );
+  const plugin = fixture.database.getActivePlugin(fixture.manifest.id);
+  assert.equal(plugin.enabled, false);
+  assert.equal(plugin.runtime.status, "quarantined");
+  assert.notEqual(plugin.runtime.quarantinedAt, null);
+  fixture.database.setEnabled(fixture.manifest.id, true);
+  fixture.database.clearQuarantine(fixture.manifest.id);
+  await assert.rejects(
+    fixture.supervisor.start(fixture.manifest.id),
+    /restart Netcatty before starting it again/,
+  );
+  assert.equal(factoryCalls, 1);
 });
 
 test("shutdown cancels unresolved placement and waits for startup cleanup", async (context) => {
