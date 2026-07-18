@@ -151,6 +151,12 @@ Start and stop also share a per-plugin transition gate. A lazy activation waits
 for the previous process to finish stopping, while disable/uninstall persist the
 disabled state before teardown. Later activation events therefore cannot race a
 management operation and recreate a runtime that the user just disabled.
+For an advanced utility runtime, `kill()` is only a termination request. Its
+stop promise remains pending until Electron emits the child `exit` event.
+Unexpected fatal and protocol failures likewise revoke RPC immediately but are
+published to the supervisor only after the process is reaped. Permission,
+connection, synchronization, and companion state can therefore treat the stop
+event as a real process-containment boundary rather than an intent signal.
 
 Runtime state listeners receive starting, running, stopped, error, and
 quarantined transitions with the stable activation identity. Permission scopes,

@@ -63,11 +63,19 @@ class UtilityPluginRuntime {
     this.child = null;
     this.router = null;
     this.stopping = false;
+    this.stopPromise = null;
+    this.exitPromise = null;
+    this.resolveExit = null;
+    this.exited = false;
+    this.terminationError = null;
+    this.terminationRequested = false;
   }
 
   #assertStarting(signal) {
     signal?.throwIfAborted();
     if (this.stopping) throw new Error("Plugin utility runtime startup was stopped");
+    if (this.terminationError) throw this.terminationError;
+    if (this.exited) throw new Error("Plugin utility process exited during startup");
   }
 
   async start(runtimeConfig, options = {}) {
@@ -95,6 +103,11 @@ class UtilityPluginRuntime {
       allowLoadingUnsignedLibraries: false,
       disclaim: process.platform === "darwin",
     });
+    this.exitPromise = new Promise((resolve) => { this.resolveExit = resolve; });
+    this.child.on("error", (_type, location) => {
+      this.#beginTermination(new Error(`Plugin utility fatal error at ${location}`));
+    });
+    this.child.on("exit", (code) => this.#finishExit(code));
     this.child.stdout?.on("data", (chunk) => this.logger.write("info", "utility stdout", { output: String(chunk).slice(0, 8_192) }));
     this.child.stderr?.on("data", (chunk) => this.logger.write("warn", "utility stderr", { output: String(chunk).slice(0, 8_192) }));
     this.router = new PluginRpcRouter({
@@ -106,7 +119,7 @@ class UtilityPluginRuntime {
       onProgress: this.onProgress,
       onProtocolError: (error) => {
         this.onProtocolError(error);
-        this.#handleExit(error);
+        this.#beginTermination(error);
       },
     });
     this.child.on("message", (event) => {
@@ -114,8 +127,6 @@ class UtilityPluginRuntime {
       if (message?.type === "netcatty-plugin:ready") return;
       this.router?.accept(message);
     });
-    this.child.on("error", (_type, location) => this.#handleExit(new Error(`Plugin utility fatal error at ${location}`)));
-    this.child.on("exit", (code) => this.#handleExit(new Error(`Plugin utility exited (${code})`)));
     const ready = waitForUtilityReady(this.child, PLUGIN_ACTIVATION_TIMEOUT_MS);
     this.child.postMessage({ type: "netcatty-plugin:bootstrap", config });
     await ready;
@@ -131,8 +142,12 @@ class UtilityPluginRuntime {
     return initialized;
   }
 
-  async stop() {
-    if (this.stopping) return;
+  stop() {
+    this.stopPromise ??= this.#stop();
+    return this.stopPromise;
+  }
+
+  async #stop() {
     this.stopping = true;
     try {
       await this.router?.request("plugin.deactivate", {}, { timeoutMs: PLUGIN_DEACTIVATION_TIMEOUT_MS });
@@ -140,7 +155,8 @@ class UtilityPluginRuntime {
       const router = this.router;
       this.router = null;
       router?.close();
-      this.child?.kill();
+      this.#requestTermination();
+      if (this.exitPromise && !this.exited) await this.exitPromise;
     }
   }
 
@@ -159,14 +175,31 @@ class UtilityPluginRuntime {
     return this.router.streams.openOutgoing(streamId, windowBytes);
   }
 
-  #handleExit(error) {
-    if (!this.router) return;
+  #beginTermination(error) {
+    this.terminationError ??= error;
     const router = this.router;
     this.router = null;
-    router.close(error);
-    this.child?.kill();
-    const expected = this.stopping;
-    this.onExit({ expected, error });
+    router?.close(error);
+    this.#requestTermination();
+  }
+
+  #requestTermination() {
+    if (!this.child || this.exited || this.terminationRequested) return;
+    this.terminationRequested = true;
+    this.child.kill();
+  }
+
+  #finishExit(code) {
+    if (this.exited) return;
+    this.exited = true;
+    this.resolveExit?.(code);
+    this.resolveExit = null;
+    if (this.stopping) return;
+    const error = this.terminationError ?? new Error(`Plugin utility exited (${code})`);
+    const router = this.router;
+    this.router = null;
+    router?.close(error);
+    this.onExit({ expected: false, error });
   }
 }
 
