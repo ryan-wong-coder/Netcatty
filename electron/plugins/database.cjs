@@ -99,8 +99,13 @@ class PluginDatabase {
   }
 
   installVersion(record, options = {}) {
+    if (options.enable === true && options.forceDisabled === true) {
+      throw new TypeError("Plugin version cannot be enabled and force-disabled together");
+    }
     const now = this.clock();
     const manifestJson = JSON.stringify(record.manifest);
+    const requestedEnabled = options.enable === true ? 1 : 0;
+    const overwriteEnabled = options.enable === true || options.forceDisabled === true;
     this.transaction(() => {
       this.db.prepare(`
         INSERT INTO plugins(id, enabled, active_version, installed_at, updated_at)
@@ -111,11 +116,11 @@ class PluginDatabase {
           updated_at = excluded.updated_at
       `).run(
         record.pluginId,
-        options.enable === true ? 1 : 0,
+        requestedEnabled,
         record.version,
         now,
         now,
-        options.enable === true ? 1 : 0,
+        overwriteEnabled ? 1 : 0,
       );
       this.db.prepare(`
         INSERT INTO plugin_versions(

@@ -113,6 +113,58 @@ test("startup recovery removes staging debris and reconstructs a committed orpha
   assert.equal(recovered.enabled, false);
 });
 
+test("startup recovery force-disables a newer orphan when an older version was enabled", async (context) => {
+  const fixture = createStore(context);
+  const donor = createStore(context);
+  await Promise.all([fixture.store.initialize(), donor.store.initialize()]);
+  const first = await createPackage(fixture.root);
+  const second = await createPackage(donor.root, { manifest: { version: "2.0.0" } });
+  await fixture.store.install(first.archive, { enable: true });
+  await donor.store.install(second.archive);
+
+  const orphanSource = path.join(donor.paths.packages, first.manifest.id, "2.0.0");
+  const orphanTarget = path.join(fixture.paths.packages, first.manifest.id, "2.0.0");
+  await fs.promises.cp(orphanSource, orphanTarget, { recursive: true, errorOnExist: true });
+
+  assert.equal(fixture.database.getActivePlugin(first.manifest.id).enabled, true);
+  await fixture.store.recover();
+
+  const recovered = fixture.database.getActivePlugin(first.manifest.id);
+  assert.equal(recovered.activeVersion, "2.0.0");
+  assert.equal(recovered.enabled, false);
+});
+
+test("startup recovery discards incomplete removal staging before a package was moved", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const emptyRemoval = path.join(fixture.paths.staging, "remove-empty");
+  const partialRemoval = path.join(fixture.paths.staging, "remove-partial");
+  await fs.promises.mkdir(emptyRemoval);
+  await fs.promises.mkdir(partialRemoval);
+  await fs.promises.writeFile(path.join(partialRemoval, REMOVAL_METADATA_FILE), "{\"pluginId\":");
+
+  await fixture.store.recover();
+
+  assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
+});
+
+test("startup recovery keeps an unidentified moved package fail-closed", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  const removalDirectory = path.join(fixture.paths.staging, "remove-corrupt-metadata");
+  const removedPluginPath = path.join(removalDirectory, REMOVED_PLUGIN_DIRECTORY);
+  await fs.promises.mkdir(removalDirectory);
+  await fs.promises.rename(path.join(fixture.paths.packages, installed.id), removedPluginPath);
+  await fs.promises.writeFile(path.join(removalDirectory, REMOVAL_METADATA_FILE), "{\"pluginId\":");
+
+  await assert.rejects(fixture.store.recover());
+
+  assert.equal((await fs.promises.stat(removedPluginPath)).isDirectory(), true);
+  assert.equal(fixture.database.getActivePlugin(installed.id).enabled, true);
+});
+
 test("startup recovery completes or rolls back an interrupted uninstall", async (context) => {
   const fixture = createStore(context);
   await fixture.store.initialize();

@@ -33,7 +33,51 @@ test("incoming stream credit is returned only after the consumer releases a chun
     },
   });
   assert.deepEqual(received, [{ value: 1 }]);
-  assert.equal(sent[0].frame.kind, "windowUpdate");
+  assert.deepEqual(sent[0].frame, {
+    streamId: "input",
+    sequence: 0,
+    kind: "windowUpdate",
+    creditBytes: contract.createJsonStreamChunk({ value: 1 }).byteLength,
+  });
+});
+
+test("incoming binary streams return their declared byte credit after release", async () => {
+  const sent = [];
+  const received = [];
+  let router;
+  router = new PluginStreamRouter({
+    send(message) { sent.push(message); },
+    onIncomingStream({ streamId }) {
+      router.bindIncoming(streamId, {
+        onChunk(chunk, release) {
+          received.push([...chunk.bytes]);
+          release();
+        },
+      });
+      return true;
+    },
+  });
+  const contract = await import("@netcatty/plugin-contract");
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+
+  await router.accept({ frame: { streamId: "binary", sequence: 0, kind: "open", windowBytes: 1024 } });
+  await router.accept({
+    frame: {
+      streamId: "binary",
+      sequence: 1,
+      kind: "chunk",
+      data: contract.createBase64StreamChunk(bytes),
+    },
+  });
+
+  assert.deepEqual(received, [[1, 2, 3, 4]]);
+  assert.deepEqual(sent[0].frame, {
+    streamId: "binary",
+    sequence: 0,
+    kind: "windowUpdate",
+    creditBytes: 4,
+  });
+  assert.equal(Number.isSafeInteger(sent[0].frame.creditBytes), true);
 });
 
 test("outgoing stream applies byte backpressure and ordered credit updates", async () => {

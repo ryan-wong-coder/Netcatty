@@ -111,10 +111,11 @@ class PluginStreamRouter {
     }
     state.nextSequence += 1;
     if (frame.kind === "chunk") {
-      if (frame.data.byteLength > state.availableBytes) {
+      const creditBytes = frame.data.byteLength;
+      if (creditBytes > state.availableBytes) {
         throw new Error(`Plugin stream exceeded receive credit: ${frame.streamId}`);
       }
-      state.availableBytes -= frame.data.byteLength;
+      state.availableBytes -= creditBytes;
       const materialized = contract.materializeStreamChunk(frame.data, envelope.transfer);
       const listener = state.onChunk;
       if (!listener) {
@@ -125,14 +126,14 @@ class PluginStreamRouter {
       const release = () => {
         if (released || state.closed) return;
         released = true;
-        state.availableBytes += materialized.byteLength;
+        state.availableBytes += creditBytes;
         state.updateSequence += 1;
         this.send({
           frame: {
             streamId: state.streamId,
             sequence: state.updateSequence,
             kind: "windowUpdate",
-            creditBytes: materialized.byteLength,
+            creditBytes,
           },
         });
       };

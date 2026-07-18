@@ -67,6 +67,38 @@ test("version activation and namespaced key/value writes are transactional", (co
   database.close();
 });
 
+test("recovered versions can atomically replace an enabled version while staying disabled", (context) => {
+  const database = createDatabase(context);
+  const first = manifest();
+  database.installVersion({
+    pluginId: first.id,
+    version: first.version,
+    manifest: first,
+    archiveSha256: "a".repeat(64),
+    packageRelativePath: `${first.id}/${first.version}/package`,
+  }, { enable: true });
+  const second = manifest(first.id, "2.0.0");
+  database.installVersion({
+    pluginId: second.id,
+    version: second.version,
+    manifest: second,
+    archiveSha256: "b".repeat(64),
+    packageRelativePath: `${second.id}/${second.version}/package`,
+  }, { forceDisabled: true });
+
+  const recovered = database.getActivePlugin(first.id);
+  assert.equal(recovered.activeVersion, "2.0.0");
+  assert.equal(recovered.enabled, false);
+  assert.throws(() => database.installVersion({
+    pluginId: second.id,
+    version: second.version,
+    manifest: second,
+    archiveSha256: "b".repeat(64),
+    packageRelativePath: `${second.id}/${second.version}/package`,
+  }, { enable: true, forceDisabled: true }), /cannot be enabled and force-disabled/);
+  database.close();
+});
+
 test("three crashes inside five minutes quarantine until explicit recovery", (context) => {
   let now = 10_000;
   const database = createDatabase(context, () => now);

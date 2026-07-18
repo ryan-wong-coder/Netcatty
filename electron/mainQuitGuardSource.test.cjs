@@ -35,3 +35,18 @@ test("before-quit dirty editor guard foregrounds dirty windows through the focus
   assert.doesNotMatch(foregroundBlock, /win\.show\(\)/);
   assert.doesNotMatch(foregroundBlock, /win\.focus\(\)/);
 });
+
+test("before-quit keeps the original event cancelled while plugin shutdown runs without a renderer", () => {
+  const source = readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const noRendererIndex = source.indexOf("if (queryableWebContents.length === 0)");
+  const noRendererEnd = source.indexOf("return;", noRendererIndex);
+  const noRendererBlock = source.slice(noRendererIndex, noRendererEnd);
+
+  assert.notEqual(noRendererIndex, -1);
+  assert.match(noRendererBlock, /event\.preventDefault\(\)/);
+  assert.match(noRendererBlock, /commitQuit\(\)/);
+  assert.ok(
+    noRendererBlock.indexOf("event.preventDefault()") < noRendererBlock.indexOf("commitQuit()"),
+    "the original quit must be cancelled before asynchronous plugin shutdown starts",
+  );
+});

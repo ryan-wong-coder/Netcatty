@@ -223,11 +223,27 @@ class PackageStore {
         await rm(stagedPath, { recursive: true, force: true });
         continue;
       }
+      const removedPluginPath = path.join(stagedPath, REMOVED_PLUGIN_DIRECTORY);
+      let hasMovedPlugin = false;
+      try {
+        await lstat(removedPluginPath);
+        hasMovedPlugin = true;
+      } catch (error) {
+        if (!(error && error.code === "ENOENT")) throw error;
+      }
+      // A crash can happen after remove-* is created but before remove.json is
+      // durably written or before the installed package is moved. With no
+      // moved package there is nothing to restore, so discard the debris even
+      // when the metadata is missing or partial. If plugin/ exists, metadata
+      // remains mandatory so recovery never deletes an unidentified package.
+      if (!hasMovedPlugin) {
+        await rm(stagedPath, { recursive: true, force: true });
+        continue;
+      }
       const metadata = validateRemovalMetadata(JSON.parse(await readFile(
         path.join(stagedPath, REMOVAL_METADATA_FILE),
         "utf8",
       )));
-      const removedPluginPath = path.join(stagedPath, REMOVED_PLUGIN_DIRECTORY);
       const installedPluginPath = path.join(this.paths.packages, metadata.pluginId);
       const databasePlugin = this.database.getActivePlugin(metadata.pluginId);
       if (databasePlugin) {
@@ -281,7 +297,7 @@ class PackageStore {
               manifest: validation.manifest,
               archiveSha256: metadata.archiveSha256,
               packageRelativePath: path.relative(this.paths.packages, packageDirectory),
-            }, { enable: false });
+            }, { forceDisabled: true });
           }
         } catch (error) {
           this.logger.warn?.("[Plugins] Removing invalid uncommitted package", {

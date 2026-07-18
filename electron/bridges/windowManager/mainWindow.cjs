@@ -12,6 +12,7 @@ function createMainWindowApi(ctx) {
         onRegisterBridge,
         electronDir,
         route,
+        onAppContentWindowClosed,
         registerAsMainWindow = true,
         persistWindowState = registerAsMainWindow,
         registerAsAppContentWindow = true,
@@ -168,6 +169,13 @@ function createMainWindowApi(ctx) {
           }
         } else if (registerAsAppContentWindow && typeof unregisterAppContentWindow === "function") {
           unregisterAppContentWindow(win);
+        }
+        if (registerAsAppContentWindow) {
+          try {
+            onAppContentWindowClosed?.(win);
+          } catch {
+            // The application-level close fallback must not disrupt teardown.
+          }
         }
       });
     

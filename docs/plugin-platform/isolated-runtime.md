@@ -28,15 +28,20 @@ these steps:
 
 The file rename occurs before the database transaction. If the process exits
 between them, startup recovery validates the committed directory and imports it
-as a disabled version. Files left under `staging/` were never published and are
-removed. A database row whose active package is missing or invalid is disabled
-and reported as an error instead of being executed.
+as a disabled version, even when an older version of that plugin was enabled.
+Files left under `staging/` were never published and are removed. A database
+row whose active package is missing or invalid is disabled and reported as an
+error instead of being executed.
 
 Uninstall uses the inverse two-phase move. The plugin directory first moves
 under a marked `staging/remove-*` transaction and the database row is deleted
 afterward. On restart, a remaining database row restores the directory, while
 an already-deleted row completes removal. A crash cannot leave a live database
-record pointing at a package that recovery discarded.
+record pointing at a package that recovery discarded. A `remove-*` directory
+created before any package was moved is harmless debris and is deleted even if
+its metadata write was interrupted. Once a package has moved into that
+directory, valid identity metadata is mandatory; missing or corrupt metadata
+fails closed instead of deleting an unidentified package.
 
 Installing the same version and archive is idempotent after the installed tree
 is revalidated. Reusing the same plugin ID and version with a different archive
@@ -159,7 +164,11 @@ until the phase-3 secure broker exists.
 Application quit is coordinated with plugin shutdown after Netcatty's dirty
 editor guard succeeds. Runtimes receive the two-second deactivation deadline;
 the coordinator then fails open after a short outer deadline so a broken plugin
-cannot make the application impossible to quit.
+cannot make the application impossible to quit. The original `before-quit`
+event remains cancelled until that asynchronous deadline finishes. On Windows
+and Linux, closing the last tracked Netcatty content window initiates the same
+quit path directly; hidden plugin host windows are deliberately excluded from
+that count, so they cannot leave a headless application running.
 
 ## Development management bridge
 

@@ -88,6 +88,7 @@ const {
   writeSshDeepLinkEnabledPreference,
 } = require("./deepLink.cjs");
 const { getReusableMainWindow } = require("./mainWindowReuse.cjs");
+const { createAppContentWindowClosedHandler } = require("./appWindowLifecycle.cjs");
 const { PLUGIN_PROTOCOL_SCHEME } = require("./plugins/constants.cjs");
 const { runPluginShutdown } = require("./plugins/shutdownCoordinator.cjs");
 const {
@@ -472,7 +473,8 @@ const registerBridges = createBridgeRegistrar({
  * Create the main application window
  */
 async function createWindow() {
-  const win = await getWindowManager().createWindow(electronModule, {
+  const windowManager = getWindowManager();
+  const win = await windowManager.createWindow(electronModule, {
     preload,
     devServerUrl: effectiveDevServerUrl,
     isDev,
@@ -480,6 +482,10 @@ async function createWindow() {
     isMac,
     electronDir,
     onRegisterBridge: registerBridges,
+    onAppContentWindowClosed: createAppContentWindowClosedHandler({
+      app,
+      windowManager,
+    }),
   });
   
   return win;
@@ -1213,6 +1219,9 @@ if (!gotLock) {
       .map((candidate) => candidate.webContents)
       .filter(Boolean);
     if (queryableWebContents.length === 0) {
+      // Plugin shutdown is asynchronous, so the original quit must remain
+      // cancelled until commitQuit re-enters app.quit() after deactivation.
+      event.preventDefault();
       commitQuit();
       return;
     }
