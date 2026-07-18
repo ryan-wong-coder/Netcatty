@@ -40,7 +40,7 @@ function fakeConn(stdout) {
 const LINUX_STATS =
   "CPURAW:1000 900|CORES:4|PERCORERAW:|MEMINFO:8000 4000 100 900 0 0|PROCS:|DISKS:|NET:";
 const MACOS_STATS =
-  "NC_LATENCY_MARK|CPU:27|CORES:10|MEMINFO:32768 4096 0 8192 2048 1536|PROCS:123;1.2;Finder|DISKS:/:120:460:26|NET:en0:1000:3000";
+  "NC_LATENCY_MARK|CPU:27|CORES:10|MEMINFO:32768 4096 0 8192 2048 1536|PROCS:123;1.2;Finder|DISKS:/:120:460:26:apfs:/dev/disk3|NET:en0:1000:3000";
 
 function makeSessionOps(sessions) {
   return createSessionOpsApi({
@@ -70,6 +70,7 @@ function runStatsCommandWithBusyBoxTools(command) {
     "  if [ \"$1\" = '-BG' ]; then return 1; fi",
     "  printf '%s\\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on'",
     "  printf '%s\\n' 'overlayfs:/overlay 1048576 262144 786432 25% /'",
+    "  printf '%s\\n' '/dev/loop0 131072 131072 0 100% /snap/example/1'",
     "}",
     command,
   ].join("\n");
@@ -93,7 +94,7 @@ function runStatsCommandWithBusyBoxSmpTop(command) {
   return spawnSync("sh", ["-c", script], { encoding: "utf8" });
 }
 
-test("getServerStats falls back to BusyBox tools for process and root disk data", async () => {
+test("getServerStats falls back to BusyBox tools and excludes loop-backed images", async () => {
   const sessions = new Map();
   sessions.set("sid", {
     type: "ssh",
@@ -115,7 +116,7 @@ test("getServerStats falls back to BusyBox tools for process and root disk data"
     { pid: "1", memPercent: 2, command: "/sbin/procd" },
   ]);
   assert.deepEqual(result.stats.disks, [
-    { mountPoint: "/", used: 0.25, total: 1, percent: 25 },
+    { mountPoint: "/", used: 0.25, total: 1, percent: 25, capacityKey: "overlayfs:/overlay" },
   ]);
   assert.equal(result.stats.diskPercent, 25);
 });
@@ -398,12 +399,14 @@ test("getServerStats parses macOS stats and avoids blocking top command", async 
   assert.match(command, /ps -A -o %cpu=/);
   assert.match(command, /awk -v c="\$cores"/);
   assert.match(command, /s=s\/c/);
+  assert.match(command, /u=\(\$2-\$4\)\/1048576/);
   assert.doesNotMatch(command, /top -l/);
   assert.equal(result.stats.cpu, 27);
   assert.equal(result.stats.cpuCores, 10);
   assert.equal(result.stats.memTotal, 32768);
   assert.equal(result.stats.memUsed, 20480);
   assert.equal(result.stats.diskPercent, 26);
+  assert.equal(result.stats.disks[0].capacityKey, "apfs:/dev/disk3");
   assert.equal(result.stats.netInterfaces.length, 1);
   assert.equal(result.stats.netInterfaces[0].name, "en0");
   assert.equal(result.stats.netInterfaces[0].rxBytes, 1000);

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import React, { memo, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../../application/i18n/I18nProvider';
+import { aggregateMountedDiskUsage } from '../../domain/systemDiskUsage';
 import { cn } from '../../lib/utils';
 import { useServerStats } from '../terminal/hooks/useServerStats';
 import { ResourceBar } from './ResourceBar';
@@ -229,7 +230,10 @@ export const SystemOverviewTab = memo(function SystemOverviewTab({
   const hasStats = Boolean(stats.lastUpdated);
 
   const memoryPercent = ratioPercent(stats?.memUsed, stats?.memTotal);
-  const diskPercent = clampPercent(stats?.diskPercent);
+  const mountedDiskUsage = aggregateMountedDiskUsage(stats.disks);
+  const diskUsed = mountedDiskUsage?.used ?? stats.diskUsed;
+  const diskTotal = mountedDiskUsage?.total ?? stats.diskTotal;
+  const diskPercent = mountedDiskUsage?.percent ?? clampPercent(stats.diskPercent);
   const networkSpeed = (stats?.netRxSpeed ?? 0) + (stats?.netTxSpeed ?? 0);
   const networkGauge = Math.min(100, Math.log10(networkSpeed + 1) * 14);
   const loadOne = stats?.loadAverage?.[0] ?? null;
@@ -309,7 +313,7 @@ export const SystemOverviewTab = memo(function SystemOverviewTab({
             <MetricCard
               label={t('systemManager.overview.disk')}
               value={formatPercent(diskPercent)}
-              detail={`${formatStorageGb(stats.diskUsed)} / ${formatStorageGb(stats.diskTotal)}`}
+              detail={`${formatStorageGb(diskUsed)} / ${formatStorageGb(diskTotal)}`}
               icon={HardDrive}
               gaugeValue={diskPercent}
               trendValues={trends.disk}
@@ -364,7 +368,7 @@ export const SystemOverviewTab = memo(function SystemOverviewTab({
             </div>
             {stats.disks.length > 0 ? (
               <div className="space-y-2">
-                {stats.disks.slice(0, 5).map((disk) => (
+                {stats.disks.map((disk) => (
                   <div key={disk.mountPoint} className="space-y-1">
                     <div className="flex items-center justify-between gap-2 text-[11px]">
                       <span className="min-w-0 truncate text-foreground">{disk.mountPoint}</span>
