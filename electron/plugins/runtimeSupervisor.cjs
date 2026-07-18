@@ -192,7 +192,8 @@ class RuntimeSupervisor {
       features: this.supportedFeatures,
     });
     if (!compatibility.compatible) throw new Error(`Plugin is incompatible: ${compatibility.errors.join("; ")}`);
-    const packageRoot = this.packageStore.resolvePackageRoot(plugin);
+    const packageRoot = await this.packageStore.preparePackageRoot(plugin);
+    signal.throwIfAborted();
     const availableKinds = Object.freeze([
       ...(plugin.manifest.main.browser ? ["browser"] : []),
       ...(plugin.manifest.main.node ? ["utility"] : []),

@@ -20,6 +20,7 @@ function createRouter(options = {}) {
     notificationHandlers: options.notificationHandlers,
     maxPending: options.maxPending,
     defaultTimeoutMs: options.defaultTimeoutMs ?? 100,
+    onIncomingStream: options.onIncomingStream,
     onProtocolError(error) { protocolErrors.push(error); },
   });
   return { router, sent, protocolErrors };
@@ -111,6 +112,43 @@ test("incoming request deadlines do not block later requests", async () => {
     params: {},
   });
   assert.deepEqual(fixture.sent[1].result, { keys: ["ready"] });
+});
+
+test("a stalled stream consumer does not block frames for another stream", async () => {
+  let releaseSlowChunk;
+  const slowChunk = new Promise((resolve) => { releaseSlowChunk = resolve; });
+  const fixture = createRouter({
+    onIncomingStream({ streamId, bind }) {
+      bind({
+        async onChunk(_chunk, release) {
+          if (streamId === "slow") await slowChunk;
+          release();
+        },
+      });
+      return true;
+    },
+  });
+  const contract = await import("@netcatty/plugin-contract");
+  await fixture.router.accept({
+    frame: { streamId: "slow", sequence: 0, kind: "open", windowBytes: 1024 },
+  });
+  const pendingSlowChunk = fixture.router.accept({
+    frame: {
+      streamId: "slow",
+      sequence: 1,
+      kind: "chunk",
+      data: contract.createJsonStreamChunk({ value: "slow" }),
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await fixture.router.accept({
+    frame: { streamId: "independent", sequence: 0, kind: "open", windowBytes: 1024 },
+  });
+  assert.equal(fixture.router.streams.incoming.has("independent"), true);
+
+  releaseSlowChunk();
+  await pendingSlowChunk;
 });
 
 test("incoming handlers can await a nested outgoing RPC response", async () => {

@@ -417,6 +417,11 @@ file while streaming it. A manifest changed after validation cannot be packaged
 under the previously validated object model. Source hashing enforces its byte
 budget during the read, and archive writing stops before emitting bytes beyond
 the scanned size, so a concurrently growing file cannot cause unbounded I/O.
+Build, archive-validation, extraction, and directory-validation results also
+carry the same versioned `contentSha256`. It hashes sorted logical entries
+(path, byte length, declared-companion classification, and file SHA-256), so the host
+can compare an extracted tree with a valid archive without assuming that all
+publishers used the same ZIP encoder or compression method.
 
 Package validation rejects:
 

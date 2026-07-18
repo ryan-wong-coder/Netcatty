@@ -51,7 +51,7 @@ function createFixture(context, runtimeFactory, supervisorOptions = {}) {
   const supervisor = new RuntimeSupervisor({
     electron: {},
     database,
-    packageStore: { resolvePackageRoot: () => packageRoot },
+    packageStore: { async preparePackageRoot() { return packageRoot; } },
     protocol: {},
     paths,
     netcattyVersion: "0.0.0",
@@ -88,6 +88,30 @@ test("supervisor prefers the ordinary browser runtime and enforces negotiated id
   assert.equal(fixture.database.getActivePlugin(fixture.manifest.id).runtime.status, "running");
   await fixture.supervisor.stop(fixture.manifest.id);
   assert.deepEqual(calls.map(([kind]) => kind), ["start", "stop"]);
+});
+
+test("supervisor verifies immutable package contents before runtime placement", async (context) => {
+  let placementCalls = 0;
+  const fixture = createFixture(context, () => {
+    throw new Error("runtime factory must not run");
+  }, {
+    packageStore: {
+      async preparePackageRoot() {
+        throw new Error("installed package integrity check failed");
+      },
+    },
+    resolveRuntimeKind() {
+      placementCalls += 1;
+      return "browser";
+    },
+  });
+
+  await assert.rejects(
+    fixture.supervisor.start(fixture.manifest.id),
+    /installed package integrity check failed/,
+  );
+  assert.equal(placementCalls, 0);
+  assert.deepEqual(fixture.runtimeOptions, []);
 });
 
 test("repeated activation failures quarantine after the third crash window event", async (context) => {

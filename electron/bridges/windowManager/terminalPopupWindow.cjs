@@ -1,5 +1,7 @@
 /* eslint-disable no-undef */
 
+const { randomUUID } = require("node:crypto");
+
 const crashLogBridge = require("../crashLogBridge.cjs");
 
 function createTerminalPopupWindowApi(ctx) {
@@ -30,9 +32,13 @@ function createTerminalPopupWindowApi(ctx) {
       const title = typeof payload?.title === "string" && payload.title.trim()
         ? payload.title.trim()
         : "Terminal";
+      const popupId = String(payload?.popupId || randomUUID());
+      if (terminalPopupWindows.has(popupId)) {
+        throw new Error(`Terminal popup ID is already active: ${popupId}`);
+      }
 
       crashLogBridge.captureDiagnostic("terminal-popup", "creating popup window", {
-        popupId: payload?.popupId,
+        popupId,
         title,
         isDev,
         popupX,
@@ -61,8 +67,16 @@ function createTerminalPopupWindowApi(ctx) {
         },
       });
 
-      const popupId = String(payload?.popupId || Date.now());
-      terminalPopupWindows.set(popupId, win);
+      let lifecycleReleased = false;
+      const releaseLifecycle = () => {
+        if (lifecycleReleased) return;
+        lifecycleReleased = true;
+        terminalPopupWindows.delete(popupId);
+        unregisterAppContentWindow(win);
+        notifyAppContentWindowClosed(win);
+      };
+      terminalPopupWindows.set(popupId, { releaseLifecycle, win });
+      registerAppContentWindow(win);
       crashLogBridge.captureDiagnostic("terminal-popup", "popup BrowserWindow created", {
         popupId,
         title,
@@ -77,9 +91,7 @@ function createTerminalPopupWindowApi(ctx) {
         // ignore
       }
 
-      win.on("closed", () => {
-        terminalPopupWindows.delete(popupId);
-      });
+      win.on("closed", releaseLifecycle);
 
       try {
         win.webContents?.on?.("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
@@ -130,50 +142,75 @@ function createTerminalPopupWindowApi(ctx) {
 
       const popupPath = "#/terminal-popup";
 
-      if (isDev) {
-        try {
-          const baseUrl = getDevRendererBaseUrl(devServerUrl);
-          crashLogBridge.captureDiagnostic("terminal-popup", "loading dev popup URL", {
+      try {
+        if (isDev) {
+          try {
+            const baseUrl = getDevRendererBaseUrl(devServerUrl);
+            crashLogBridge.captureDiagnostic("terminal-popup", "loading dev popup URL", {
+              popupId,
+              url: `${baseUrl}${popupPath}`,
+            });
+            await win.loadURL(`${baseUrl}${popupPath}`);
+          } catch (e) {
+            console.warn("[TerminalPopup] Dev server not reachable", e);
+            crashLogBridge.captureError("terminal-popup", e, {
+              popupId,
+              step: "load dev popup URL",
+            });
+            await win.loadURL(`app://netcatty/index.html${popupPath}`);
+          }
+        } else {
+          crashLogBridge.captureDiagnostic("terminal-popup", "loading packaged popup URL", {
             popupId,
-            url: `${baseUrl}${popupPath}`,
-          });
-          await win.loadURL(`${baseUrl}${popupPath}`);
-        } catch (e) {
-          console.warn("[TerminalPopup] Dev server not reachable", e);
-          crashLogBridge.captureError("terminal-popup", e, {
-            popupId,
-            step: "load dev popup URL",
+            url: `app://netcatty/index.html${popupPath}`,
           });
           await win.loadURL(`app://netcatty/index.html${popupPath}`);
         }
-      } else {
-        crashLogBridge.captureDiagnostic("terminal-popup", "loading packaged popup URL", {
-          popupId,
-          url: `app://netcatty/index.html${popupPath}`,
-        });
-        await win.loadURL(`app://netcatty/index.html${popupPath}`);
-      }
 
-      win.webContents.send("netcatty:window:terminalPopupConfig", { ...payload, popupId });
-      crashLogBridge.captureDiagnostic("terminal-popup", "popup config delivered", {
-        popupId,
-        title,
-      });
-      showAndFocusWindow(win);
-      crashLogBridge.captureDiagnostic("terminal-popup", "popup window shown", {
-        popupId,
-        title,
-        visible: typeof win.isVisible === "function" ? win.isVisible() : undefined,
-      });
-      return { success: true, popupId };
+        win.webContents.send("netcatty:window:terminalPopupConfig", { ...payload, popupId });
+        crashLogBridge.captureDiagnostic("terminal-popup", "popup config delivered", {
+          popupId,
+          title,
+        });
+        showAndFocusWindow(win);
+        crashLogBridge.captureDiagnostic("terminal-popup", "popup window shown", {
+          popupId,
+          title,
+          visible: typeof win.isVisible === "function" ? win.isVisible() : undefined,
+        });
+        return { success: true, popupId };
+      } catch (error) {
+        try {
+          if (isLiveWindow(win)) {
+            if (typeof win.destroy === "function") win.destroy();
+            else win.close();
+          }
+        } catch {
+          // Lifecycle cleanup below remains fail-safe if Electron cleanup throws.
+        }
+        releaseLifecycle();
+        throw error;
+      }
     }
 
     function closeTerminalPopupWindow(popupId) {
-      const win = terminalPopupWindows.get(popupId);
-      if (isLiveWindow(win)) {
-        try { win.close(); } catch { /* ignore */ }
+      const record = terminalPopupWindows.get(popupId);
+      if (!record) return;
+      if (!isLiveWindow(record.win)) {
+        record.releaseLifecycle();
+        return;
       }
-      terminalPopupWindows.delete(popupId);
+      try {
+        record.win.close();
+      } catch {
+        try {
+          record.win.destroy?.();
+        } catch {
+          // The lifecycle registry must still be released below.
+        } finally {
+          record.releaseLifecycle();
+        }
+      }
     }
 
     return {

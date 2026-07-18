@@ -103,8 +103,17 @@ or account for a runtime.
 ## Stream ownership and the terminal fast path
 
 Incoming stream handlers are registered centrally and receive a bind function
-for the matched stream plus the same runtime identity. The first handler that
-recognizes a pre-authorized stream ID owns it; unknown streams are cancelled.
+for the matched stream, an abort signal, and the same runtime identity. The
+first handler that recognizes a pre-authorized stream ID owns it; unknown
+streams are cancelled. Owner selection has the same bounded deadline as RPC,
+so a stalled registry cannot retain an unowned stream indefinitely. Frames are
+ordered per stream ID rather than through one global queue: a slow consumer
+backpressures its own stream without blocking unrelated connection, importer,
+or synchronization streams. Once a handler binds ownership, every local reject,
+deadline, transport failure, peer close, or host shutdown reaches its `onClose`
+cleanup boundary exactly once. The same abort signal remains live for the whole
+owned stream and is aborted before cleanup, so long-running Provider work can
+stop promptly instead of polling runtime state.
 Handlers registered after activation require a restart, matching RPC route
 snapshot semantics.
 
@@ -164,7 +173,7 @@ new protocol route. Plugin packages still cannot add mappings themselves.
 | --- | --- | --- |
 | PR 3 permissions | RPC middleware, immutable runtime identity, placement resolver, runtime stop events | grants, resource canonicalization, secrets, credentials, companions, quotas |
 | PR 4 contributions | host-to-plugin request/notify, runtime events, host module resources | activation-event policy, command/settings/view registries, UI SDK |
-| PR 5 terminal Providers | validated host requests, cancellation, lifecycle events | Provider ranking, deadlines, snapshots, built-in migrations |
+| PR 5 terminal Providers | validated host requests, cancellation, lifecycle events | Provider ranking, deadlines, snapshots, built-in highlighter/autocomplete adapters |
 | PR 6 terminal pipeline | runtime identity and placement policy | direct MessagePort fast path, sensitive-input bypass, circuit breaker |
 | PR 7 connection/auth/import | requests, validated results, streams, crash containment | profiles, challenges, SecretLease, importer transactions |
 | PR 8 sync | streams, lifecycle identity, namespaced storage boundary | dynamic providers, encrypted sidecar, CRDT state and account baselines |

@@ -1,6 +1,7 @@
 "use strict";
 
 const {
+  PLUGIN_RPC_DEFAULT_TIMEOUT_MS,
   PLUGIN_RPC_MAX_PENDING,
 } = require("./constants.cjs");
 const { assertStreamFrameSchema } = require("./contractValidator.cjs");
@@ -35,6 +36,24 @@ function assertStreamEnvelopeShape(envelope) {
   return envelope;
 }
 
+function raceWithSignal(operation, signal) {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 class PluginStreamRouter {
   constructor(options) {
     this.send = options.send;
@@ -42,6 +61,7 @@ class PluginStreamRouter {
     this.incoming = new Map();
     this.outgoing = new Map();
     this.maxStreams = options.maxStreams ?? PLUGIN_RPC_MAX_PENDING;
+    this.openTimeoutMs = options.openTimeoutMs ?? PLUGIN_RPC_DEFAULT_TIMEOUT_MS;
     this.closed = false;
   }
 
@@ -69,23 +89,43 @@ class PluginStreamRouter {
         nextSequence: 1,
         availableBytes: frame.windowBytes,
         updateSequence: -1,
+        openController: new AbortController(),
         closed: false,
       };
       this.incoming.set(frame.streamId, state);
       let accepted;
+      let openTimedOut = false;
+      const openTimer = setTimeout(() => {
+        openTimedOut = true;
+        state.openController.abort(new Error(`Plugin stream owner timed out: ${frame.streamId}`));
+      }, this.openTimeoutMs);
       try {
-        accepted = await this.onIncomingStream({
+        accepted = await raceWithSignal(Promise.resolve(this.onIncomingStream({
           streamId: frame.streamId,
           windowBytes: frame.windowBytes,
+          signal: state.openController.signal,
           bind: (handlers) => this.bindIncoming(frame.streamId, handlers),
           cancel: () => this.#cancelIncoming(state),
-        });
+        })), state.openController.signal);
       } catch (error) {
-        state.closed = true;
-        this.incoming.delete(frame.streamId);
+        if (!this.closed) {
+          try {
+            await this.#cancelIncoming(state, error);
+          } catch {
+            // The owner-selection error remains the primary protocol failure.
+          }
+        } else {
+          state.closed = true;
+          this.incoming.delete(frame.streamId);
+        }
+        if (openTimedOut) return;
         throw error;
+      } finally {
+        clearTimeout(openTimer);
       }
-      if (accepted !== true) await this.#cancelIncoming(state);
+      if (accepted !== true) {
+        await this.#cancelIncoming(state, new Error(`Plugin stream was not accepted: ${frame.streamId}`));
+      }
       return;
     }
     if (frame.kind === "windowUpdate") {
@@ -149,6 +189,7 @@ class PluginStreamRouter {
         } catch (error) {
           state.closed = true;
           this.incoming.delete(state.streamId);
+          state.openController.abort(error);
           try {
             const closing = state.onClose?.(error);
             if (closing && typeof closing.then === "function") void closing.catch(() => {});
@@ -161,7 +202,12 @@ class PluginStreamRouter {
     }
     state.closed = true;
     this.incoming.delete(frame.streamId);
-    await state.onClose?.(frame.kind === "error" ? frame.error : frame.kind);
+    const closeReason = frame.kind === "error" ? frame.error : frame.kind;
+    const abortReason = frame.kind === "error"
+      ? frame.error
+      : new Error(`Plugin stream ${frame.kind}: ${frame.streamId}`);
+    state.openController.abort(abortReason);
+    await state.onClose?.(closeReason);
   }
 
   bindIncoming(streamId, handlers) {
@@ -322,12 +368,26 @@ class PluginStreamRouter {
     this.#finishOutgoing(state, "cancel");
   }
 
-  async #cancelIncoming(state) {
+  async #cancelIncoming(state, reason = new Error(`Plugin stream cancelled: ${state.streamId}`)) {
     if (state.closed) return;
     state.closed = true;
     this.incoming.delete(state.streamId);
+    state.openController.abort(reason);
     state.updateSequence = Math.max(1, state.updateSequence + 1);
-    this.send({ frame: { streamId: state.streamId, sequence: state.updateSequence, kind: "cancel" } });
+    let sendError;
+    try {
+      this.send({ frame: { streamId: state.streamId, sequence: state.updateSequence, kind: "cancel" } });
+    } catch (error) {
+      sendError = error;
+    }
+    let closeError;
+    try {
+      await state.onClose?.(sendError ?? reason);
+    } catch (error) {
+      closeError = error;
+    }
+    if (sendError) throw sendError;
+    if (closeError) throw closeError;
   }
 
   close(error = new Error("Plugin runtime closed")) {
@@ -340,6 +400,7 @@ class PluginStreamRouter {
     this.outgoing.clear();
     for (const state of this.incoming.values()) {
       state.closed = true;
+      state.openController?.abort(error);
       try {
         const closing = state.onClose?.(error);
         if (closing && typeof closing.then === "function") void closing.catch(() => {});
@@ -349,4 +410,4 @@ class PluginStreamRouter {
   }
 }
 
-module.exports = { PluginStreamRouter, assertStreamEnvelopeShape };
+module.exports = { PluginStreamRouter, assertStreamEnvelopeShape, raceWithSignal };

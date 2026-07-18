@@ -275,6 +275,30 @@ test("incoming streams route to the first owner and expose a host-assigned runti
   assert.deepEqual(seen, [["owned", "runtime-1"], ["unknown", "runtime-1"]]);
 });
 
+test("incoming stream owners receive cancellation through the shared active guard", async () => {
+  const registry = new PluginHostRpcRegistry();
+  let releaseOwner;
+  const ownerWork = new Promise((resolve) => { releaseOwner = resolve; });
+  let committed = false;
+  registry.registerIncomingStream(async (_stream, context) => {
+    await ownerWork;
+    await context.assertActive();
+    committed = true;
+    return true;
+  });
+  const routes = registry.createRoutes(identity());
+  const controller = new AbortController();
+  const pending = routes.onIncomingStream({
+    streamId: "cancelled",
+    signal: controller.signal,
+  });
+  controller.abort(new Error("stream owner cancelled"));
+  releaseOwner();
+
+  await assert.rejects(pending, /stream owner cancelled/);
+  assert.equal(committed, false);
+});
+
 test("reserved lifecycle and transport methods cannot be claimed as host capabilities", () => {
   const registry = new PluginHostRpcRegistry();
   for (const method of ["plugin.initialize", "plugin.activate", "plugin.deactivate", "$/progress"]) {

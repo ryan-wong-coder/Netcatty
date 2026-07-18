@@ -113,6 +113,40 @@ test("unhandled incoming streams are cancelled immediately", async () => {
   assert.equal(sent[0].frame.kind, "cancel");
 });
 
+test("a stalled incoming owner is aborted and cannot block later streams", async () => {
+  const sent = [];
+  const signals = [];
+  const closed = [];
+  let calls = 0;
+  const router = new PluginStreamRouter({
+    openTimeoutMs: 10,
+    send(message) { sent.push(message); },
+    onIncomingStream({ bind, signal }) {
+      calls += 1;
+      signals.push(signal);
+      if (calls === 1) {
+        bind({ onChunk() {}, onClose(reason) { closed.push(reason); } });
+        return new Promise(() => {});
+      }
+      bind({ onChunk() {} });
+      return true;
+    },
+  });
+
+  await router.accept({
+    frame: { streamId: "stalled", sequence: 0, kind: "open", windowBytes: 1024 },
+  });
+  assert.equal(signals[0].aborted, true);
+  assert.equal(closed[0], signals[0].reason);
+  assert.equal(sent[0].frame.kind, "cancel");
+  assert.equal(router.incoming.has("stalled"), false);
+
+  await router.accept({
+    frame: { streamId: "next", sequence: 0, kind: "open", windowBytes: 1024 },
+  });
+  assert.equal(router.incoming.has("next"), true);
+});
+
 test("incoming streams require an explicit accept and a chunk handler", async () => {
   const sent = [];
   const router = new PluginStreamRouter({
@@ -134,6 +168,26 @@ test("incoming streams require an explicit accept and a chunk handler", async ()
     /onChunk handler is required/,
   );
   assert.equal(invalid.incoming.size, 0);
+});
+
+test("owner-selection failures close an already-bound incoming stream", async () => {
+  const sent = [];
+  const closed = [];
+  const router = new PluginStreamRouter({
+    send(message) { sent.push(message); },
+    onIncomingStream({ bind }) {
+      bind({ onChunk() {}, onClose(reason) { closed.push(reason); } });
+      throw new Error("owner setup failed");
+    },
+  });
+
+  await assert.rejects(
+    router.accept({ frame: { streamId: "failed-owner", sequence: 0, kind: "open", windowBytes: 1024 } }),
+    /owner setup failed/,
+  );
+  assert.equal(sent[0].frame.kind, "cancel");
+  assert.match(closed[0].message, /owner setup failed/);
+  assert.equal(router.incoming.size, 0);
 });
 
 test("stream envelopes reject extra fields and accessors before state changes", async () => {
@@ -202,12 +256,14 @@ test("transport failure while returning credit closes the incoming stream", asyn
 
 test("incoming stream completion waits for asynchronous owner cleanup", async () => {
   const sent = [];
+  let ownerSignal;
   let releaseCleanup;
   const cleanup = new Promise((resolve) => { releaseCleanup = resolve; });
   let cleanupFinished = false;
   const router = new PluginStreamRouter({
     send(message) { sent.push(message); },
     onIncomingStream(stream) {
+      ownerSignal = stream.signal;
       stream.bind({
         onChunk() {},
         async onClose() {
@@ -224,6 +280,8 @@ test("incoming stream completion waits for asynchronous owner cleanup", async ()
     .then(() => { settled = true; });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
+  assert.equal(ownerSignal.aborted, true);
+  assert.match(ownerSignal.reason.message, /stream end/);
   releaseCleanup();
   await ending;
   assert.equal(cleanupFinished, true);
@@ -282,9 +340,11 @@ test("closing a router invalidates retained incoming release callbacks", async (
   let finishChunk;
   const chunkBlocked = new Promise((resolve) => { finishChunk = resolve; });
   const closed = [];
+  let ownerSignal;
   const router = new PluginStreamRouter({
     send(message) { sent.push(message); },
-    onIncomingStream({ bind }) {
+    onIncomingStream({ bind, signal }) {
+      ownerSignal = signal;
       bind({
         onChunk(_chunk, release) {
           releaseChunk = release;
@@ -308,6 +368,8 @@ test("closing a router invalidates retained incoming release callbacks", async (
   await new Promise((resolve) => setImmediate(resolve));
   const closeError = new Error("runtime closed");
   router.close(closeError);
+  assert.equal(ownerSignal.aborted, true);
+  assert.equal(ownerSignal.reason, closeError);
   releaseChunk();
   finishChunk();
   await accepting;

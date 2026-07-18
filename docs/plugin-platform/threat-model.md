@@ -67,6 +67,13 @@ rejected instead of inheriting the decision made for older bytes.
 Every source hash read enforces the file budget incrementally, and the writer
 refuses the first byte beyond the scanned size. Concurrent file growth therefore
 fails before it can turn validation or packaging into unbounded disk I/O.
+Installation retains the validated archive and binds it to both the archived
+byte digest and a canonical logical-content digest. The runtime gate rescans the
+installed directory immediately before placement and rejects changed, missing,
+or injected files before plugin code starts. This is an integrity and recovery
+boundary for corruption or unintended local modification; it is not a claim
+that Netcatty can defend against an already-compromised same-user operating
+system account.
 
 ### Symbolic links and executable smuggling
 

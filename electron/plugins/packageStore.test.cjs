@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -8,6 +9,7 @@ const test = require("node:test");
 
 const { PluginDatabase } = require("./database.cjs");
 const {
+  ARCHIVE_SNAPSHOT_FILE,
   PackageStore,
   REMOVAL_METADATA_FILE,
   REMOVED_PLUGIN_DIRECTORY,
@@ -71,7 +73,90 @@ test("package install stages, validates, atomically publishes, and records the a
     await fs.promises.readFile(path.join(packageRoot, "dist/index.js"), "utf8"),
     "export default {};\n",
   );
+  const versionDirectory = path.dirname(packageRoot);
+  const retainedArchive = path.join(versionDirectory, ARCHIVE_SNAPSHOT_FILE);
+  assert.equal((await fs.promises.stat(retainedArchive)).isFile(), true);
+  assert.equal(
+    createHash("sha256").update(await fs.promises.readFile(retainedArchive)).digest("hex"),
+    installed.archiveSha256,
+  );
+  const installMetadata = JSON.parse(await fs.promises.readFile(
+    path.join(versionDirectory, "install.json"),
+    "utf8",
+  ));
+  assert.match(installMetadata.contentSha256, /^[a-f0-9]{64}$/u);
   assert.deepEqual(await fs.promises.readdir(fixture.paths.staging), []);
+});
+
+test("runtime preparation rejects changed files and disables the active plugin", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  const packageRoot = fixture.store.resolvePackageRoot(installed);
+  await fs.promises.writeFile(path.join(packageRoot, "dist/index.js"), "export default { tampered: true };\n");
+
+  await assert.rejects(
+    fixture.store.preparePackageRoot(installed),
+    /do not match the retained package archive/,
+  );
+  const failed = fixture.database.getActivePlugin(installed.id);
+  assert.equal(failed.enabled, false);
+  assert.equal(failed.runtime.status, "error");
+  assert.match(failed.runtime.lastError, /integrity check failed/);
+});
+
+test("runtime preparation rejects unpackaged root entries hidden from source builds", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  const packageRoot = fixture.store.resolvePackageRoot(installed);
+  await fs.promises.mkdir(path.join(packageRoot, "node_modules", "injected"), { recursive: true });
+  await fs.promises.writeFile(path.join(packageRoot, "node_modules", "injected", "index.js"), "throw 1;\n");
+
+  await assert.rejects(
+    fixture.store.preparePackageRoot(installed),
+    /unpackaged root entry: node_modules/,
+  );
+  assert.equal(fixture.database.getActivePlugin(installed.id).enabled, false);
+});
+
+test("startup keeps a corrupted committed snapshot for diagnosis and fails closed", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  const versionDirectory = path.dirname(fixture.store.resolvePackageRoot(installed));
+  const retainedArchive = path.join(versionDirectory, ARCHIVE_SNAPSHOT_FILE);
+  await fs.promises.writeFile(retainedArchive, "corrupt archive");
+
+  await fixture.store.recover();
+
+  assert.equal((await fs.promises.stat(retainedArchive)).isFile(), true);
+  const failed = fixture.database.getActivePlugin(installed.id);
+  assert.equal(failed.enabled, false);
+  assert.equal(failed.runtime.status, "error");
+  assert.match(failed.runtime.lastError, /integrity check failed/);
+});
+
+test("reinstalling identical bytes repairs a corrupted retained snapshot", async (context) => {
+  const fixture = createStore(context);
+  await fixture.store.initialize();
+  const pluginPackage = await createPackage(fixture.root);
+  const installed = await fixture.store.install(pluginPackage.archive, { enable: true });
+  const versionDirectory = path.dirname(fixture.store.resolvePackageRoot(installed));
+  const retainedArchive = path.join(versionDirectory, ARCHIVE_SNAPSHOT_FILE);
+  await fs.promises.writeFile(retainedArchive, "corrupt archive");
+
+  const repaired = await fixture.store.install(pluginPackage.archive);
+
+  assert.equal(repaired.enabled, true);
+  assert.equal(
+    createHash("sha256").update(await fs.promises.readFile(retainedArchive)).digest("hex"),
+    repaired.archiveSha256,
+  );
+  assert.equal(await fixture.store.preparePackageRoot(repaired), path.join(versionDirectory, "package"));
 });
 
 test("package install is idempotent for identical bytes and rejects version substitution", async (context) => {

@@ -22,6 +22,7 @@ import {
   buildPluginPackage,
   extractPluginPackage,
   hashFile,
+  validatePluginDirectory,
   validatePluginPackage,
 } from "./archive.ts";
 import { checkPluginCompatibility } from "./compatibility.ts";
@@ -99,6 +100,27 @@ function createZipEntry(
   end.writeUInt32LE(centralHeader.byteLength, 12);
   end.writeUInt32LE(centralOffset, 16);
   return Buffer.concat([localHeader, encodedContents, centralHeader, end]);
+}
+
+function replaceCentralEntryMode(archive: Buffer, entryName: string, mode: number): Buffer {
+  const result = Buffer.from(archive);
+  const endOffset = result.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (endOffset < 0) throw new Error("Missing ZIP end record");
+  const entryCount = result.readUInt16LE(endOffset + 10);
+  let offset = result.readUInt32LE(endOffset + 16);
+  for (let entry = 0; entry < entryCount; entry += 1) {
+    if (result.readUInt32LE(offset) !== 0x02014b50) throw new Error("Invalid central ZIP entry");
+    const nameLength = result.readUInt16LE(offset + 28);
+    const extraLength = result.readUInt16LE(offset + 30);
+    const commentLength = result.readUInt16LE(offset + 32);
+    const name = result.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    if (name === entryName) {
+      result.writeUInt32LE((mode << 16) >>> 0, offset + 38);
+      return result;
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  throw new Error(`Missing central ZIP entry: ${entryName}`);
 }
 
 function manifest(overrides: Record<string, unknown> = {}) {
@@ -471,8 +493,50 @@ test("packing is deterministic and the archive validates", async (context) => {
     createHash("sha256").update(firstBytes).digest("hex"),
   );
   const validation = await validatePluginPackage(first);
+  const directoryValidation = await validatePluginDirectory(directory);
   assert.equal(validation.manifest.id, "com.example.package-test");
   assert.equal(validation.fileCount, 3);
+  assert.equal(firstResult.contentSha256, validation.contentSha256);
+  assert.equal(validation.contentSha256, directoryValidation.contentSha256);
+  assert.match(validation.contentSha256, /^[a-f0-9]{64}$/u);
+});
+
+test("logical content identity follows companion declarations across ZIP mode encoders", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "netcatty-plugin-companion-mode-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const directory = await createPlugin(root);
+  const companionContents = Buffer.from("portable companion\n");
+  const companionPath = path.join(directory, "bin/helper");
+  await mkdir(path.dirname(companionPath), { recursive: true });
+  await writeFile(companionPath, companionContents);
+  await writeFile(
+    path.join(directory, "netcatty.plugin.json"),
+    `${JSON.stringify(manifest({
+      permissions: { required: ["companion.execute"] },
+      companionExecutables: [{
+        id: "com.example.package-test.helper",
+        variants: [{
+          path: "bin/helper",
+          platforms: ["linux-x64"],
+          sha256: createHash("sha256").update(companionContents).digest("hex"),
+        }],
+      }],
+    }), null, 2)}\n`,
+  );
+  const builtPath = path.join(root, "built.ncpkg");
+  const portablePath = path.join(root, "portable.ncpkg");
+  const extracted = path.join(root, "extracted");
+  await buildPluginPackage(directory, builtPath);
+  await writeFile(
+    portablePath,
+    replaceCentralEntryMode(await readFile(builtPath), "bin/helper", 0o100644),
+  );
+
+  const archiveValidation = await extractPluginPackage(portablePath, extracted);
+  const directoryValidation = await validatePluginDirectory(extracted, {
+    allowIgnoredRootEntries: false,
+  });
+  assert.equal(archiveValidation.contentSha256, directoryValidation.contentSha256);
 });
 
 test("validated extraction creates an isolated tree and removes partial output on failure", async (context) => {

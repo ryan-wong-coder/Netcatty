@@ -6,8 +6,12 @@ const {
   PLUGIN_RPC_DEFAULT_TIMEOUT_MS,
   PLUGIN_RPC_MAX_PENDING,
 } = require("./constants.cjs");
-const { assertInitializeResult, assertRpcMessage } = require("./contractValidator.cjs");
-const { PluginStreamRouter } = require("./streamRouter.cjs");
+const {
+  assertInitializeResult,
+  assertRpcMessage,
+  assertStreamFrameSchema,
+} = require("./contractValidator.cjs");
+const { PluginStreamRouter, assertStreamEnvelopeShape } = require("./streamRouter.cjs");
 
 const RPC_ERRORS = Object.freeze({
   methodNotFound: -32601,
@@ -84,8 +88,9 @@ class PluginRpcRouter {
       send: (message, transfer) => this.send(message, transfer),
       onIncomingStream: options.onIncomingStream,
       maxStreams: this.maxPending,
+      openTimeoutMs: this.defaultTimeoutMs,
     });
-    this.streamChain = Promise.resolve();
+    this.streamChains = new Map();
   }
 
   #sendRpc(message) {
@@ -151,8 +156,17 @@ class PluginRpcRouter {
     if (this.closed) return;
     const message = rawMessage;
     if (message && typeof message === "object" && Object.hasOwn(message, "frame")) {
-      this.streamChain = this.streamChain.then(() => this.streams.accept(message));
-      await this.streamChain;
+      assertStreamEnvelopeShape(message);
+      assertStreamFrameSchema(message.frame);
+      const streamId = message.frame.streamId;
+      const previous = this.streamChains.get(streamId) ?? Promise.resolve();
+      const current = previous.then(() => this.streams.accept(message));
+      this.streamChains.set(streamId, current);
+      try {
+        await current;
+      } finally {
+        if (this.streamChains.get(streamId) === current) this.streamChains.delete(streamId);
+      }
       return;
     }
     assertRpcMessage(message);
@@ -391,6 +405,7 @@ class PluginRpcRouter {
     for (const controller of this.inflightNotifications) controller.abort(error);
     this.inflightNotifications.clear();
     this.streams.close(error);
+    this.streamChains.clear();
   }
 }
 

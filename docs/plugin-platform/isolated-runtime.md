@@ -21,8 +21,8 @@ these steps:
    validator, including ZIP metadata, local/central header agreement, path
    aliases, size limits, CRC, manifest semantics, referenced resources, and
    companion digests;
-4. write installation identity and archive digest metadata and sync the staged
-   files;
+4. retain the validated `.ncpkg` snapshot, write both its archive digest and a
+   representation-independent logical-content digest, and sync the staged files;
 5. when replacing an enabled version, persist a temporary disabled state and
    stop the old runtime before publishing any replacement;
 6. rename the complete version directory into
@@ -36,7 +36,9 @@ recovery validates the committed directory and imports it as a disabled
 version, even when an older version of that plugin was enabled. Files left
 under `staging/` were never published and are removed. A database row whose
 active package is missing or invalid is disabled and reported as an error
-instead of being executed.
+instead of being executed. Committed invalid versions are retained for
+diagnosis or repair from their validated snapshot; only invalid uncommitted
+orphans are deleted.
 
 Uninstall uses the inverse two-phase move. The plugin directory first moves
 under a marked `staging/remove-*` transaction and the database row is deleted
@@ -51,6 +53,16 @@ fails closed instead of deleting an unidentified package.
 Installing the same version and archive is idempotent after the installed tree
 is revalidated. Reusing the same plugin ID and version with a different archive
 digest is rejected; version substitution must use a new version.
+
+Before every runtime placement decision, `PackageStore.preparePackageRoot()`
+rescans the installed tree and compares its logical-content digest with the
+retained snapshot verified at startup. The digest binds each normalized path,
+byte length, declared-companion classification, and file SHA-256, independent of ZIP
+compression or entry ordering. Source-only ignored roots such as `node_modules`
+are forbidden in the installed tree. Drift therefore disables the active
+version before either a browser or utility runtime can observe modified code.
+This asynchronous preparation method, rather than the synchronous path resolver,
+is the mandatory execution boundary for all future runtime placements.
 
 Install, enable/disable, restart and uninstall mutations share one manager
 queue. A second renderer request cannot race an active-version switch or start

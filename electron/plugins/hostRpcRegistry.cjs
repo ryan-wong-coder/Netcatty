@@ -208,22 +208,29 @@ class PluginHostRpcRegistry {
       ]),
     ));
     const onIncomingStream = async (stream) => {
+      stream.signal?.throwIfAborted();
       await assertCurrent?.();
       const context = Object.freeze({
         ...identity,
-        assertActive: async () => assertCurrent?.(),
+        signal: stream.signal,
+        assertActive: async () => {
+          stream.signal?.throwIfAborted();
+          await assertCurrent?.();
+          stream.signal?.throwIfAborted();
+        },
         kind: "stream",
       });
       for (const handler of streamHandlers) {
         const accepted = await handler(stream, context);
         if (accepted === true) {
-          await assertCurrent?.();
+          await context.assertActive();
           return true;
         }
         if (accepted !== false && accepted !== undefined) {
           throw new TypeError("Plugin incoming stream handler must return true, false, or undefined");
         }
       }
+      await context.assertActive();
       return false;
     };
     return Object.freeze({

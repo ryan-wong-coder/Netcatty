@@ -986,6 +986,9 @@ const terminalPopupWindowApi = createTerminalPopupWindowApi({
   sendWhenRendererReady,
   showAndFocusWindow,
   resolveSettingsWindowBounds,
+  registerAppContentWindow,
+  unregisterAppContentWindow,
+  notifyAppContentWindowClosed,
 });
 const { openTerminalPopupWindow, closeTerminalPopupWindow } = terminalPopupWindowApi;
 
