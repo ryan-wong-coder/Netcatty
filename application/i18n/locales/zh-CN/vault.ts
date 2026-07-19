@@ -659,6 +659,7 @@ export const zhCNVaultMessages: Messages = {
   'cloudSync.convergent.desc': '使用加密 CRDT 副本保留离线编辑、并发删除，以及所有已连接云服务中的变化。',
   'cloudSync.convergent.active': 'CRDT v2 已启用；每次上传后都会验证云端写入。',
   'cloudSync.convergent.paused': '此设备已暂停 CRDT v2；云端元数据仍会保留。',
+  'cloudSync.convergent.setupRequired': '请先创建 CRDT 副本，完成后此功能才会正式启用。',
   'cloudSync.convergent.enabled': '已启用可收敛同步',
   'cloudSync.convergent.preview.title': '迁移预览',
   'cloudSync.convergent.preview.entities': '实体',

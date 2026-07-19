@@ -347,6 +347,7 @@ export const enTerminalMessages: Messages = {
   'cloudSync.convergent.desc': 'Uses an encrypted CRDT replica to preserve offline edits, concurrent deletions, and changes from every connected provider.',
   'cloudSync.convergent.active': 'CRDT v2 is active. Provider writes are verified after upload.',
   'cloudSync.convergent.paused': 'CRDT v2 is paused on this device; cloud metadata is retained.',
+  'cloudSync.convergent.setupRequired': 'Create the CRDT replica below to finish enabling this feature.',
   'cloudSync.convergent.enabled': 'Convergent sync enabled',
   'cloudSync.convergent.preview.title': 'Migration preview',
   'cloudSync.convergent.preview.entities': 'Entities',

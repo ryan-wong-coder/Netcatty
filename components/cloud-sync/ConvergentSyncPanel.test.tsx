@@ -79,3 +79,55 @@ test('secret fields nested inside array candidates never reach rendered markup',
   assert.equal(markup.includes('NESTED-API-KEY-MUST-NOT-RENDER'), false);
   assert.equal(markup.includes('SECRET_SET'), true);
 });
+
+test('pending setup keeps the switch on and disabled until the replica is created', () => {
+  const migrationPreview = {
+    schemaVersion: 2 as const,
+    canInitialize: true,
+    entityCounts: {},
+    settingsLeafCount: 0,
+    conflictCount: 0,
+    conflicts: [],
+    shrinkFindings: [],
+    providers: [],
+    oldClientCompatibility: 'materialized-v1-snapshot' as const,
+    blockedReasons: [],
+  };
+  const renderPanel = (
+    preview: typeof migrationPreview | null,
+    busy = false,
+  ) => renderToStaticMarkup(
+    <ConvergentSyncPanel
+      t={t}
+      resolvedLocale="en"
+      config={{ enabled: false, initialized: false }}
+      preview={preview}
+      busy={busy}
+      error={null}
+      conflicts={[]}
+      onToggle={() => {}}
+      onConfirmMigration={() => {}}
+      onCancelMigration={() => {}}
+      onResolveConflict={() => {}}
+      onDowngrade={() => {}}
+    />,
+  );
+
+  assert.equal(
+    renderPanel(migrationPreview).includes('cloudSync.convergent.setupRequired'),
+    true,
+  );
+  assert.match(
+    renderPanel(migrationPreview),
+    /role="switch"[^>]*aria-checked="true"[^>]*disabled=""/,
+  );
+  assert.equal(
+    renderPanel(null).includes('cloudSync.convergent.setupRequired'),
+    false,
+  );
+  assert.match(renderPanel(null), /role="switch"[^>]*aria-checked="false"/);
+  assert.match(
+    renderPanel(null, true),
+    /role="switch"[^>]*aria-checked="true"[^>]*disabled=""/,
+  );
+});
