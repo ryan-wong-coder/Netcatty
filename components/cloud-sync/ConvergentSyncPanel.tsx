@@ -103,8 +103,11 @@ export const ConvergentSyncPanel: React.FC<ConvergentSyncPanelProps> = ({
   onCancelMigration,
   onResolveConflict,
   onDowngrade,
-}) => (
-  <div className="space-y-4 overflow-hidden rounded-xl border border-amber-500/25 bg-gradient-to-br from-amber-500/[0.07] via-card to-card p-4 shadow-sm">
+}) => {
+  const setupPending = !config.initialized && preview?.canInitialize === true;
+
+  return (
+    <div className="space-y-4 overflow-hidden rounded-xl border border-amber-500/25 bg-gradient-to-br from-amber-500/[0.07] via-card to-card p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
       <div className="flex min-w-0 items-start gap-3">
         <div
@@ -126,9 +129,9 @@ export const ConvergentSyncPanel: React.FC<ConvergentSyncPanelProps> = ({
         </div>
       </div>
       <ConvergentToggle
-        checked={config.enabled || (!config.initialized && (busy || preview !== null))}
+        checked={config.enabled || (!config.initialized && busy) || setupPending}
         onChange={onToggle}
-        disabled={busy || (!config.initialized && preview !== null)}
+        disabled={busy || setupPending}
         label={t('cloudSync.convergent.title')}
       />
     </div>
@@ -142,7 +145,7 @@ export const ConvergentSyncPanel: React.FC<ConvergentSyncPanelProps> = ({
       </div>
     )}
 
-    {!config.initialized && preview !== null && (
+    {setupPending && (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Info size={14} className="shrink-0 text-amber-600 dark:text-amber-400" />
         <span>{t('cloudSync.convergent.setupRequired')}</span>
@@ -260,5 +263,6 @@ export const ConvergentSyncPanel: React.FC<ConvergentSyncPanelProps> = ({
         </Button>
       </div>
     )}
-  </div>
-);
+    </div>
+  );
+};

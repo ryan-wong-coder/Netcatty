@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import type { ConvergentMigrationPreview } from '../../domain/sync';
 import { ConvergentSyncPanel } from './ConvergentSyncPanel.tsx';
 
 const t = (key: string, values?: Record<string, string | number>) =>
@@ -81,8 +82,8 @@ test('secret fields nested inside array candidates never reach rendered markup',
 });
 
 test('pending setup keeps the switch on and disabled until the replica is created', () => {
-  const migrationPreview = {
-    schemaVersion: 2 as const,
+  const migrationPreview: ConvergentMigrationPreview = {
+    schemaVersion: 2,
     canInitialize: true,
     entityCounts: {},
     settingsLeafCount: 0,
@@ -129,5 +130,19 @@ test('pending setup keeps the switch on and disabled until the replica is create
   assert.match(
     renderPanel(null, true),
     /role="switch"[^>]*aria-checked="true"[^>]*disabled=""/,
+  );
+
+  const blockedMarkup = renderPanel({
+    ...migrationPreview,
+    canInitialize: false,
+    blockedReasons: ['Provider unavailable'],
+  });
+  const blockedSwitch = blockedMarkup.match(/<button[^>]*role="switch"[^>]*>/)?.[0];
+  assert.ok(blockedSwitch);
+  assert.match(blockedSwitch, /aria-checked="false"/);
+  assert.doesNotMatch(blockedSwitch, /\sdisabled(?:=""|(?=\s|>))/);
+  assert.equal(
+    blockedMarkup.includes('cloudSync.convergent.setupRequired'),
+    false,
   );
 });
