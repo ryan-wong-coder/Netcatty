@@ -419,7 +419,7 @@ export const zhTWVaultMessages: Messages = {
   'terminal.serverStats.swapFree': '空閒交換',
   'terminal.serverStats.swapTotal': '總計',
   'terminal.serverStats.topProcesses': '記憶體佔用前十程序',
-  'terminal.serverStats.disk': '磁碟使用（根分割槽）',
+  'terminal.serverStats.disk': '磁碟使用',
   'terminal.serverStats.diskDetails': '已掛載磁碟',
   'terminal.serverStats.network': '網路速度',
   'terminal.serverStats.latency': 'SSH 網路延遲',

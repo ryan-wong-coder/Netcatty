@@ -110,7 +110,7 @@ export const ruTerminalMessages: Messages = {
   'terminal.serverStats.swapFree': 'Свободный swap',
   'terminal.serverStats.swapTotal': 'Всего',
   'terminal.serverStats.topProcesses': 'Топ процессов по памяти',
-  'terminal.serverStats.disk': 'Использование диска (корень)',
+  'terminal.serverStats.disk': 'Использование дисков',
   'terminal.serverStats.diskDetails': 'Смонтированные диски',
   'terminal.serverStats.network': 'Скорость сети',
   'terminal.serverStats.latency': 'Сетевая задержка SSH',

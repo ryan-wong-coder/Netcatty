@@ -419,7 +419,7 @@ export const zhCNVaultMessages: Messages = {
   'terminal.serverStats.swapFree': '空闲交换',
   'terminal.serverStats.swapTotal': '总计',
   'terminal.serverStats.topProcesses': '内存占用前十进程',
-  'terminal.serverStats.disk': '磁盘使用（根分区）',
+  'terminal.serverStats.disk': '磁盘使用',
   'terminal.serverStats.diskDetails': '已挂载磁盘',
   'terminal.serverStats.network': '网络速度',
   'terminal.serverStats.latency': 'SSH 网络延迟',

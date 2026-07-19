@@ -7,7 +7,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { formatNetSpeed } from './terminalHelpers';
 import { useServerStats } from './hooks/useServerStats';
-import { formatDiskCapacityGb } from './serverStatsFormat';
+import { formatDiskCapacityGb, resolveTerminalDiskSummary } from './serverStatsFormat';
 
 interface TerminalServerStatsProps {
   sessionId: string;
@@ -47,6 +47,7 @@ export const TerminalServerStats: React.FC<TerminalServerStatsProps> = ({
   });
   const hasNetworkDetails = serverStats.netInterfaces.length > 0;
   const hasLatency = serverStats.latencyMs !== null;
+  const diskSummary = resolveTerminalDiskSummary(serverStats);
 
   if (!enabled || !isConnected || !serverStats.lastUpdated) return null;
 
@@ -258,13 +259,13 @@ export const TerminalServerStats: React.FC<TerminalServerStatsProps> = ({
                       <HardDrive size={10} className="flex-shrink-0" />
                       <span className={cn(
                         "truncate",
-                        serverStats.diskPercent !== null && serverStats.diskPercent >= 90 && "text-red-400",
-                        serverStats.diskPercent !== null && serverStats.diskPercent >= 80 && serverStats.diskPercent < 90 && "text-amber-400"
+                        diskSummary.percent !== null && diskSummary.percent >= 90 && "text-red-400",
+                        diskSummary.percent !== null && diskSummary.percent >= 80 && diskSummary.percent < 90 && "text-amber-400"
                       )}>
-                        {serverStats.diskUsed !== null && serverStats.diskTotal !== null && serverStats.diskPercent !== null
-                          ? `${formatDiskCapacityGb(serverStats.diskUsed)}/${formatDiskCapacityGb(serverStats.diskTotal)}G (${serverStats.diskPercent}%)`
-                          : serverStats.diskPercent !== null
-                            ? `${serverStats.diskPercent}%`
+                        {diskSummary.used !== null && diskSummary.total !== null && diskSummary.percent !== null
+                          ? `${formatDiskCapacityGb(diskSummary.used)}/${formatDiskCapacityGb(diskSummary.total)}G (${diskSummary.percent}%)`
+                          : diskSummary.percent !== null
+                            ? `${diskSummary.percent}%`
                             : '--'}
                       </span>
                     </button>

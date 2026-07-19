@@ -89,7 +89,7 @@ export const enTerminalMessages: Messages = {
   'terminal.serverStats.swapFree': 'Swap Free',
   'terminal.serverStats.swapTotal': 'Total',
   'terminal.serverStats.topProcesses': 'Top Processes by Memory',
-  'terminal.serverStats.disk': 'Disk Usage (Root)',
+  'terminal.serverStats.disk': 'Disk Usage',
   'terminal.serverStats.diskDetails': 'Mounted Disks',
   'terminal.serverStats.network': 'Network Speed',
   'terminal.serverStats.latency': 'SSH network latency',
