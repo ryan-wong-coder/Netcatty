@@ -12,6 +12,7 @@ const keys = [
   'cloudSync.convergent.desc',
   'cloudSync.convergent.active',
   'cloudSync.convergent.paused',
+  'cloudSync.convergent.setupRequired',
   'cloudSync.convergent.enabled',
   'cloudSync.convergent.preview.title',
   'cloudSync.convergent.preview.entities',

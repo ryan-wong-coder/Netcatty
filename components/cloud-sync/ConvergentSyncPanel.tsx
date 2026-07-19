@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, FlaskConical, RotateCcw, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, FlaskConical, Info, RotateCcw, ShieldCheck } from 'lucide-react';
 
 import type {
   ConvergentFieldConflict,
@@ -126,9 +126,9 @@ export const ConvergentSyncPanel: React.FC<ConvergentSyncPanelProps> = ({
         </div>
       </div>
       <ConvergentToggle
-        checked={config.enabled}
+        checked={config.enabled || (!config.initialized && (busy || preview !== null))}
         onChange={onToggle}
-        disabled={busy}
+        disabled={busy || (!config.initialized && preview !== null)}
         label={t('cloudSync.convergent.title')}
       />
     </div>
@@ -139,6 +139,13 @@ export const ConvergentSyncPanel: React.FC<ConvergentSyncPanelProps> = ({
         {config.enabled
           ? t('cloudSync.convergent.active')
           : t('cloudSync.convergent.paused')}
+      </div>
+    )}
+
+    {!config.initialized && preview !== null && (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Info size={14} className="shrink-0 text-amber-600 dark:text-amber-400" />
+        <span>{t('cloudSync.convergent.setupRequired')}</span>
       </div>
     )}
 

@@ -363,6 +363,7 @@ export const ruTerminalMessages: Messages = {
   'cloudSync.convergent.desc': 'Зашифрованная CRDT-реплика сохраняет офлайн-правки, параллельные удаления и изменения всех подключённых провайдеров.',
   'cloudSync.convergent.active': 'CRDT v2 активна. Каждая загрузка проверяется чтением из облака.',
   'cloudSync.convergent.paused': 'CRDT v2 приостановлена на этом устройстве; облачные метаданные сохранены.',
+  'cloudSync.convergent.setupRequired': 'Создайте CRDT-реплику ниже, чтобы завершить включение этой функции.',
   'cloudSync.convergent.enabled': 'Сходящаяся синхронизация включена',
   'cloudSync.convergent.preview.title': 'Предпросмотр миграции',
   'cloudSync.convergent.preview.entities': 'Объекты',
