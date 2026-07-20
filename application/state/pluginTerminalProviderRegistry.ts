@@ -31,6 +31,16 @@ function createRequestId(): string {
   return `terminal-${crypto.randomUUID()}`;
 }
 
+function mergeLifecycleSessionSnapshot(
+  previous: NetcattyTerminalSessionSnapshot | undefined,
+  event: NetcattyTerminalSessionEvent,
+): Readonly<NetcattyTerminalSessionSnapshot> {
+  const session: NetcattyTerminalSessionSnapshot = { ...(previous ?? {}), ...event.session };
+  if (event.type === 'cwdChanged' && !Object.hasOwn(event.session, 'cwd')) delete session.cwd;
+  if (event.type === 'titleChanged' && !Object.hasOwn(event.session, 'title')) delete session.title;
+  return freezeValue(session);
+}
+
 export class PluginTerminalProviderRegistry {
   readonly #bridge: PluginTerminalProviderBridge;
   readonly #activeRequests = new Map<string, string>();
@@ -79,6 +89,10 @@ export class PluginTerminalProviderRegistry {
         stale,
         results: stale ? Object.freeze([]) : results,
       });
+    } catch (error) {
+      const stale = this.#disposed || this.#activeRequests.get(key) !== requestId;
+      if (stale) return Object.freeze({ requestId, stale: true, results: Object.freeze([]) });
+      throw error;
     } finally {
       if (this.#activeRequests.get(key) === requestId) this.#activeRequests.delete(key);
     }
@@ -87,7 +101,7 @@ export class PluginTerminalProviderRegistry {
   async publishSessionEvent(event: NetcattyTerminalSessionEvent): Promise<void> {
     if (this.#disposed) return;
     const previous = this.#sessionSnapshots.get(event.session.sessionId);
-    const session = freezeValue({ ...(previous ?? {}), ...event.session });
+    const session = mergeLifecycleSessionSnapshot(previous, event);
     if (event.type === 'disposed') this.#sessionSnapshots.delete(session.sessionId);
     else this.#sessionSnapshots.set(session.sessionId, session);
     await this.#bridge.publishPluginTerminalSessionEvent(freezeValue({ ...event, session }));

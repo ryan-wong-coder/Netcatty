@@ -1,10 +1,9 @@
-import type { MutableRefObject, RefObject } from "react";
+import type { MutableRefObject } from "react";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { Terminal as XTerm } from "@xterm/xterm";
 
-import type { Host, TerminalSettings } from "../../types";
 import { logger } from "../../lib/logger";
 import type { TerminalHibernateWakePayload } from "../../domain/terminalHibernate";
 import {
@@ -17,6 +16,12 @@ import {
   applyHibernateWakeToTerminal,
   nudgeAlternateScreenRedraw,
 } from "./terminalHibernateRuntime";
+import {
+  applyTerminalKeywordHighlightRules,
+  type AdditionalTerminalKeywordHighlightRule,
+} from "./terminalKeywordHighlightRules";
+
+export { applyTerminalKeywordHighlightRules } from "./terminalKeywordHighlightRules";
 
 export type TerminalRuntimeRefs = {
   xtermRuntimeRef: MutableRefObject<XTermRuntime | null>;
@@ -39,25 +44,6 @@ export function assignTerminalRuntimeRefs(
   refs.hasRuntimeRef.current = true;
 }
 
-export function applyTerminalKeywordHighlightRules(
-  runtime: XTermRuntime,
-  terminalSettingsRef: RefObject<TerminalSettings | undefined>,
-  host: Host,
-): void {
-  const globalRules = terminalSettingsRef.current?.keywordHighlightRules ?? [];
-  const hostRules = host?.keywordHighlightRules ?? [];
-  const globalEnabled = terminalSettingsRef.current?.keywordHighlightEnabled ?? false;
-  const hostEnabled = host?.keywordHighlightEnabled;
-  const effectiveGlobalEnabled = globalEnabled;
-  const effectiveHostEnabled = hostEnabled ?? false;
-  const mergedRules = [
-    ...(effectiveGlobalEnabled ? globalRules : []),
-    ...(effectiveHostEnabled ? hostRules : []),
-  ];
-  const isEnabled = effectiveGlobalEnabled || effectiveHostEnabled;
-  runtime.keywordHighlighter.setRules(mergedRules, isEnabled);
-}
-
 export type WakeTerminalFromHibernateOptions = {
   refs: TerminalRuntimeRefs;
   runtimeContext: Omit<CreateXTermRuntimeContext, "container" | "initiallyVisible" | "deferWebglUntilReplayComplete">;
@@ -77,6 +63,7 @@ export type WakeTerminalFromHibernateOptions = {
   sessionConnected?: boolean;
   getSessionConnected?: () => boolean;
   replayChunkBytes?: number;
+  additionalKeywordHighlightRules?: readonly AdditionalTerminalKeywordHighlightRule[];
 };
 
 export async function wakeTerminalFromHibernate(
@@ -99,6 +86,7 @@ export async function wakeTerminalFromHibernate(
     sessionConnected = true,
     getSessionConnected,
     replayChunkBytes = 16 * 1024,
+    additionalKeywordHighlightRules = Object.freeze([]),
   } = options;
 
   if (refs.hasRuntimeRef.current) {
@@ -124,7 +112,12 @@ export async function wakeTerminalFromHibernate(
   });
 
   assignTerminalRuntimeRefs(refs, runtime);
-  applyTerminalKeywordHighlightRules(runtime, runtimeContext.terminalSettingsRef, runtimeContext.host);
+  applyTerminalKeywordHighlightRules(
+    runtime,
+    runtimeContext.terminalSettingsRef,
+    runtimeContext.host,
+    additionalKeywordHighlightRules,
+  );
 
   const term = runtime.term;
   const initialPayload = getPayload();

@@ -174,6 +174,7 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
   const [pluginDecorationRules, setPluginDecorationRules] = useState<
     ReturnType<typeof normalizePluginDecorationResult>
   >(Object.freeze([]));
+  ctx.pluginDecorationRulesRef.current = pluginDecorationRules;
   const publishPluginTerminalEvent = (
     type: NetcattyTerminalSessionEvent['type'],
     details: Partial<NetcattyTerminalSessionSnapshot> = {},

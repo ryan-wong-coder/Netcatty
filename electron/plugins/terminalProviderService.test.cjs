@@ -335,6 +335,35 @@ test("one-use Provider grants never authorize later lifecycle delivery", async (
   assert.deepEqual(notifications, []);
 });
 
+test("failed and cancelled Provider results never authorize later lifecycle delivery", async () => {
+  for (const status of ["failed", "cancelled"]) {
+    const { notifications, service } = setup({
+      request: async (_pluginId, _method, params) => status === "failed"
+        ? {
+            requestId: params.requestId,
+            status,
+            error: { code: RPC_ERRORS.internal, message: "provider failed" },
+          }
+        : { requestId: params.requestId, status },
+    });
+    const result = await service.invokeProvider({
+      providerId: "com.example.alpha.completion",
+      kind: "terminal.completion",
+      operation: "provide",
+      requestId: `unsuccessful-${status}`,
+      payload: { session },
+    });
+    assert.equal(result.status, status);
+    notifications.length = 0;
+    const deliveries = await service.publishSessionEvent({ type: "resized", session });
+    assert.deepEqual(deliveries, [
+      { pluginId: "com.example.alpha", delivered: false },
+      { pluginId: "com.example.beta", delivered: false },
+    ]);
+    assert.deepEqual(notifications, []);
+  }
+});
+
 test("terminal Provider fan-out enforces the per-request Provider quota", async () => {
   const providers = Array.from({ length: MAX_TERMINAL_PROVIDERS_PER_REQUEST + 5 }, (_, index) => provider(
     `com.example.provider${String(index).padStart(2, "0")}`,

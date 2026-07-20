@@ -339,7 +339,7 @@ class PluginTerminalProviderService {
     if (result.requestId !== request.requestId) {
       throw new PluginRpcError(RPC_ERRORS.dataLoss, "Plugin Provider returned a mismatched request ID");
     }
-    if (permissionSession != null && providerPermissionScope !== "once") {
+    if (result.status === "ok" && permissionSession != null && providerPermissionScope !== "once") {
       this.rememberLifecycleAuthorization(activation, identity, permissionSession.sessionId);
     }
     return freezeJson({

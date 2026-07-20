@@ -44,6 +44,37 @@ test('terminal Provider registry cancels superseded requests and suppresses stal
   assert.deepEqual(firstResult.results, []);
 });
 
+test('terminal Provider registry returns a stale response when a superseded bridge request rejects', async () => {
+  const resolvers: Array<{
+    resolve: (value: ReadonlyArray<NetcattyTerminalProviderResult>) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  const registry = new PluginTerminalProviderRegistry({
+    async listPluginTerminalProviders() { return []; },
+    providePluginTerminal() {
+      return new Promise((resolve, reject) => resolvers.push({ resolve, reject }));
+    },
+    async cancelPluginTerminalRequest() { return true; },
+    async publishPluginTerminalSessionEvent() { return []; },
+  });
+  const first = registry.request({
+    kind: 'terminal.decoration',
+    operation: 'provideDecorations',
+    session,
+  });
+  const second = registry.request({
+    kind: 'terminal.decoration',
+    operation: 'provideDecorations',
+    session,
+  });
+  resolvers[1].resolve([]);
+  assert.equal((await second).stale, false);
+  resolvers[0].reject(new Error('cancelled'));
+  const firstResult = await first;
+  assert.equal(firstResult.stale, true);
+  assert.deepEqual(firstResult.results, []);
+});
+
 test('terminal Provider registry freezes enumeration and cancels all session requests', async () => {
   const cancellations: string[] = [];
   const registry = new PluginTerminalProviderRegistry({
@@ -88,6 +119,34 @@ test('terminal Provider registry publishes metadata-only lifecycle snapshots', a
   ]);
   assert.equal(Object.isFrozen(events[0]), true);
   assert.equal(Object.isFrozen(events[0].session), true);
+});
+
+test('terminal Provider lifecycle clears optional fields instead of retaining stale metadata', async () => {
+  const events: NetcattyTerminalSessionEvent[] = [];
+  const requests: NetcattyTerminalProviderRequest[] = [];
+  const registry = new PluginTerminalProviderRegistry({
+    async listPluginTerminalProviders() { return []; },
+    async providePluginTerminal(request) { requests.push(request); return []; },
+    async cancelPluginTerminalRequest() { return false; },
+    async publishPluginTerminalSessionEvent(event) { events.push(event); return []; },
+  });
+  await registry.publishSessionEvent({
+    type: 'created',
+    session: { ...session, cwd: '/srv/app', title: 'Application' },
+  });
+  await registry.publishSessionEvent({ type: 'cwdChanged', session });
+  await registry.publishSessionEvent({ type: 'titleChanged', session });
+  await registry.request({
+    kind: 'terminal.completion',
+    operation: 'provide',
+    session,
+  });
+  assert.equal(Object.hasOwn(events[1].session, 'cwd'), false);
+  assert.equal(Object.hasOwn(events[1].session, 'title'), true);
+  assert.equal(Object.hasOwn(events[2].session, 'cwd'), false);
+  assert.equal(Object.hasOwn(events[2].session, 'title'), false);
+  assert.equal(Object.hasOwn(requests[0].session, 'cwd'), false);
+  assert.equal(Object.hasOwn(requests[0].session, 'title'), false);
 });
 
 test('terminal Provider requests merge the latest lifecycle snapshot before invocation', async () => {
