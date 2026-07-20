@@ -95,11 +95,16 @@ export async function provideTerminalCompletions(
       providerId: item.providerId,
     })),
   ];
-  combined.sort((left, right) => right.score - left.score || left.text.localeCompare(right.text));
-  const seen = new Set<string>();
-  return combined.filter((item) => {
-    if (seen.has(item.text)) return false;
-    seen.add(item.text);
-    return true;
-  }).slice(0, request.maximum);
+  const deduplicated = new Map<string, CompletionSuggestion>();
+  for (const item of combined) {
+    const existing = deduplicated.get(item.text);
+    if (!existing
+      || (existing.source === 'plugin' && item.source !== 'plugin')
+      || (existing.source === item.source && item.score > existing.score)) {
+      deduplicated.set(item.text, item);
+    }
+  }
+  return [...deduplicated.values()]
+    .sort((left, right) => right.score - left.score || left.text.localeCompare(right.text))
+    .slice(0, request.maximum);
 }

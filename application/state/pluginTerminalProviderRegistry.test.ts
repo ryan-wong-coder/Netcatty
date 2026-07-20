@@ -149,6 +149,33 @@ test('terminal Provider lifecycle clears optional fields instead of retaining st
   assert.equal(Object.hasOwn(requests[0].session, 'title'), false);
 });
 
+test('terminal Provider reconnect lifecycle clears omitted connection-scoped metadata', async () => {
+  const events: NetcattyTerminalSessionEvent[] = [];
+  const requests: NetcattyTerminalProviderRequest[] = [];
+  const registry = new PluginTerminalProviderRegistry({
+    async listPluginTerminalProviders() { return []; },
+    async providePluginTerminal(request) { requests.push(request); return []; },
+    async cancelPluginTerminalRequest() { return false; },
+    async publishPluginTerminalSessionEvent(event) { events.push(event); return []; },
+  });
+  await registry.publishSessionEvent({
+    type: 'connected',
+    session: { ...session, cwd: '/srv/app', title: 'Application', alternateScreen: true },
+  });
+  await registry.publishSessionEvent({ type: 'disconnected', session: { ...session, status: 'disconnected' } });
+  await registry.publishSessionEvent({ type: 'reconnected', session });
+  await registry.request({ kind: 'terminal.completion', operation: 'provide', session });
+
+  for (const event of events.slice(1)) {
+    assert.equal(Object.hasOwn(event.session, 'cwd'), false);
+    assert.equal(Object.hasOwn(event.session, 'title'), false);
+    assert.equal(Object.hasOwn(event.session, 'alternateScreen'), false);
+  }
+  assert.equal(Object.hasOwn(requests[0].session, 'cwd'), false);
+  assert.equal(Object.hasOwn(requests[0].session, 'title'), false);
+  assert.equal(Object.hasOwn(requests[0].session, 'alternateScreen'), false);
+});
+
 test('terminal Provider requests merge the latest lifecycle snapshot before invocation', async () => {
   const requests: NetcattyTerminalProviderRequest[] = [];
   const registry = new PluginTerminalProviderRegistry({

@@ -85,3 +85,35 @@ test('terminal completion adapter bounds plugin activation and authorization bef
   assert.notEqual(result, 'timed-out');
   assert.ok(Array.isArray(result));
 });
+
+test('terminal completion adapter preserves built-in snippet metadata on duplicate plugin text', async () => {
+  const registry = {
+    async request() {
+      return {
+        requestId: 'request-1',
+        stale: false,
+        results: [{
+          pluginId: 'com.example',
+          pluginVersion: '1.0.0',
+          providerId: 'com.example.completion',
+          kind: 'terminal.completion',
+          requestId: 'provider-1',
+          status: 'ok',
+          result: { items: [{ text: 'deploy', score: 50_000 }] },
+        }],
+      } as const;
+    },
+  } as unknown as PluginTerminalProviderRegistry;
+  const snippet = { id: 'deploy', label: 'deploy', command: 'kubectl apply -f .' };
+  const results = await provideTerminalCompletions(registry, {
+    input: 'dep',
+    session: { sessionId: 'session-1', protocol: 'ssh', status: 'connected' },
+    hostOs: 'linux',
+    snippets: [snippet],
+    maximum: 8,
+  });
+  const duplicate = results.find((item) => item.text === 'deploy');
+  assert.equal(duplicate?.source, 'snippet');
+  assert.equal(duplicate?.snippet, snippet);
+  assert.equal(results.filter((item) => item.text === 'deploy').length, 1);
+});

@@ -36,6 +36,11 @@ function mergeLifecycleSessionSnapshot(
   event: NetcattyTerminalSessionEvent,
 ): Readonly<NetcattyTerminalSessionSnapshot> {
   const session: NetcattyTerminalSessionSnapshot = { ...(previous ?? {}), ...event.session };
+  if (event.type === 'disconnected' || event.type === 'reconnected') {
+    if (!Object.hasOwn(event.session, 'cwd')) delete session.cwd;
+    if (!Object.hasOwn(event.session, 'title')) delete session.title;
+    if (!Object.hasOwn(event.session, 'alternateScreen')) delete session.alternateScreen;
+  }
   if (event.type === 'cwdChanged' && !Object.hasOwn(event.session, 'cwd')) delete session.cwd;
   if (event.type === 'titleChanged' && !Object.hasOwn(event.session, 'title')) delete session.title;
   return freezeValue(session);
