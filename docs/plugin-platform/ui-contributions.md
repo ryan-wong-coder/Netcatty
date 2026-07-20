@@ -77,8 +77,10 @@ into a native menu or the React tree.
 
 Theme icons are resolved through a fixed host icon catalog. Package image icons
 must be declared by the currently active manifest, pass package-integrity and
-realpath containment checks, and are decoded and resized by the host under a
-small byte and dimension budget before a renderer receives a PNG data URL.
+realpath containment checks, and pass byte, format, and dimension preflight
+before any image decoder sees plugin bytes. Decoding and resizing run through a
+bounded queue of disposable sandboxed renderer workers; only the resulting
+small PNG data URL reaches a Netcatty renderer or native application menu.
 
 Context Key expressions use a bounded parser for literals, namespaced keys,
 parentheses, `!`, `&&`, `||`, equality/ordering, `in`, and `not in`. There is no

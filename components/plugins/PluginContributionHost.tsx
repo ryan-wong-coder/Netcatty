@@ -24,8 +24,10 @@ import {
 } from '../../application/state/pluginViewTabStore';
 import {
   consumeClosedPluginViewInstance,
+  markPluginViewOpenTokensClosed,
   reconcileClosedPluginView,
   rememberClosedPluginViewInstance,
+  withdrawPluginViewTab,
   type HostedPluginViewState,
 } from '../../application/state/pluginViewLifecycle';
 import { PluginContributionIcon } from './PluginContributionIcon';
@@ -62,9 +64,11 @@ export function PluginContributionHost({
   const activePluginTab = pluginViewTabs.find((tab) => tab.id === activeTabId) ?? null;
   const effectiveRequested = resolvePluginViewRequest(requested, activePluginTab);
   const contributions = usePluginContributions({
+    locale,
     context: keybindingContext,
   });
   const viewContributions = usePluginContributions({
+    locale,
     context: effectiveRequested?.context ?? { 'netcatty.surface': 'view' },
   });
   const {
@@ -81,6 +85,9 @@ export function PluginContributionHost({
   const instanceRef = useRef<HostedPluginView | null>(null);
   const retainedViewsRef = useRef(new Map<string, HostedPluginView>());
   const closedInstanceIdsRef = useRef(new Set<string>());
+  const openingTokensByTabRef = useRef(new Map<string, Set<symbol>>());
+  const openingTokensByViewRef = useRef(new Map<string, Set<symbol>>());
+  const explicitlyClosedOpenTokensRef = useRef(new Set<symbol>());
   const closeViewRef = useRef(closeView);
   const mountRef = useRef<HTMLDivElement>(null);
   const activeView = useMemo(() => viewContributions.snapshot.plugins
@@ -105,15 +112,37 @@ export function PluginContributionHost({
     });
     instanceRef.current = next.current;
     retainedViewsRef.current = next.retained;
-    if (!next.matchedCurrent) {
+    if (!next.matchedCurrent && !next.matchedRetained) {
       rememberClosedPluginViewInstance(closedInstanceIdsRef.current, event.instanceId);
     }
     if (next.matchedCurrent) {
       setInstance(null);
-      if (next.closedTabId) pluginViewTabStore.close(next.closedTabId);
       setRequested(null);
     }
+    if (next.closedTabId) pluginViewTabStore.close(next.closedTabId);
   }), [onViewClosed]);
+
+  useEffect(() => pluginViewTabStore.onDidClose(({ tab }) => {
+    const next = withdrawPluginViewTab({
+      current: instanceRef.current,
+      retained: retainedViewsRef.current,
+      tabId: tab.id,
+    });
+    instanceRef.current = next.current;
+    retainedViewsRef.current = next.retained;
+    markPluginViewOpenTokensClosed(
+      openingTokensByTabRef.current,
+      explicitlyClosedOpenTokensRef.current,
+      tab.id,
+    );
+    if (next.matchedCurrent) {
+      setInstance(null);
+      setRequested(null);
+    }
+    for (const instanceId of next.instanceIds) {
+      void closeViewRef.current(instanceId).catch(() => {});
+    }
+  }), []);
 
   useEffect(() => {
     const bindings = snapshot.plugins.flatMap((plugin) => plugin.keybindings)
@@ -144,10 +173,18 @@ export function PluginContributionHost({
   }, []);
 
   useEffect(() => {
-    const validViewIds = new Set(contributions.snapshot.plugins.flatMap((plugin) => plugin.views
+    const tabViews = contributions.snapshot.plugins.flatMap((plugin) => plugin.views
       .filter((view) => view.location === 'tab')
-      .map((view) => view.id)));
+      .map((view) => ({
+        pluginId: plugin.id,
+        pluginName: plugin.displayName,
+        viewId: view.id,
+        title: view.title,
+        icon: view.icon,
+      })));
+    const validViewIds = new Set(tabViews.map((view) => view.viewId));
     pluginViewTabStore.retain(validViewIds);
+    pluginViewTabStore.refreshMetadata(tabViews);
   }, [contributions.snapshot.plugins]);
 
   useEffect(() => {
@@ -179,12 +216,17 @@ export function PluginContributionHost({
   }, [closeView, setViewVisibility]);
 
   const close = useCallback(async () => {
+    markPluginViewOpenTokensClosed(
+      openingTokensByViewRef.current,
+      explicitlyClosedOpenTokensRef.current,
+      retainedViewKey,
+    );
     const current = instanceRef.current;
     instanceRef.current = null;
     setInstance(null);
     setRequested(null);
-    if (current) await hideOrClose(current);
-  }, [hideOrClose]);
+    if (current) await closeView(current.id);
+  }, [closeView, retainedViewKey]);
 
   useEffect(() => {
     for (const [key, retained] of retainedViewsRef.current) {
@@ -211,6 +253,17 @@ export function PluginContributionHost({
   useEffect(() => {
     if (!activeViewId || !retainedViewKey || !mountRef.current || instance) return;
     let cancelled = false;
+    const openingToken = Symbol(activePluginTab?.id ?? activeViewId);
+    const openingTabId = activePluginTab?.id;
+    const openingViewKey = retainedViewKey;
+    const viewTokens = openingTokensByViewRef.current.get(openingViewKey) ?? new Set<symbol>();
+    viewTokens.add(openingToken);
+    openingTokensByViewRef.current.set(openingViewKey, viewTokens);
+    if (openingTabId) {
+      const tokens = openingTokensByTabRef.current.get(openingTabId) ?? new Set<symbol>();
+      tokens.add(openingToken);
+      openingTokensByTabRef.current.set(openingTabId, tokens);
+    }
     const bounds = mountRef.current.getBoundingClientRect();
     const nextBounds = {
       x: Math.round(bounds.x),
@@ -248,6 +301,10 @@ export function PluginContributionHost({
       if (consumeClosedPluginViewInstance(closedInstanceIdsRef.current, opened.id)) {
         throw new Error('Plugin view closed while its open response was in flight');
       }
+      if (explicitlyClosedOpenTokensRef.current.has(openingToken)) {
+        await closeView(opened.id);
+        return;
+      }
       if (cancelled) {
         await hideOrClose(opened);
         return;
@@ -258,6 +315,15 @@ export function PluginContributionHost({
       if (cancelled) return;
       if (activePluginTab) pluginViewTabStore.close(activePluginTab.id);
       else setRequested(null);
+    }).finally(() => {
+      explicitlyClosedOpenTokensRef.current.delete(openingToken);
+      const viewTokens = openingTokensByViewRef.current.get(openingViewKey);
+      viewTokens?.delete(openingToken);
+      if (viewTokens?.size === 0) openingTokensByViewRef.current.delete(openingViewKey);
+      if (!openingTabId) return;
+      const tokens = openingTokensByTabRef.current.get(openingTabId);
+      tokens?.delete(openingToken);
+      if (tokens?.size === 0) openingTokensByTabRef.current.delete(openingTabId);
     });
     return () => { cancelled = true; };
   }, [
@@ -338,6 +404,9 @@ export function PluginContributionHost({
     const retained = [...retainedViewsRef.current.values()];
     retainedViewsRef.current.clear();
     closedInstanceIdsRef.current.clear();
+    openingTokensByTabRef.current.clear();
+    openingTokensByViewRef.current.clear();
+    explicitlyClosedOpenTokensRef.current.clear();
     const ids = new Set([current?.id, ...retained.map((view) => view.id)].filter(Boolean));
     for (const id of ids) void closeViewRef.current(id as string);
   }, []);

@@ -57,7 +57,8 @@ function createPluginHostService(options) {
     const contributionIconService = new PluginContributionIconService({
       database,
       packageStore,
-      nativeImage: options.electron.nativeImage,
+      BrowserWindow: options.electron.BrowserWindow,
+      rasterizeIcon: options.rasterizeContributionIcon,
     });
     const moduleResources = options.moduleResources
       ? normalizePluginModuleResources(options.moduleResources)

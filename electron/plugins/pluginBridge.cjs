@@ -71,7 +71,19 @@ function registerPluginBridge(ipcMain, options) {
   const viewHost = options.viewHost;
   const env = options.env ?? process.env;
   const isTrustedSender = options.isTrustedSender;
-  let scopeCatalog = normalizePluginScopeCatalog({ device: [{ id: "device", label: "This device" }] });
+  const defaultScopeCatalog = normalizePluginScopeCatalog({ device: [{ id: "device", label: "This device" }] });
+  const scopeCatalogs = new Map();
+  const observedScopeCatalogSenders = new WeakSet();
+  const scopeCatalogSenderKey = (event) => {
+    const id = event?.sender?.id;
+    return Number.isSafeInteger(id) && id > 0 ? id : "default";
+  };
+  const observeScopeCatalogSender = (event, key) => {
+    const sender = event?.sender;
+    if (!sender || typeof sender !== "object" || observedScopeCatalogSenders.has(sender)) return;
+    observedScopeCatalogSenders.add(sender);
+    sender.once?.("destroyed", () => scopeCatalogs.delete(key));
+  };
   const configured = isPluginDevelopmentEnabled(env)
     && Boolean(manager)
     && typeof manager.initialize === "function";
@@ -170,10 +182,15 @@ function registerPluginBridge(ipcMain, options) {
     await viewHost.postMessage(payload?.instanceId, payload?.message, event.sender);
     return null;
   });
-  handle(CHANNELS.getScopeCatalog, async () => scopeCatalog);
-  handle(CHANNELS.setScopeCatalog, async (_activeManager, payload) => {
-    scopeCatalog = normalizePluginScopeCatalog(payload);
-    options.broadcast?.(CHANNELS.scopeCatalogChanged, scopeCatalog);
+  handle(CHANNELS.getScopeCatalog, async (_activeManager, _payload, event) => (
+    scopeCatalogs.get(scopeCatalogSenderKey(event)) ?? defaultScopeCatalog
+  ));
+  handle(CHANNELS.setScopeCatalog, async (_activeManager, payload, event) => {
+    const key = scopeCatalogSenderKey(event);
+    const scopeCatalog = normalizePluginScopeCatalog(payload);
+    scopeCatalogs.set(key, scopeCatalog);
+    observeScopeCatalogSender(event, key);
+    event?.sender?.send?.(CHANNELS.scopeCatalogChanged, scopeCatalog);
     return null;
   });
   contributionService?.onDidChange?.((event) => options.broadcast?.(CHANNELS.contributionsChanged, event));

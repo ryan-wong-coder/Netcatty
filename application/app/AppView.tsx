@@ -29,6 +29,7 @@ import { resolveActivePluginKeybindingContext } from '../state/pluginContributio
 import { selectPluginThemeTokens } from '../state/pluginContributionEnvironment';
 import { netcattyBridge } from '../../infrastructure/services/netcattyBridge';
 import { pluginViewTabStore, usePluginViewTabs } from '../state/pluginViewTabStore';
+import { buildPluginSettingScopeCatalog } from '../state/usePluginSettingScopeCatalog';
 
 const LazyProtocolSelectDialog = lazy(() => import('../../components/ProtocolSelectDialog'));
 const LazyQuickSwitcher = lazy(() =>
@@ -148,15 +149,12 @@ export function AppView({ ctx }: { ctx: AppViewContext }) {
   }, [orderedTabsWithEditors]);
 
   useEffect(() => {
-    const catalog: NetcattyPluginScopeCatalog = {
-      host: hosts.map((host: any) => ({ id: host.id, label: host.label || host.hostname || host.id })),
-      workspace: workspaces.map((workspace: any) => ({ id: workspace.id, label: workspace.name || workspace.id })),
-      session: sessions.map((session: any) => ({
-        id: session.id,
-        label: session.customName || session.hostLabel || session.hostname || session.id,
-      })),
-      device: [{ id: 'device', label: t('settings.plugins.thisDevice') }],
-    };
+    const catalog = buildPluginSettingScopeCatalog({
+      hosts,
+      workspaces,
+      sessions,
+      deviceLabel: t('settings.plugins.thisDevice'),
+    });
     void netcattyBridge.get()?.setPluginScopeCatalog?.(catalog).catch(() => {});
   }, [hosts, sessions, t, workspaces]);
 
@@ -494,6 +492,13 @@ export function AppView({ ctx }: { ctx: AppViewContext }) {
             </Suspense>
           </LazyLoadBoundary>
         ))}
+
+        <PluginContributionHost
+          locale={settings.uiLanguage}
+          theme={resolvedTheme}
+          themeTokens={pluginThemeTokens}
+          keybindingContext={pluginKeybindingContext}
+        />
       </div>
 
       {/* Global "quick add / edit snippet" dialog, triggered by the
@@ -707,13 +712,6 @@ export function AppView({ ctx }: { ctx: AppViewContext }) {
         onSubmit={handlePassphraseSubmit}
         onCancel={handlePassphraseCancel}
         onSkip={handlePassphraseSkip}
-      />
-
-      <PluginContributionHost
-        locale={settings.uiLanguage}
-        theme={resolvedTheme}
-        themeTokens={pluginThemeTokens}
-        keybindingContext={pluginKeybindingContext}
       />
 
       {/* Empty vault vs cloud data confirmation dialog (#679).

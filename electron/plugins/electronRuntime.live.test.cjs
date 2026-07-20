@@ -11,6 +11,8 @@ if (!process.versions.electron) {
   const electron = require("electron");
 
   const { PLUGIN_PROTOCOL_SCHEME } = require("./constants.cjs");
+  const { inspectContributionIconSource } = require("./contributionIconService.cjs");
+  const { createIsolatedContributionIconRasterizer } = require("./contributionIconRasterizer.cjs");
   const { createPluginHostService } = require("./hostService.cjs");
 
   const appRoot = path.resolve(__dirname, "..", "..");
@@ -30,6 +32,22 @@ if (!process.versions.electron) {
   }]);
 
   void electron.app.whenReady().then(async () => {
+    const rasterizeContributionIcon = createIsolatedContributionIconRasterizer({
+      BrowserWindow: electron.BrowserWindow,
+    });
+    const rasterizedIcon = await rasterizeContributionIcon({
+      body: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"><rect width="128" height="64" fill="red"/></svg>'),
+      mimeType: "image/svg+xml",
+      width: 128,
+      height: 64,
+      maxEdge: 64,
+    });
+    assert.deepEqual(inspectContributionIconSource(rasterizedIcon, ".png", 64), {
+      mimeType: "image/png",
+      width: 64,
+      height: 32,
+    });
+
     const { buildPluginPackage } = await import("@netcatty/plugin-cli");
     const fixtures = [
       { id: "com.netcatty.runtime-smoke-browser", kind: "browser" },

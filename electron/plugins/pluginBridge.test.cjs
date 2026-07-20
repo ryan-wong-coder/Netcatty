@@ -140,7 +140,7 @@ test("plugin contribution icon requests use the host-owned resolver", async () =
   assert.deepEqual(calls, [payload]);
 });
 
-test("plugin setting scope catalogs are bounded, deduplicated, and host-broadcast", async () => {
+test("plugin setting scope catalogs are bounded, deduplicated, and isolated by renderer window", async () => {
   assert.deepEqual(normalizePluginScopeCatalog({
     host: [{ id: "host-1", label: "Production" }, { id: "host-1", label: "Duplicate" }],
     workspace: [{ id: "", label: "Invalid" }],
@@ -152,21 +152,51 @@ test("plugin setting scope catalogs are bounded, deduplicated, and host-broadcas
   });
 
   const ipcMain = createIpcMain();
-  const broadcasts = [];
   registerPluginBridge(ipcMain, {
     manager: { initialize: async () => {} },
     env: { NETCATTY_PLUGIN_DEV: "1" },
     isTrustedSender: () => true,
-    broadcast: (...args) => broadcasts.push(args),
   });
-  const trusted = {};
+  const firstEvents = [];
+  const secondEvents = [];
+  let firstDestroyed;
+  const first = {
+    sender: {
+      id: 1,
+      send: (...args) => firstEvents.push(args),
+      once: (event, listener) => { if (event === "destroyed") firstDestroyed = listener; },
+    },
+  };
+  const second = { sender: { id: 2, send: (...args) => secondEvents.push(args), once() {} } };
   const next = { host: [{ id: "host-1", label: "Production" }] };
-  await ipcMain.handlers.get(CHANNELS.setScopeCatalog)(trusted, next);
-  assert.deepEqual(await ipcMain.handlers.get(CHANNELS.getScopeCatalog)(trusted), {
+  await ipcMain.handlers.get(CHANNELS.setScopeCatalog)(first, next);
+  await ipcMain.handlers.get(CHANNELS.setScopeCatalog)(second, {
+    workspace: [{ id: "workspace-2", label: "Second window" }],
+  });
+  assert.deepEqual(await ipcMain.handlers.get(CHANNELS.getScopeCatalog)(first), {
     workspace: [],
     host: [{ id: "host-1", label: "Production" }],
     session: [],
     device: [],
   });
-  assert.equal(broadcasts[0][0], CHANNELS.scopeCatalogChanged);
+  assert.deepEqual(await ipcMain.handlers.get(CHANNELS.getScopeCatalog)(second), {
+    workspace: [{ id: "workspace-2", label: "Second window" }],
+    host: [],
+    session: [],
+    device: [],
+  });
+  assert.deepEqual(firstEvents, [[CHANNELS.scopeCatalogChanged, {
+    workspace: [],
+    host: [{ id: "host-1", label: "Production" }],
+    session: [],
+    device: [],
+  }]]);
+  assert.equal(secondEvents.length, 1);
+  firstDestroyed();
+  assert.deepEqual(await ipcMain.handlers.get(CHANNELS.getScopeCatalog)(first), {
+    workspace: [],
+    host: [],
+    session: [],
+    device: [{ id: "device", label: "This device" }],
+  });
 });

@@ -431,12 +431,14 @@ test("buildAppMenu renders localized plugin commands with checked and disabled s
     },
   };
   const calls = [];
+  const icon = { kind: "native-image" };
   setPluginApplicationMenuProvider(() => [
     {
       id: "com.example.menu.toggle",
       label: "切换功能",
       enabled: false,
       checked: true,
+      icon,
       group: "navigation",
       click: () => calls.push("clicked"),
     },
@@ -470,6 +472,7 @@ test("buildAppMenu renders localized plugin commands with checked and disabled s
         type: "normal",
       },
     ]);
+    assert.equal(pluginsMenu.submenu[0].icon, icon);
     pluginsMenu.submenu[0].click();
     assert.deepEqual(calls, ["clicked"]);
   } finally {

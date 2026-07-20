@@ -18,7 +18,7 @@ import {
 } from '../../../application/state/usePluginSettingScopeCatalog';
 import { PluginContributionIcon } from '../../plugins/PluginContributionIcon';
 
-function PluginSettingField({
+export function PluginSettingField({
   pluginId,
   setting,
   updateSetting,
@@ -243,6 +243,9 @@ function PluginSettingField({
       <div className="flex items-start justify-between gap-4">
         <div>
           <label className="text-sm font-medium">{setting.label}</label>
+          {setting.description && (
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">{setting.description}</p>
+          )}
           <p className="mt-1 font-mono text-[10px] text-muted-foreground">{setting.id} · {setting.scope}</p>
         </div>
         {setting.restartRequired && <span className="rounded bg-amber-500/15 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">{t('settings.plugins.restartRequired')}</span>}

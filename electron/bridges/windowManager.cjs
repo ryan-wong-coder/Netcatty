@@ -1101,6 +1101,7 @@ function registerWindowHandlers(ipcMain, nativeTheme) {
   ipcMain.handle("netcatty:setTheme", (_event, theme) => {
     currentTheme = theme;
     nativeTheme.themeSource = theme;
+    rebuildApplicationMenu();
     const effectiveTheme = theme === "system"
       ? (nativeTheme?.shouldUseDarkColors ? "dark" : "light")
       : theme;
@@ -1283,6 +1284,7 @@ function buildAppMenu(Menu, app, isMac, language = currentLanguage) {
           type: item.checked == null ? "normal" : "checkbox",
           checked: item.checked === true,
           accelerator: item.accelerator,
+          icon: item.icon,
           click: item.click,
         });
       }

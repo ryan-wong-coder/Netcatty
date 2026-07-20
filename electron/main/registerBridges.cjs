@@ -134,18 +134,62 @@ function createBridgeRegistrar(context) {
     });
     if (pluginHostService?.contributionService) {
       const windowManager = getWindowManager();
-      const refreshPluginApplicationMenu = () => {
-        windowManager.setPluginApplicationMenuProvider?.(() => {
+      const {
+        createThemeContributionNativeImage,
+        resolveApplicationMenuIconReference,
+      } = require("../plugins/themeContributionIcon.cjs");
+      const applicationMenuPackageIcons = new Map();
+      const pendingApplicationMenuPackageIcons = new Map();
+      let applicationMenuIconGeneration = 0;
+      const applicationMenuProvider = () => {
           const snapshot = pluginHostService.contributionService.snapshot({
             locale: windowManager.getCurrentLanguage?.() ?? "en",
             context: { "netcatty.surface": "application" },
           });
-          return snapshot.plugins.flatMap((plugin) => plugin.menus
+          return snapshot.plugins.flatMap((plugin) => {
+            const commandById = new Map(plugin.commands.map((command) => [command.id, command]));
+            return plugin.menus
             .filter((menu) => menu.location === "application" && menu.visible)
             .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
-            .map((menu) => ({
+            .map((menu) => {
+              const iconReference = resolveApplicationMenuIconReference(menu, commandById);
+              let icon;
+              if (iconReference?.kind === "theme") {
+                icon = createThemeContributionNativeImage(
+                  electronModule.nativeImage,
+                  iconReference,
+                  electronModule.nativeTheme?.shouldUseDarkColors === true,
+                );
+              } else if (iconReference?.kind === "package" && pluginHostService.contributionIconService) {
+                const iconKey = JSON.stringify([plugin.id, iconReference.light, iconReference.dark ?? null]);
+                const resolved = applicationMenuPackageIcons.get(iconKey);
+                if (resolved) {
+                  const dataUrl = electronModule.nativeTheme?.shouldUseDarkColors && resolved.dark
+                    ? resolved.dark
+                    : resolved.light;
+                  const candidate = electronModule.nativeImage?.createFromDataURL?.(dataUrl);
+                  if (candidate && !candidate.isEmpty?.()) icon = candidate;
+                } else if (!pendingApplicationMenuPackageIcons.has(iconKey)) {
+                  const generation = applicationMenuIconGeneration;
+                  const pending = pluginHostService.contributionIconService.resolve({
+                    pluginId: plugin.id,
+                    icon: iconReference,
+                  }).then((next) => {
+                    if (generation !== applicationMenuIconGeneration) return;
+                    applicationMenuPackageIcons.set(iconKey, next);
+                    windowManager.setPluginApplicationMenuProvider?.(applicationMenuProvider);
+                  }).catch(() => {}).finally(() => {
+                    if (pendingApplicationMenuPackageIcons.get(iconKey) === pending) {
+                      pendingApplicationMenuPackageIcons.delete(iconKey);
+                    }
+                  });
+                  pendingApplicationMenuPackageIcons.set(iconKey, pending);
+                }
+              }
+              return {
               id: menu.id,
               label: menu.title,
+              icon,
               enabled: menu.enabled,
               checked: menu.checked,
               group: menu.group ?? "",
@@ -158,11 +202,23 @@ function createBridgeRegistrar(context) {
                   context: { "netcatty.surface": "application" },
                 }).catch((error) => console.warn("[Plugins] Application command failed:", error?.message ?? error));
               },
-            })));
-        });
+              };
+            });
+          });
+      };
+      const refreshPluginApplicationMenu = ({ invalidateIcons = false } = {}) => {
+        if (invalidateIcons) {
+          applicationMenuIconGeneration += 1;
+          applicationMenuPackageIcons.clear();
+          pendingApplicationMenuPackageIcons.clear();
+        }
+        windowManager.setPluginApplicationMenuProvider?.(applicationMenuProvider);
       };
       refreshPluginApplicationMenu();
-      pluginHostService.contributionService.onDidChange(refreshPluginApplicationMenu);
+      pluginHostService.contributionService.onDidChange(() => refreshPluginApplicationMenu({ invalidateIcons: true }));
+      electronModule.nativeTheme?.on?.("updated", () => {
+        windowManager.setPluginApplicationMenuProvider?.(applicationMenuProvider);
+      });
     }
   
     const getCloudSyncPasswordPath = () => {

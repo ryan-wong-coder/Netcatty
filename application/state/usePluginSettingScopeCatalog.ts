@@ -9,6 +9,28 @@ const EMPTY_SCOPE_CATALOG: NetcattyPluginScopeCatalog = Object.freeze({
   device: Object.freeze([{ id: 'device', label: 'This device' }]),
 });
 
+export function buildPluginSettingScopeCatalog({
+  hosts,
+  workspaces,
+  sessions,
+  deviceLabel,
+}: {
+  hosts: readonly { id: string; label?: string; hostname?: string }[];
+  workspaces: readonly { id: string; title?: string }[];
+  sessions: readonly { id: string; customName?: string; hostLabel?: string; hostname?: string }[];
+  deviceLabel: string;
+}): NetcattyPluginScopeCatalog {
+  return {
+    host: hosts.map((host) => ({ id: host.id, label: host.label || host.hostname || host.id })),
+    workspace: workspaces.map((workspace) => ({ id: workspace.id, label: workspace.title || workspace.id })),
+    session: sessions.map((session) => ({
+      id: session.id,
+      label: session.customName || session.hostLabel || session.hostname || session.id,
+    })),
+    device: [{ id: 'device', label: deviceLabel }],
+  };
+}
+
 export function resolvePluginSettingScopeSelection(
   catalog: NetcattyPluginScopeCatalog,
   current: Partial<Record<NetcattyPluginSettingScopeKind, string>>,
