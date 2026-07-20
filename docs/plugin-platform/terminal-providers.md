@@ -69,7 +69,9 @@ application Provider adapters as plugins:
 - one Provider failure is contained and does not suppress other Providers;
 - plugin completion responses are capped and normalized before rendering;
 - completion insertion/display text rejects control and bidirectional override
-  characters before it can reach terminal input or suggestion UI;
+  characters before it can reach terminal input or suggestion UI. The host
+  always renders the exact insertion text for third-party completions, so a
+  friendly label cannot conceal a different command on previewless terminals;
 - decoration Providers return declarative rules only. Rule IDs are namespaced,
   counts and strings are bounded, colors must be explicit hex values, and
   unsafe regular expressions are rejected before reaching the highlighter;
@@ -80,7 +82,10 @@ application Provider adapters as plugins:
 The control-plane JSON budget remains 1 MiB, while each terminal Provider
 payload and result is additionally limited to 128 KiB. Default terminal
 Provider requests have a 1.5 second deadline; autocomplete uses a shorter 750
-ms deadline. Renderer request cancellation is owned by the requesting
+ms runtime deadline plus an 800 ms renderer-owned end-to-end wait bound that
+also covers lazy activation and first-use authorization. Built-in suggestions
+therefore remain available when a plugin prompt is unanswered. Renderer
+request cancellation is owned by the requesting
 WebContents and all outstanding work is aborted when that sender is destroyed.
 A single renderer may retain at most 64 active terminal requests, and one
 fan-out invokes at most the first 32 deterministically ranked Providers.

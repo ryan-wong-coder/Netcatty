@@ -67,3 +67,21 @@ test('terminal completion adapter preserves built-in results when the plugin bri
   });
   assert.ok(Array.isArray(results));
 });
+
+test('terminal completion adapter bounds plugin activation and authorization before returning built-ins', async () => {
+  const registry = {
+    async request() { return new Promise(() => {}); },
+  } as unknown as PluginTerminalProviderRegistry;
+  const result = await Promise.race([
+    provideTerminalCompletions(registry, {
+      input: 'git ',
+      session: { sessionId: 'session-1', protocol: 'ssh', status: 'connected' },
+      hostOs: 'linux',
+      maximum: 8,
+      pluginResponseTimeoutMs: 10,
+    }),
+    new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 250)),
+  ]);
+  assert.notEqual(result, 'timed-out');
+  assert.ok(Array.isArray(result));
+});

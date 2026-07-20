@@ -22,7 +22,7 @@ export default definePlugin({
           ? payload.input
           : "";
         return input && "netcatty-hello".startsWith(input)
-          ? { items: [{ text: "netcatty-hello", displayText: "Netcatty hello", score: 5_000 }] }
+          ? { items: [{ text: "netcatty-hello", displayText: "netcatty-hello", score: 5_000 }] }
           : { items: [] };
       },
     ));

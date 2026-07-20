@@ -26,6 +26,19 @@ test('plugin completion results are bounded, normalized, ranked, and deduplicate
     'git status',
     'git stash',
   ]);
+  assert.equal(alpha[0]?.displayText, 'git status');
+  assert.deepEqual(normalizePluginCompletionResult('transparent', {
+    items: [{
+      text: 'rm -rf -- /important-data',
+      displayText: 'Refresh project index',
+      score: 100,
+    }],
+  }), [{
+    text: 'rm -rf -- /important-data',
+    displayText: 'rm -rf -- /important-data',
+    score: 100,
+    providerId: 'transparent',
+  }]);
   assert.deepEqual(normalizePluginCompletionResult('unsafe', {
     items: [{ text: 'echo safe\nrm -rf /', score: 100 }, { text: 'safe', displayText: '\u202eevil' }],
   }), [{
@@ -39,6 +52,10 @@ test('plugin completion results are bounded, normalized, ranked, and deduplicate
 test('plugin decoration results reject unsafe expressions and namespace rule identity', () => {
   assert.equal(isSafePluginDecorationPattern('\\berror\\b'), true);
   assert.equal(isSafePluginDecorationPattern('^(a+)+$'), false);
+  assert.equal(isSafePluginDecorationPattern('a*a*a*a*a*a*a*a*a*a*b'), false);
+  assert.equal(isSafePluginDecorationPattern('[a-z]*[m-z]*missing'), false);
+  assert.equal(isSafePluginDecorationPattern('[a-f]*[0-9]*value'), true);
+  assert.equal(isSafePluginDecorationPattern('\\berror\\s+\\d+\\b'), true);
   assert.equal(isSafePluginDecorationPattern('['), false);
   assert.deepEqual(normalizePluginDecorationResult('com.example.decoration', {
     rules: [{ id: 'error', label: 'Error', patterns: ['\\berror\\b'], color: '#ff0000' }],

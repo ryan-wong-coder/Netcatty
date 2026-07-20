@@ -1,5 +1,10 @@
+import { RegExpParser, type AST } from '@eslint-community/regexpp';
+
 export const MAX_PLUGIN_COMPLETION_ITEMS = 100;
 export const MAX_PLUGIN_DECORATION_RULES = 64;
+
+const pluginPatternParser = new RegExpParser({ ecmaVersion: 2025 });
+const MAX_PLUGIN_PATTERN_QUANTIFIERS = 32;
 
 export interface PluginTerminalCompletionItem {
   readonly text: string;
@@ -64,7 +69,10 @@ export function normalizePluginCompletionResult(
     const item = candidate as Record<string, unknown>;
     const text = boundedString(item.text, 4_096);
     if (!text) continue;
-    const displayText = boundedString(item.displayText, 1_024) ?? text;
+    // Plugin labels must never conceal the bytes that accepting the completion
+    // inserts. This is particularly important for serial sessions, where the
+    // previewless Enter path can execute a selected suggestion immediately.
+    const displayText = text;
     const description = item.description == null ? undefined : boundedString(item.description, 2_048, true);
     if (item.description != null && description == null) continue;
     items.push({
@@ -102,6 +110,136 @@ export function mergePluginCompletionItems(
   return freezeArray(result);
 }
 
+interface RegexCharacterDomain {
+  readonly any: boolean;
+  readonly ascii: ReadonlySet<number>;
+  readonly nonAscii: boolean;
+}
+
+const anyCharacterDomain = (): RegexCharacterDomain => ({
+  any: true,
+  ascii: new Set(),
+  nonAscii: true,
+});
+
+function characterDomain(value: number): RegexCharacterDomain {
+  return value <= 0x7f
+    ? { any: false, ascii: new Set([value]), nonAscii: false }
+    : { any: false, ascii: new Set(), nonAscii: true };
+}
+
+function addAsciiRange(target: Set<number>, minimum: number, maximum: number): void {
+  for (let value = Math.max(0, minimum); value <= Math.min(0x7f, maximum); value += 1) {
+    target.add(value);
+  }
+}
+
+function characterSetDomain(element: AST.CharacterSet): RegexCharacterDomain {
+  if (element.kind === 'any' || element.kind === 'property' || element.negate) {
+    return anyCharacterDomain();
+  }
+  const ascii = new Set<number>();
+  if (element.kind === 'digit') {
+    addAsciiRange(ascii, 0x30, 0x39);
+  } else if (element.kind === 'word') {
+    addAsciiRange(ascii, 0x30, 0x39);
+    addAsciiRange(ascii, 0x41, 0x5a);
+    addAsciiRange(ascii, 0x61, 0x7a);
+    ascii.add(0x5f);
+  } else {
+    for (const value of [0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20]) ascii.add(value);
+  }
+  return { any: false, ascii, nonAscii: element.kind !== 'digit' };
+}
+
+function characterClassDomain(element: AST.CharacterClass): RegexCharacterDomain {
+  if (element.negate || element.unicodeSets) return anyCharacterDomain();
+  const ascii = new Set<number>();
+  let nonAscii = false;
+  for (const member of element.elements) {
+    if (member.type === 'Character') {
+      if (member.value <= 0x7f) ascii.add(member.value);
+      else nonAscii = true;
+      continue;
+    }
+    if (member.type === 'CharacterClassRange') {
+      addAsciiRange(ascii, member.min.value, member.max.value);
+      if (member.max.value > 0x7f) nonAscii = true;
+      continue;
+    }
+    if (member.type === 'CharacterSet') {
+      const domain = characterSetDomain(member);
+      if (domain.any) return domain;
+      for (const value of domain.ascii) ascii.add(value);
+      nonAscii ||= domain.nonAscii;
+      continue;
+    }
+    return anyCharacterDomain();
+  }
+  return { any: false, ascii, nonAscii };
+}
+
+function quantifiedAtomDomain(element: AST.QuantifiableElement): RegexCharacterDomain | null {
+  if (element.type === 'Character') return characterDomain(element.value);
+  if (element.type === 'CharacterSet') return characterSetDomain(element);
+  if (element.type === 'CharacterClass') return characterClassDomain(element);
+  return null;
+}
+
+function domainsOverlap(left: RegexCharacterDomain, right: RegexCharacterDomain): boolean {
+  if (left.any || right.any) return true;
+  if (left.nonAscii && right.nonAscii) return true;
+  for (const value of left.ascii) {
+    if (right.ascii.has(value)) return true;
+  }
+  return false;
+}
+
+function elementCanBeEmpty(element: AST.Element): boolean {
+  if (element.type === 'Assertion') return true;
+  if (element.type === 'Quantifier') return element.min === 0;
+  if (element.type === 'Group' || element.type === 'CapturingGroup') {
+    return element.alternatives.some((alternative) => alternative.elements.every(elementCanBeEmpty));
+  }
+  return false;
+}
+
+function hasAmbiguousQuantifiedAtoms(pattern: AST.Pattern): boolean {
+  let quantifierCount = 0;
+  const inspectAlternatives = (alternatives: readonly AST.Alternative[]): boolean => {
+    for (const alternative of alternatives) {
+      const { elements } = alternative;
+      for (const element of elements) {
+        if (element.type === 'Group' || element.type === 'CapturingGroup') {
+          if (inspectAlternatives(element.alternatives)) return true;
+        }
+        if (element.type !== 'Quantifier') continue;
+        quantifierCount += 1;
+        if (quantifierCount > MAX_PLUGIN_PATTERN_QUANTIFIERS) return true;
+        // Quantified groups, assertions, and backreferences are deliberately
+        // outside the accepted linear-time subset.
+        if (!quantifiedAtomDomain(element.element)) return true;
+      }
+      for (let leftIndex = 0; leftIndex < elements.length; leftIndex += 1) {
+        const left = elements[leftIndex];
+        if (left.type !== 'Quantifier' || left.max <= 1) continue;
+        const leftDomain = quantifiedAtomDomain(left.element);
+        if (!leftDomain) return true;
+        for (let rightIndex = leftIndex + 1; rightIndex < elements.length; rightIndex += 1) {
+          const right = elements[rightIndex];
+          if (right.type === 'Quantifier' && right.max > 1) {
+            const rightDomain = quantifiedAtomDomain(right.element);
+            if (!rightDomain || domainsOverlap(leftDomain, rightDomain)) return true;
+          }
+          if (!elementCanBeEmpty(right)) break;
+        }
+      }
+    }
+    return false;
+  };
+  return inspectAlternatives(pattern.alternatives);
+}
+
 export function isSafePluginDecorationPattern(source: string): boolean {
   if (!(source.length > 0
     && source.length <= 512
@@ -109,6 +247,11 @@ export function isSafePluginDecorationPattern(source: string): boolean {
     && !/\\(?:[1-9]|k<)/u.test(source)
     && !/\)(?:[*+?]|\{\d+(?:,\d*)?\})/u.test(source))) return false;
   try {
+    const pattern = pluginPatternParser.parsePattern(source, 0, source.length, {
+      unicode: true,
+      unicodeSets: false,
+    });
+    if (hasAmbiguousQuantifiedAtoms(pattern)) return false;
     void new RegExp(source, 'u');
     return true;
   } catch {

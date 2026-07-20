@@ -64,6 +64,7 @@
     "test:ssh-mfa-models:live": "SSH_MFA_LIVE=1 node --test electron/bridges/sshMfaModels.live.test.cjs"
   },
   "dependencies": {
+    "@eslint-community/regexpp": "4.12.2",
     "@netcatty/plugin-cli": "0.1.0-internal",
     "@netcatty/plugin-contract": "0.1.0-internal",
     "@netcatty/plugin-sdk": "0.1.0-internal",

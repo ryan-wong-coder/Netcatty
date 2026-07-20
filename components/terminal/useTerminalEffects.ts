@@ -181,7 +181,7 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
     onCommandSubmitted?.(...args);
   };
   const refreshPluginDecorationRules = useCallback(async (reason: string) => {
-    if (!pluginTerminalRegistry || status !== 'connected') {
+    if (!pluginTerminalRegistry || statusRef.current !== 'connected') {
       setPluginDecorationRules(Object.freeze([]));
       return;
     }
@@ -210,7 +210,7 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
     } catch {
       setPluginDecorationRules(Object.freeze([]));
     }
-  }, [host.id, host.protocol, pluginTerminalRegistry, sessionId, status]);
+  }, [host.id, host.protocol, pluginTerminalRegistry, sessionId]);
   const isRendererActive = isVisible || !hibernateHiddenTabs;
   const isRendererActiveRef = useRef(isRendererActive);
   isRendererActiveRef.current = isRendererActive;
@@ -265,7 +265,7 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
 
   useEffect(() => {
     void refreshPluginDecorationRules('session-state');
-  }, [refreshPluginDecorationRules]);
+  }, [refreshPluginDecorationRules, status]);
 
   useEffect(() => pluginTerminalRegistry?.onDidChangeProviders(() => {
     void refreshPluginDecorationRules('contributions-changed');

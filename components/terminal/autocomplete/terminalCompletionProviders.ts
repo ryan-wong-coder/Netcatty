@@ -17,6 +17,31 @@ export interface TerminalCompletionProviderRequest {
   cwdSource?: AutocompleteCwdSource;
   snippets?: Snippet[];
   maximum: number;
+  /** Internal end-to-end wait bound; tests may lower it deterministically. */
+  pluginResponseTimeoutMs?: number;
+}
+
+const DEFAULT_PLUGIN_COMPLETION_RESPONSE_TIMEOUT_MS = 800;
+
+type PluginCompletionResponse = Awaited<ReturnType<PluginTerminalProviderRegistry['request']>>;
+
+function emptyPluginCompletionResponse(): PluginCompletionResponse {
+  return { requestId: '', stale: false, results: Object.freeze([]) };
+}
+
+async function waitForPluginCompletionResponse(
+  response: Promise<PluginCompletionResponse>,
+  timeoutMs: number,
+): Promise<PluginCompletionResponse> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<PluginCompletionResponse>((resolve) => {
+    timer = setTimeout(() => resolve(emptyPluginCompletionResponse()), timeoutMs);
+  });
+  try {
+    return await Promise.race([response, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function provideTerminalCompletions(
@@ -45,9 +70,15 @@ export async function provideTerminalCompletions(
       maximum: request.maximum,
     },
     deadlineMs: 750,
-  }).catch(() => ({ requestId: '', stale: false, results: [] as const }))
-    ?? Promise.resolve({ requestId: '', stale: false, results: [] as const });
-  const [builtIn, pluginResponse] = await Promise.all([builtInPromise, pluginPromise]);
+  }).catch(() => emptyPluginCompletionResponse())
+    ?? Promise.resolve(emptyPluginCompletionResponse());
+  const pluginResponseTimeoutMs = Number.isFinite(request.pluginResponseTimeoutMs)
+    ? Math.max(1, Math.min(5_000, Math.trunc(request.pluginResponseTimeoutMs ?? 0)))
+    : DEFAULT_PLUGIN_COMPLETION_RESPONSE_TIMEOUT_MS;
+  const [builtIn, pluginResponse] = await Promise.all([
+    builtInPromise,
+    waitForPluginCompletionResponse(pluginPromise, pluginResponseTimeoutMs),
+  ]);
   if (pluginResponse.stale) return builtIn;
   const pluginGroups = pluginResponse.results.map((result) => result.status === 'ok'
     ? normalizePluginCompletionResult(result.providerId, result.result)
