@@ -1636,14 +1636,10 @@ const TerminalComponent: React.FC<TerminalProps> = ({
   }, [effectiveTerminalProtocol, host.id, pluginTerminalProviderRegistry, sessionId, shellType, workspaceId]);
   const pluginAwareOnCommandSubmitted = useCallback((
     command: string,
-    commandHostId: string,
-    hostLabel: string,
-    commandSessionId: string,
   ) => {
     markTerminalCommandCompletionPending(promptLineBreakStateRef);
     pluginTerminalLifecycle.onCommandSubmitted();
     void xtermRuntimeRef.current?.pluginProviderHost?.commandSubmitted(command);
-    onCommandSubmitted?.(command, commandHostId, hostLabel, commandSessionId);
   }, [pluginTerminalLifecycle]);
   const pluginAwareOnCommandCompleted = useCallback(() => {
     pluginTerminalLifecycle.onCommandCompleted();
@@ -2001,7 +1997,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     }, 400);
 
     return () => window.clearTimeout(timer);
-  }, [host, isPendingScriptAlreadyHandled, moshShellReady, pendingScript, pendingScriptId, sessionId, snippets, status, t]);
+  }, [effectiveTerminalProtocol, host, isPendingScriptAlreadyHandled, moshShellReady, pendingScript, pendingScriptId, sessionId, snippets, status, t]);
 
   useEffect(() => {
     return registerScreenSnapshotProvider(sessionId, () => {

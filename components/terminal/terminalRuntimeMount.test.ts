@@ -135,6 +135,22 @@ test('session launch paths use the same effective protocol as Provider snapshots
     terminalSource,
     /if \(effectiveTerminalProtocol !== 'mosh'\) \{[\s\S]*?onMoshSessionReady/,
   );
+  assert.match(
+    terminalSource,
+    /if \(effectiveTerminalProtocol === 'mosh' && !moshShellReady\)[\s\S]*?\}, \[effectiveTerminalProtocol, host, isPendingScriptAlreadyHandled/,
+  );
+});
+
+test('trusted command delivery reaches plugin providers without duplicating the host callback', () => {
+  const callbackStart = terminalSource.indexOf('const pluginAwareOnCommandSubmitted = useCallback');
+  const callbackEnd = terminalSource.indexOf('const pluginAwareOnCommandCompleted = useCallback', callbackStart);
+  assert.notEqual(callbackStart, -1);
+  assert.notEqual(callbackEnd, -1);
+
+  const callbackSource = terminalSource.slice(callbackStart, callbackEnd);
+  assert.match(callbackSource, /pluginTerminalLifecycle\.onCommandSubmitted\(\)/);
+  assert.match(callbackSource, /pluginProviderHost\?\.commandSubmitted\(command\)/);
+  assert.doesNotMatch(callbackSource, /onCommandSubmitted\?\./);
 });
 
 test('password-prompt input is consumed before every semantic command callback', () => {
