@@ -419,6 +419,49 @@ test("runtime keeps direct output ordered behind a pending chunk after intercept
   );
 });
 
+test("runtime drops a pending intercepted chunk after the session output route is reused", async () => {
+  const parentPort = createParentPort();
+  const oldPort = new FakePort();
+  const newPort = new FakePort();
+  const detached = [];
+  let releaseOutput;
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 2; },
+      observeOutput() { return false; },
+      interceptOutput() {
+        return new Promise((resolve) => { releaseOutput = resolve; });
+      },
+      detach(sessionId, direction, reason) { detached.push({ sessionId, direction, reason }); },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+  parentPort.emitMessage({
+    data: { kind: "output-port", sessionId: "s1", bufferedOutput: [] },
+    ports: [oldPort],
+  });
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "old" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  parentPort.emitMessage({ kind: "close-output-port", sessionId: "s1" });
+  parentPort.emitMessage({
+    data: { kind: "output-port", sessionId: "s1", bufferedOutput: [] },
+    ports: [newPort],
+  });
+  releaseOutput("STALE");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(oldPort.closed, true);
+  assert.deepEqual(newPort.messages, []);
+  assert.deepEqual(detached, [{
+    sessionId: "s1",
+    direction: undefined,
+    reason: "session-closed",
+  }]);
+});
+
 test("runtime submits queued output to the bounded pipeline before earlier transforms finish", async () => {
   const parentPort = createParentPort();
   const releases = [];

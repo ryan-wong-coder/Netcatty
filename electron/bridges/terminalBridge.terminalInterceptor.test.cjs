@@ -83,3 +83,42 @@ test("input remains ordered when an interceptor is disabled during an in-flight 
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(writes, ["FIRST", "second"]);
 });
+
+test("a pending input transform cannot write into a reused session id", async () => {
+  const oldWrites = [];
+  const newWrites = [];
+  let enabled = true;
+  let releaseOld;
+  const sessions = new Map([["session-1", {
+    type: "local",
+    proc: {
+      write(data) { oldWrites.push(String(data)); },
+      kill() {},
+    },
+  }]]);
+  terminalBridge.init({
+    sessions,
+    electronModule: {},
+    terminalDataPipeline: {
+      has() { return enabled; },
+      interceptInput() {
+        return new Promise((resolve) => { releaseOld = resolve; });
+      },
+    },
+  });
+
+  terminalBridge.writeToSession(null, { sessionId: "session-1", data: "old" });
+  await new Promise((resolve) => setImmediate(resolve));
+  terminalBridge.closeSession({ sender: {} }, { sessionId: "session-1" });
+  sessions.set("session-1", {
+    type: "local",
+    proc: { write(data) { newWrites.push(String(data)); } },
+  });
+  enabled = false;
+  terminalBridge.writeToSession(null, { sessionId: "session-1", data: "new" });
+  releaseOld("STALE");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(oldWrites, []);
+  assert.deepEqual(newWrites, ["new"]);
+});

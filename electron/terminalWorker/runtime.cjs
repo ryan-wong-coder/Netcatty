@@ -165,6 +165,7 @@ function createSender(
   outputPorts,
   terminalDataPipeline,
   pendingOutputBySession = new Map(),
+  sessionOutputGenerations = new Map(),
 ) {
   const trackPendingOutput = (sessionId, pending) => {
     pendingOutputBySession.set(sessionId, pending);
@@ -177,6 +178,10 @@ function createSender(
   };
   const postRendererEvent = (channel, payload) => {
     if (channel === "netcatty:exit" && payload?.sessionId) {
+      sessionOutputGenerations.set(
+        payload.sessionId,
+        (sessionOutputGenerations.get(payload.sessionId) ?? 0) + 1,
+      );
       pendingOutputBySession.delete(payload.sessionId);
       outputPorts?.closeSession?.(payload.sessionId);
       terminalDataPipeline?.detach?.(payload.sessionId, undefined, "session-closed");
@@ -189,6 +194,8 @@ function createSender(
     });
   };
   const deliverTerminalData = (payload) => {
+    const sessionId = payload?.sessionId;
+    const outputGeneration = sessionOutputGenerations.get(sessionId) ?? 0;
     const tapMessage = {
       kind: "output-tap",
       sessionId: payload?.sessionId,
@@ -202,6 +209,7 @@ function createSender(
       sensitiveInput = terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data) === true;
     }
     const deliver = (data, transformed = false) => {
+      if ((sessionOutputGenerations.get(sessionId) ?? 0) !== outputGeneration) return;
       const pipelineMeta = {
         ...(payload?.meta ?? {}),
         ...(transformed
@@ -220,7 +228,6 @@ function createSender(
       if (meta) outputMessage.meta = meta;
       parentPort.postMessage(outputMessage);
     };
-    const sessionId = payload?.sessionId;
     const previous = pendingOutputBySession.get(sessionId);
     if (!terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
       if (!previous) {
@@ -287,7 +294,19 @@ function createTerminalWorkerRuntime(options = {}) {
   let started = false;
   const outputPorts = createOutputPortRegistry(parentPort);
   const pendingOutputBySession = new Map();
+  const sessionOutputGenerations = new Map();
   let urgentInputPorts = null;
+
+  function invalidateSessionOutput(sessionId) {
+    if (!sessionId) return;
+    sessionOutputGenerations.set(
+      sessionId,
+      (sessionOutputGenerations.get(sessionId) ?? 0) + 1,
+    );
+    pendingOutputBySession.delete(sessionId);
+    outputPorts.closeSession(sessionId);
+    terminalDataPipeline?.detach?.(sessionId, undefined, "session-closed");
+  }
 
   async function handleRequest(message) {
     const handler = ipcMain.handlers.get(message.channel);
@@ -307,6 +326,7 @@ function createTerminalWorkerRuntime(options = {}) {
           outputPorts,
           terminalDataPipeline,
           pendingOutputBySession,
+          sessionOutputGenerations,
         ),
       }, message.payload);
       parentPort.postMessage({
@@ -335,8 +355,7 @@ function createTerminalWorkerRuntime(options = {}) {
       }, trace);
     }
     if (message.channel === "netcatty:close" && message.payload?.sessionId) {
-      outputPorts.closeSession(message.payload.sessionId);
-      terminalDataPipeline?.detach?.(message.payload.sessionId, undefined, "session-closed");
+      invalidateSessionOutput(message.payload.sessionId);
     }
     listener({
       sender: createSender(
@@ -389,7 +408,7 @@ function createTerminalWorkerRuntime(options = {}) {
       return;
     }
     if (message?.kind === "close-output-port") {
-      outputPorts.closeSession(message.sessionId);
+      invalidateSessionOutput(message.sessionId);
       return;
     }
     if (message?.kind === "output-drain") {
@@ -426,6 +445,7 @@ function createTerminalWorkerRuntime(options = {}) {
         outputPorts,
         terminalDataPipeline,
         pendingOutputBySession,
+        sessionOutputGenerations,
       );
     },
     closeUrgentInputPortsForTest() {

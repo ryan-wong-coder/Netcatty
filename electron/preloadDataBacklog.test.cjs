@@ -173,6 +173,19 @@ test("sums original plugin-pipeline ingress counts when display chunks are merge
   });
 });
 
+test("sensitive prompt metadata follows the latest merged output chunk", () => {
+  const backlog = createTerminalDataBacklog({ maxBytesPerSession: 64 });
+  backlog.append("session-1", "Password: ", {
+    pluginPipelineIngressBytes: 10,
+    pluginPipelineSensitiveInput: true,
+  });
+  backlog.append("session-1", "user@host$ ", { pluginPipelineIngressBytes: 11 });
+  assert.deepEqual(backlog.takeEntry("session-1"), {
+    data: "Password: user@host$ ",
+    meta: { pluginPipelineIngressBytes: 21 },
+  });
+});
+
 test("retains metadata-only plugin output so suppressed data can still be acknowledged", () => {
   const backlog = createTerminalDataBacklog();
   backlog.append("session-1", "", { pluginPipelineIngressBytes: 9 });

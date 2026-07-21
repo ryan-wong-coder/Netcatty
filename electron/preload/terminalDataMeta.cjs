@@ -29,6 +29,12 @@ function mergeTerminalDataMeta(first, second, options = {}) {
   const pluginPipelineIngressBytes = Number(first?.pluginPipelineIngressBytes ?? 0)
     + Number(second?.pluginPipelineIngressBytes ?? 0);
 
+  if (second?.pluginPipelineSensitiveInput === true) {
+    merged.pluginPipelineSensitiveInput = true;
+  } else {
+    delete merged.pluginPipelineSensitiveInput;
+  }
+
   if (droppedOutputMayAffectTerminalState) {
     merged.droppedOutputMayAffectTerminalState = true;
   } else {

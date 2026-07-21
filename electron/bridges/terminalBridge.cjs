@@ -1471,7 +1471,12 @@ function writeToSessionNow(payload, data, logRewrite = payload.logRewrite) {
   }
 }
 
-function writeToSessionWithInterception(payload, data, logRewrite = payload.logRewrite) {
+function writeToSessionWithInterception(
+  payload,
+  data,
+  logRewrite = payload.logRewrite,
+  expectedSession = sessions.get(payload.sessionId),
+) {
   const bypass = payload?.sensitive === true || isTerminalReportSequence(data);
   const hasInterceptor = Boolean(
     terminalDataPipeline?.interceptInput
@@ -1482,9 +1487,14 @@ function writeToSessionWithInterception(payload, data, logRewrite = payload.logR
     writeToSessionNow(payload, data, logRewrite);
     return;
   }
+  const writeIfCurrent = (nextData) => {
+    const current = sessions.get(payload.sessionId);
+    if (!current || current !== expectedSession || current.closed) return;
+    writeToSessionNow(payload, nextData, logRewrite);
+  };
   const write = async () => {
     if (!hasInterceptor) {
-      writeToSessionNow(payload, data, logRewrite);
+      writeIfCurrent(data);
       return;
     }
     try {
@@ -1492,9 +1502,9 @@ function writeToSessionWithInterception(payload, data, logRewrite = payload.logR
         sensitive: payload?.sensitive === true,
         bypass,
       });
-      writeToSessionNow(payload, transformed, logRewrite);
+      writeIfCurrent(transformed);
     } catch {
-      writeToSessionNow(payload, data, logRewrite);
+      writeIfCurrent(data);
     }
   };
   const operation = previous ? previous.then(write, write) : Promise.resolve().then(write);
@@ -1536,6 +1546,7 @@ function writeToSession(event, payload) {
           { ...payload, lineDelayMs: undefined },
           chunk,
           index === 0 ? payload.logRewrite : undefined,
+          current,
         );
       };
       if (index === 0) {
@@ -1548,7 +1559,7 @@ function writeToSession(event, payload) {
     return;
   }
 
-  writeToSessionWithInterception(payload, payload.data);
+  writeToSessionWithInterception(payload, payload.data, payload.logRewrite, session);
 }
 
 function drainPendingOutputForInterrupt(sessionId, session, trace) {
@@ -1801,6 +1812,7 @@ function closeSession(event, payload) {
     "netcatty:exit",
     { sessionId: payload.sessionId, exitCode: 0, reason: "closed" },
   );
+  terminalInputPipelineBarriers.delete(payload.sessionId);
   closeTerminalOutputSession(payload.sessionId);
 
   try {
