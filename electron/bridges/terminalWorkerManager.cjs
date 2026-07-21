@@ -186,7 +186,7 @@ function createTerminalWorkerManager(options = {}) {
   const closedSessions = new Set();
   const outputPortPending = new Set();
   const outputPortReady = new Set();
-  const outputRoutePending = new Set();
+  const outputRoutePending = new Map();
   const sessionWebContentsIds = new Map();
   const urgentInputPorts = new Map();
   const outputTaps = new Set();
@@ -420,18 +420,21 @@ function createTerminalWorkerManager(options = {}) {
     if (!contents || contents.isDestroyed?.()) {
       return false;
     }
+    const openToken = Symbol("terminal-output-route");
     sessionWebContentsIds.set(sessionId, webContentsId);
-    outputRoutePending.add(sessionId);
+    outputRoutePending.set(sessionId, openToken);
     await Promise.allSettled([...sessionOwnedListeners].map((listener) => (
       Promise.resolve().then(() => listener(Object.freeze({ sessionId, webContentsId })))
     )));
     if (closedSessions.has(sessionId)
-      || sessionWebContentsIds.get(sessionId) !== webContentsId) {
-      outputRoutePending.delete(sessionId);
+      || sessionWebContentsIds.get(sessionId) !== webContentsId
+      || outputRoutePending.get(sessionId) !== openToken) {
       return false;
     }
     if (contents.isDestroyed?.()) {
-      outputRoutePending.delete(sessionId);
+      if (outputRoutePending.get(sessionId) === openToken) {
+        outputRoutePending.delete(sessionId);
+      }
       return false;
     }
     openUrgentInputPort(webContentsId, contents);
@@ -440,7 +443,9 @@ function createTerminalWorkerManager(options = {}) {
     });
     if (outputPort && outputPort !== true && child?.postMessage) {
       outputPortPending.add(sessionId);
-      outputRoutePending.delete(sessionId);
+      if (outputRoutePending.get(sessionId) === openToken) {
+        outputRoutePending.delete(sessionId);
+      }
       child.postMessage({
         kind: "output-port",
         sessionId,
@@ -448,7 +453,9 @@ function createTerminalWorkerManager(options = {}) {
       }, [outputPort]);
       return true;
     }
-    outputRoutePending.delete(sessionId);
+    if (outputRoutePending.get(sessionId) === openToken) {
+      outputRoutePending.delete(sessionId);
+    }
     flushBufferedOutput(sessionId);
     return true;
   }

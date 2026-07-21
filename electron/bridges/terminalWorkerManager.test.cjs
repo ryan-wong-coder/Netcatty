@@ -120,6 +120,56 @@ test("session ownership listeners finish before buffered output is released", as
   assert.deepEqual(routed, [{ sessionId: "local-1", data: "banner" }]);
 });
 
+test("an older ownership waiter cannot release a newer output route", async () => {
+  const child = new FakeChild();
+  const routed = [];
+  const releaseOwnership = [];
+  let outputOpen = false;
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork: () => child },
+    terminalOutputChannel: {
+      openSession() { outputOpen = true; },
+      send(sessionId, data) {
+        if (!outputOpen) return false;
+        routed.push({ sessionId, data });
+        return true;
+      },
+    },
+    workerScriptPath: "/worker.cjs",
+  });
+  manager.onSessionOwned(() => new Promise((resolve) => { releaseOwnership.push(resolve); }));
+
+  const first = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const second = manager.request("netcatty:local:reconnect", { sessionId: "local-1" }, {
+    webContentsId: 7,
+  });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[1].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(releaseOwnership.length, 2);
+
+  child.emit("message", { kind: "output", sessionId: "local-1", data: "new-banner" });
+  releaseOwnership[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(outputOpen, false);
+  assert.deepEqual(routed, []);
+
+  releaseOwnership[1]();
+  assert.deepEqual(await first, { sessionId: "local-1" });
+  assert.deepEqual(await second, { sessionId: "local-1" });
+  assert.deepEqual(routed, [{ sessionId: "local-1", data: "new-banner" }]);
+});
+
 test("terminal interceptor ports transfer directly to the worker and warnings stay host-owned", () => {
   const child = new FakeChild();
   const manager = createTerminalWorkerManager({
