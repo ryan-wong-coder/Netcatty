@@ -322,7 +322,11 @@ test("runtime sends transformed output to the renderer while host taps retain or
     sessionId: "s1",
     data: "HELLO",
     tapped: true,
-    meta: { pluginPipelineIngressBytes: 5, pluginPipelineSensitiveInput: true },
+    meta: {
+      pluginPipelineIngressBytes: 5,
+      pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: true,
+    },
   });
   assert.deepEqual(observed, [{ sessionId: "s1", data: "hello" }]);
 });
@@ -350,7 +354,11 @@ test("runtime classifies original prompts when only an output interceptor is act
     sessionId: "s1",
     data: "masked> ",
     tapped: true,
-    meta: { pluginPipelineIngressBytes: 10, pluginPipelineSensitiveInput: true },
+    meta: {
+      pluginPipelineIngressBytes: 10,
+      pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: true,
+    },
   });
 });
 
@@ -571,7 +579,11 @@ test("runtime routes buffered startup output through the selected interceptor", 
   assert.deepEqual(outputPort.messages, [{
     sessionId: "s1",
     data: "EARLY",
-    meta: { source: "startup", pluginPipelineIngressBytes: 5 },
+    meta: {
+      source: "startup",
+      pluginPipelineIngressBytes: 5,
+      pluginPipelineProcessed: true,
+    },
   }]);
   assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
 });
@@ -600,7 +612,11 @@ test("runtime does not re-intercept already transformed buffered output", async 
       sessionId: "s1",
       bufferedOutput: [{
         data: "EARLY",
-        meta: { pluginPipelineIngressBytes: 5, pluginPipelineSensitiveInput: true },
+        meta: {
+          pluginPipelineIngressBytes: 5,
+          pluginPipelineProcessed: true,
+          pluginPipelineSensitiveInput: true,
+        },
       }],
     },
     ports: [outputPort],
@@ -611,7 +627,54 @@ test("runtime does not re-intercept already transformed buffered output", async 
   assert.deepEqual(outputPort.messages, [{
     sessionId: "s1",
     data: "EARLY",
-    meta: { pluginPipelineIngressBytes: 5, pluginPipelineSensitiveInput: true },
+    meta: {
+      pluginPipelineIngressBytes: 5,
+      pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: true,
+    },
+  }]);
+  assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
+});
+
+test("runtime re-intercepts raw buffered output that only inherited ingress accounting", async () => {
+  const parentPort = createParentPort();
+  const outputPort = new FakePort();
+  const intercepted = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode: () => 2,
+      observeOutput: () => false,
+      interceptOutput(sessionId, data) {
+        intercepted.push({ sessionId, data });
+        return Promise.resolve(`processed:${data}`);
+      },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  parentPort.emitMessage({
+    data: {
+      kind: "output-port",
+      sessionId: "s1",
+      bufferedOutput: [{
+        data: "raw",
+        meta: { pluginPipelineIngressBytes: 9 },
+      }],
+    },
+    ports: [outputPort],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(intercepted, [{ sessionId: "s1", data: "raw" }]);
+  assert.deepEqual(outputPort.messages, [{
+    sessionId: "s1",
+    data: "processed:raw",
+    meta: {
+      pluginPipelineIngressBytes: 12,
+      pluginPipelineProcessed: true,
+    },
   }]);
   assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
 });

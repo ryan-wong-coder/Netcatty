@@ -35,6 +35,12 @@ function mergeTerminalDataMeta(first, second, options = {}) {
     delete merged.pluginPipelineSensitiveInput;
   }
 
+  if (second?.pluginPipelineProcessed === true) {
+    merged.pluginPipelineProcessed = true;
+  } else {
+    delete merged.pluginPipelineProcessed;
+  }
+
   if (droppedOutputMayAffectTerminalState) {
     merged.droppedOutputMayAffectTerminalState = true;
   } else {

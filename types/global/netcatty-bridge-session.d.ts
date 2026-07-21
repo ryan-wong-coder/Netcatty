@@ -441,6 +441,8 @@ declare global {
           terminalPerf?: NetcattyTerminalOutputPerfMeta;
           /** Original host output units acknowledged even when an interceptor changes display length. */
           pluginPipelineIngressBytes?: number;
+          /** Host-owned provenance marker for output already processed by an interceptor. */
+          pluginPipelineProcessed?: boolean;
           /** Host-classified authentication prompt state for protecting subsequent input. */
           pluginPipelineSensitiveInput?: boolean;
         },

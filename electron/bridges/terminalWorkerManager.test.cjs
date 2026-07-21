@@ -685,7 +685,7 @@ test("metadata-only interceptor output obeys the pending chunk cap", async () =>
   });
 });
 
-test("pending output merge keeps sensitive state from only the latest chunk", async () => {
+test("pending output merge keeps state and provenance from only the latest raw chunk", async () => {
   const child = new FakeChild();
   const outputPort = { label: "worker-output-port" };
   const manager = createTerminalWorkerManager({
@@ -707,20 +707,23 @@ test("pending output merge keeps sensitive state from only the latest chunk", as
     kind: "output",
     sessionId: "local-1",
     data: "Password: ",
-    meta: { pluginPipelineIngressBytes: 10, pluginPipelineSensitiveInput: true },
+    meta: {
+      pluginPipelineIngressBytes: 10,
+      pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: true,
+    },
   });
   child.emit("message", {
     kind: "output",
     sessionId: "local-1",
     data: "READY",
-    meta: { pluginPipelineIngressBytes: 5 },
   });
   child.emit("message", { kind: "output-port-ready", sessionId: "local-1" });
 
   assert.deepEqual(child.messages[2], {
     kind: "output-flush",
     sessionId: "local-1",
-    chunks: [{ data: "READY", meta: { pluginPipelineIngressBytes: 15 } }],
+    chunks: [{ data: "READY", meta: { pluginPipelineIngressBytes: 10 } }],
   });
 });
 

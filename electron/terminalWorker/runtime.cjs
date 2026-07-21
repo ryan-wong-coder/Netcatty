@@ -197,7 +197,12 @@ function createSender(
       const pipelineMeta = {
         ...(payload?.meta ?? {}),
         ...(transformed
-          ? { pluginPipelineIngressBytes: String(payload?.data ?? "").length }
+          ? {
+            pluginPipelineIngressBytes:
+              Number(payload?.meta?.pluginPipelineIngressBytes ?? 0)
+              + String(payload?.data ?? "").length,
+            pluginPipelineProcessed: true,
+          }
           : {}),
         ...(sensitiveInput ? { pluginPipelineSensitiveInput: true } : {}),
       };
@@ -295,7 +300,7 @@ function createTerminalWorkerRuntime(options = {}) {
     for (const chunk of chunks || []) {
       const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
       const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
-      const pipelineProcessed = Number.isFinite(meta?.pluginPipelineIngressBytes);
+      const pipelineProcessed = meta?.pluginPipelineProcessed === true;
       sender.send("netcatty:data", {
         sessionId,
         data,

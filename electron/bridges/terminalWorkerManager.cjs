@@ -157,6 +157,11 @@ function mergeTerminalOutputMeta(previous, next) {
   } else {
     delete merged.pluginPipelineSensitiveInput;
   }
+  if (next.pluginPipelineProcessed === true) {
+    merged.pluginPipelineProcessed = true;
+  } else {
+    delete merged.pluginPipelineProcessed;
+  }
   if (!merged.droppedOutputMayAffectTerminalState) {
     delete merged.droppedOutputMayAffectTerminalState;
   }
@@ -255,7 +260,7 @@ function createTerminalWorkerManager(options = {}) {
     // so latest-chunk state such as sensitive-input classification cannot be
     // revived by an earlier prompt while additive ingress/state metadata is
     // still preserved.
-    const mergedMeta = mergeTerminalOutputMeta(meta, getOutputChunkMeta(chunk));
+    const mergedMeta = mergeTerminalOutputMeta(meta, getOutputChunkMeta(chunk) || {});
     if (!mergedMeta) return chunk;
     return { data: getOutputChunkData(chunk), meta: mergedMeta };
   }

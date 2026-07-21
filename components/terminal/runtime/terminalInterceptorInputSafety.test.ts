@@ -97,6 +97,21 @@ test("renderer flow control acknowledges host ingress rather than transformed di
   );
   assert.match(
     terminalSource,
-    /beginHibernatedSessionListeners[\s\S]*?\(chunk, meta\) =>[\s\S]*?Number\.isFinite\(meta\?\.pluginPipelineIngressBytes\)[\s\S]*?ackTerminalSessionFlow\(terminalBackend, backendId, pluginPipelineIngressBytes\)/u,
+    /beginHibernatedSessionListeners[\s\S]*?\(chunk, meta\) =>[\s\S]*?observeTerminalInputPrompt\(chunk, meta\)[\s\S]*?Number\.isFinite\(meta\?\.pluginPipelineIngressBytes\)[\s\S]*?ackTerminalSessionFlow\(terminalBackend, backendId, pluginPipelineIngressBytes\)/u,
+  );
+});
+
+test("active and hibernated output share host-owned sensitive prompt classification", () => {
+  assert.match(
+    terminalSource,
+    /const observeTerminalInputPrompt = useCallback[\s\S]*?pluginPipelineSensitiveInput === true[\s\S]*?passwordPromptActiveRef\.current = true[\s\S]*?isConfirmedTerminalShellPrompt[\s\S]*?passwordPromptActiveRef\.current = false/u,
+  );
+  assert.match(
+    terminalSource,
+    /beginHibernatedSessionListeners[\s\S]*?observeTerminalInputPrompt\(chunk, meta\)/u,
+  );
+  assert.match(
+    terminalSource,
+    /onTerminalOutput: \(chunk: string, meta\?: TerminalSessionDataMeta\) => \{\s*observeTerminalInputPrompt\(chunk, meta\)/u,
   );
 });

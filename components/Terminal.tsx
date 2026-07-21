@@ -1587,6 +1587,32 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     clearHibernateRuntimeState();
   }, [attachAuthorization, attachExistingSession, clearHibernateRuntimeState, handleTerminalDataCaptureOnce, sessionId, terminalBackend]);
 
+  const observeTerminalInputPrompt = useCallback((
+    chunk: string,
+    meta?: TerminalSessionDataMeta,
+  ) => {
+    sensitivePromptOutputTailRef.current = appendTerminalPromptSecurityTail(
+      sensitivePromptOutputTailRef.current,
+      chunk,
+    );
+    const promptSecurityOptions = { allowHostStyleGreaterThan: isNetworkDevice };
+    if (meta?.pluginPipelineSensitiveInput === true) {
+      passwordPromptActiveRef.current = true;
+      autocompleteCloseRef.current?.();
+    } else if (isUntrustedTerminalInputPrompt(
+      sensitivePromptOutputTailRef.current,
+      promptSecurityOptions,
+    )) {
+      passwordPromptActiveRef.current = true;
+      autocompleteCloseRef.current?.();
+    } else if (isConfirmedTerminalShellPrompt(
+      sensitivePromptOutputTailRef.current,
+      promptSecurityOptions,
+    )) {
+      passwordPromptActiveRef.current = false;
+    }
+  }, [isNetworkDevice]);
+
   const beginHibernatedSessionListeners = useCallback((backendId: string) => {
     disposeDataRef.current?.();
     flushTerminalSessionFlowAck(backendId);
@@ -1595,6 +1621,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     disposeDataRef.current = terminalBackend.onSessionData(
       backendId,
       (chunk, meta) => {
+        observeTerminalInputPrompt(chunk, meta);
         hibernatePendingBufferRef.current = appendHibernatePendingBuffer(
           hibernatePendingBufferRef.current,
           chunk,
@@ -1625,7 +1652,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
       onSessionExitRef.current?.(sessionId, evt);
       scheduleAutoReconnect({ evt });
     });
-  }, [scheduleAutoReconnect, sessionId, terminalBackend]);
+  }, [observeTerminalInputPrompt, scheduleAutoReconnect, sessionId, terminalBackend]);
 
   const clearHibernateRetry = useCallback(() => {
     if (hibernateRetryTimerRef.current === null) return;
@@ -1989,26 +2016,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     },
     onTerminalDataCapture: handleTerminalDataCaptureOnce,
     onTerminalOutput: (chunk: string, meta?: TerminalSessionDataMeta) => {
-      sensitivePromptOutputTailRef.current = appendTerminalPromptSecurityTail(
-        sensitivePromptOutputTailRef.current,
-        chunk,
-      );
-      const promptSecurityOptions = { allowHostStyleGreaterThan: isNetworkDevice };
-      if (meta?.pluginPipelineSensitiveInput === true) {
-        passwordPromptActiveRef.current = true;
-        autocompleteCloseRef.current?.();
-      } else if (isUntrustedTerminalInputPrompt(
-        sensitivePromptOutputTailRef.current,
-        promptSecurityOptions,
-      )) {
-        passwordPromptActiveRef.current = true;
-        autocompleteCloseRef.current?.();
-      } else if (isConfirmedTerminalShellPrompt(
-        sensitivePromptOutputTailRef.current,
-        promptSecurityOptions,
-      )) {
-        passwordPromptActiveRef.current = false;
-      }
+      observeTerminalInputPrompt(chunk, meta);
       appendOutputTriggerOutputRef.current(chunk, meta);
       if (onTerminalOutput) {
         onTerminalOutput(sessionId, chunk);
