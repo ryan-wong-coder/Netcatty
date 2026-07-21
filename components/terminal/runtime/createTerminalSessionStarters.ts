@@ -1459,7 +1459,10 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
       ctx.disposeDataRef.current = ctx.terminalBackend.onSessionData(
         id,
         (chunk, meta) => {
-          writeSessionData(ctx, term, chunk, chunk.length, meta);
+          const pluginPipelineIngressBytes = Number.isFinite(meta?.pluginPipelineIngressBytes)
+            ? Math.max(0, Number(meta.pluginPipelineIngressBytes))
+            : chunk.length;
+          writeSessionData(ctx, term, chunk, pluginPipelineIngressBytes, meta);
           ctx.onTerminalOutput?.(chunk, meta);
           if (!ctx.hasConnectedRef.current) {
             ctx.updateStatus("connected");

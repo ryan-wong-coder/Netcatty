@@ -84,6 +84,7 @@ function harness(options = {}) {
     },
   };
   const selections = [];
+  const warnings = [];
   const service = new PluginTerminalDataPipelineService({
     contributionService,
     permissionEngine,
@@ -95,6 +96,7 @@ function harness(options = {}) {
         ? options.selectedProviderId
         : request.providers[0].provider.id;
     },
+    showWarning: (warning) => warnings.push(warning),
   });
   service.bindTerminalWorkerManager(worker);
   return {
@@ -105,6 +107,7 @@ function harness(options = {}) {
     detached,
     authorized,
     selections,
+    warnings,
     runtimeListeners,
     contributionService,
   };
@@ -405,4 +408,22 @@ test("terminal worker exit invalidates active bindings before worker restart", a
   await h.service.configureDirection(session, "input");
   assert.equal(h.authorized.length, 4);
   assert.equal(h.attached.length, 4);
+});
+
+test("a failed interceptor stays quarantined for the rest of the session", async () => {
+  const h = harness();
+  assert.equal((await h.service.configureDirection(session, "input")).status, "active");
+
+  h.worker.warningListener({
+    sessionId: session.sessionId,
+    direction: "input",
+    code: "timeout",
+    message: "Interceptor timed out",
+  });
+
+  const [result] = await h.service.handleSessionEvent({ type: "connected", session });
+  assert.equal(result.status, "declined");
+  assert.equal(h.authorized.length, 2, "the quarantined provider must not be authorized again");
+  assert.equal(h.attached.length, 2, "the quarantined provider must not be reattached");
+  assert.equal(h.warnings.length, 1);
 });

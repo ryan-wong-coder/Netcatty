@@ -1912,7 +1912,15 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
             binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
           }
           const b64 = btoa(binary);
-          ctx.terminalBackend.writeToSession(sessionId, `\x1b]52;${target};${b64}\x07`);
+          // This host-generated protocol reply contains clipboard contents. It
+          // must bypass plugin input interceptors just like password/OTP data;
+          // otherwise terminal interception would become an undeclared
+          // clipboard-read capability.
+          ctx.terminalBackend.writeToSession(
+            sessionId,
+            `\x1b]52;${target};${b64}\x07`,
+            { sensitive: true },
+          );
         };
         doRead().catch((err) => {
           logger.warn('[XTerm] OSC 52 clipboard read failed:', err);

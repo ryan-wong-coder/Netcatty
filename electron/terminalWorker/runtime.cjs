@@ -33,7 +33,7 @@ function normalizeMessageEvent(eventOrMessage) {
   };
 }
 
-function createOutputPortRegistry(parentPort) {
+function createOutputPortRegistry() {
   const outputPorts = new Map();
 
   function closeSession(sessionId) {
@@ -71,7 +71,7 @@ function createOutputPortRegistry(parentPort) {
     }
   }
 
-  function open(sessionId, port, bufferedOutput = []) {
+  function open(sessionId, port) {
     if (!sessionId || !port) return;
     closeSession(sessionId);
     outputPorts.set(sessionId, port);
@@ -80,29 +80,12 @@ function createOutputPortRegistry(parentPort) {
     } catch {
       // Some Electron MessagePort implementations do not require start().
     }
-    for (const chunk of bufferedOutput || []) {
-      const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
-      const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
-      post(sessionId, data, meta);
-    }
-    parentPort.postMessage({ kind: "output-port-ready", sessionId });
-  }
-
-  function flush(sessionId, chunks = []) {
-    for (const chunk of chunks || []) {
-      const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
-      const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
-      if (!post(sessionId, data, meta)) {
-        parentPort.postMessage(meta ? { kind: "output", sessionId, data, meta } : { kind: "output", sessionId, data });
-      }
-    }
   }
 
   return {
     open,
     post,
     postControl,
-    flush,
     closeSession,
   };
 }
@@ -202,7 +185,7 @@ function createSender(
       data: payload?.data,
     };
     if (payload?.meta) tapMessage.meta = payload.meta;
-    parentPort.postMessage(tapMessage);
+    if (payload?.tapped !== true) parentPort.postMessage(tapMessage);
     const pipelineMode = terminalDataPipeline?.getOutputMode?.(payload?.sessionId) ?? 0;
     let sensitiveInput = false;
     if (pipelineMode !== 0) {
@@ -292,10 +275,28 @@ function createTerminalWorkerRuntime(options = {}) {
   } = options;
   const ipcMain = createIpcMainHarness();
   let started = false;
-  const outputPorts = createOutputPortRegistry(parentPort);
+  const outputPorts = createOutputPortRegistry();
   const pendingOutputBySession = new Map();
   const sessionOutputGenerations = new Map();
   let urgentInputPorts = null;
+
+  const createWorkerOutputSender = () => createSender(
+    parentPort,
+    0,
+    outputPorts,
+    terminalDataPipeline,
+    pendingOutputBySession,
+    sessionOutputGenerations,
+  );
+
+  function replayWorkerOutput(sessionId, chunks) {
+    const sender = createWorkerOutputSender();
+    for (const chunk of chunks || []) {
+      const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
+      const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
+      sender.send("netcatty:data", { sessionId, data, meta, tapped: true });
+    }
+  }
 
   function invalidateSessionOutput(sessionId) {
     if (!sessionId) return;
@@ -364,6 +365,7 @@ function createTerminalWorkerRuntime(options = {}) {
         outputPorts,
         terminalDataPipeline,
         pendingOutputBySession,
+        sessionOutputGenerations,
       ),
     }, message.payload);
   }
@@ -392,7 +394,17 @@ function createTerminalWorkerRuntime(options = {}) {
       return;
     }
     if (message?.kind === "output-port") {
-      outputPorts.open(message.sessionId, ports?.[0], message.bufferedOutput);
+      outputPorts.open(message.sessionId, ports?.[0]);
+      replayWorkerOutput(message.sessionId, message.bufferedOutput);
+      const pending = pendingOutputBySession.get(message.sessionId);
+      if (pending) {
+        void pending.then(
+          () => parentPort.postMessage({ kind: "output-port-ready", sessionId: message.sessionId }),
+          () => parentPort.postMessage({ kind: "output-port-ready", sessionId: message.sessionId }),
+        );
+      } else {
+        parentPort.postMessage({ kind: "output-port-ready", sessionId: message.sessionId });
+      }
       return;
     }
     if (message?.kind === "terminal-interceptor-port") {
@@ -404,7 +416,7 @@ function createTerminalWorkerRuntime(options = {}) {
       return;
     }
     if (message?.kind === "output-flush") {
-      outputPorts.flush(message.sessionId, message.chunks);
+      replayWorkerOutput(message.sessionId, message.chunks);
       return;
     }
     if (message?.kind === "close-output-port") {

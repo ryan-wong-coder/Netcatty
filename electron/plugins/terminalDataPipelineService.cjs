@@ -89,6 +89,12 @@ class PluginTerminalDataPipelineService {
         const key = `${warning?.sessionId}\0${warning?.direction}`;
         this.active.delete(key);
         if (!["detached", "replaced", "shutdown"].includes(warning?.code)) {
+          // A circuit-breaker or protocol failure quarantines this direction
+          // for the rest of the session. Keeping the cached provider would let
+          // the next connected/snapshot event silently reattach the same
+          // broken interceptor with its existing grants.
+          this.selectedProviders.delete(key);
+          this.declined.add(key);
           this.showWarning(warning);
         }
       });

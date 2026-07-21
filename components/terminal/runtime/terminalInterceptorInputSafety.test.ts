@@ -60,6 +60,13 @@ test("confirmed sudo credentials and preload transport preserve the sensitive ma
   assert.match(preloadSource, /sensitive: options\?\.sensitive === true/u);
 });
 
+test("OSC 52 clipboard replies bypass plugin input interception as sensitive host data", () => {
+  assert.match(
+    runtimeSource,
+    /writeToSession\(\s*sessionId,\s*`\\x1b\]52;\$\{target\};\$\{b64\}\\x07`,\s*\{ sensitive: true \},\s*\)/u,
+  );
+});
+
 test("generated script credentials stay masked and preserve the sensitive marker", () => {
   assert.match(scriptCodegenSource, /dialog\.prompt\([\s\S]*?\{ sensitive: true \}\)/u);
   assert.match(scriptCodegenSource, /screen\.sendLine\([\s\S]*?\{ sensitive: true \}\)/u);
@@ -83,5 +90,9 @@ test("renderer flow control acknowledges host ingress rather than transformed di
   assert.match(
     attachmentSource,
     /const displayBytes = data\.length;[\s\S]*?enqueueTerminalWrite\(term, displayBytes,[\s\S]*?dropBytes: ingressBytes/u,
+  );
+  assert.match(
+    readFileSync(new URL("./createTerminalSessionStarters.ts", import.meta.url), "utf8"),
+    /const pluginPipelineIngressBytes = Number\.isFinite\(meta\?\.pluginPipelineIngressBytes\)[\s\S]*?writeSessionData\(ctx, term, chunk, pluginPipelineIngressBytes, meta\)/u,
   );
 });
