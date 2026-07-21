@@ -50,6 +50,8 @@ class PluginTerminalDataPipelineService {
     this.terminalWorkerManager = null;
     this.workerWarningSubscription = null;
     this.active = new Map();
+    this.declined = new Set();
+    this.selectedProviders = new Map();
     this.operations = new Map();
     this.sessionEpochs = new Map();
     this.closed = false;
@@ -94,6 +96,13 @@ class PluginTerminalDataPipelineService {
   }
 
   #pruneContributions() {
+    this.declined.clear();
+    for (const [key, providerId] of this.selectedProviders) {
+      const direction = key.slice(key.lastIndexOf("\0") + 1);
+      if (!this.#providers(direction).some((entry) => entry.provider.id === providerId)) {
+        this.selectedProviders.delete(key);
+      }
+    }
     for (const [key, binding] of this.active) {
       const providers = this.#providers(binding.direction);
       if (!providers.some((entry) => entry.provider.id === binding.providerId
@@ -181,6 +190,9 @@ class PluginTerminalDataPipelineService {
     const providers = this.#providers(direction, options.locale);
     if (providers.length === 0) return Object.freeze({ status: "none", direction });
     const key = this.#key(session.sessionId, direction);
+    if (options.providerId == null && this.declined.has(key)) {
+      return Object.freeze({ status: "declined", direction });
+    }
     const existing = this.active.get(key);
     if (existing && existing.sessionEpoch === options.sessionEpoch
       && providers.some((entry) => entry.provider.id === existing.providerId)
@@ -195,13 +207,21 @@ class PluginTerminalDataPipelineService {
         pluginId: existing.identity.pluginId,
       });
     }
-    let providerId = options.providerId;
+    let providerId = options.providerId ?? this.selectedProviders.get(key);
+    if (providerId != null && !providers.some((entry) => entry.provider.id === providerId)) {
+      this.selectedProviders.delete(key);
+      providerId = options.providerId;
+    }
     if (providerId == null && providers.length === 1) providerId = providers[0].provider.id;
     if (providerId == null) {
       providerId = await this.requestSelection(Object.freeze({ session, direction, providers }));
       this.#assertSessionCurrent(session.sessionId, options.sessionEpoch);
     }
-    if (providerId == null) return Object.freeze({ status: "declined", direction });
+    if (providerId == null) {
+      this.declined.add(key);
+      this.selectedProviders.delete(key);
+      return Object.freeze({ status: "declined", direction });
+    }
     const selected = providers.find((entry) => entry.provider.id === providerId);
     if (!selected) throw new PluginRpcError(RPC_ERRORS.invalidArgument, "Selected Terminal interceptor is unavailable");
 
@@ -260,15 +280,24 @@ class PluginTerminalDataPipelineService {
     });
     let workerAttached = false;
     try {
-      this.terminalWorkerManager.attachTerminalInterceptor(descriptor, channel.port1);
-      workerAttached = true;
       await this.runtimeSupervisor.attachTerminalInterceptor(
         identity.pluginId,
         { providerId, direction, session },
         channel.port2,
         { expectedIdentity: identity },
       );
+      if (!runtimeIdentityMatches(
+        this.runtimeSupervisor.getRuntimeIdentity(identity.pluginId),
+        identity,
+      )) {
+        throw new PluginRpcError(
+          RPC_ERRORS.unavailable,
+          "Terminal interceptor runtime changed during port attachment",
+        );
+      }
       this.#assertAttachmentCurrent(session, direction, providerId, identity, options);
+      this.terminalWorkerManager.attachTerminalInterceptor(descriptor, channel.port1);
+      workerAttached = true;
     } catch (error) {
       if (workerAttached) {
         this.terminalWorkerManager.detachTerminalInterceptor(session.sessionId, direction);
@@ -284,6 +313,8 @@ class PluginTerminalDataPipelineService {
       identity: Object.freeze({ ...identity }),
       sessionEpoch: options.sessionEpoch,
     }));
+    this.declined.delete(key);
+    this.selectedProviders.set(key, providerId);
     return Object.freeze({ status: "active", direction, providerId, pluginId: identity.pluginId });
   }
 
@@ -292,13 +323,29 @@ class PluginTerminalDataPipelineService {
     if (event?.type === "disposed") {
       this.sessionEpochs.set(session.sessionId, (this.sessionEpochs.get(session.sessionId) ?? 0) + 1);
       this.detachSession(session.sessionId);
+      for (const direction of DIRECTIONS) {
+        const key = this.#key(session.sessionId, direction);
+        this.declined.delete(key);
+        this.selectedProviders.delete(key);
+      }
       return Object.freeze([]);
     }
-    if (event?.type !== "created" && event?.type !== "connected" && event?.type !== "snapshot") {
+    if (event?.type === "disconnected") {
+      this.sessionEpochs.set(session.sessionId, (this.sessionEpochs.get(session.sessionId) ?? 0) + 1);
+      this.detachSession(session.sessionId, "session-disconnected");
+      return Object.freeze([]);
+    }
+    if (event?.type !== "created" && event?.type !== "connected"
+      && event?.type !== "reconnected" && event?.type !== "snapshot") {
       return Object.freeze([]);
     }
     if (event.type === "created") {
       this.detachSession(session.sessionId, "session-replaced");
+      for (const direction of DIRECTIONS) {
+        const key = this.#key(session.sessionId, direction);
+        this.declined.delete(key);
+        this.selectedProviders.delete(key);
+      }
       this.sessionEpochs.set(session.sessionId, (this.sessionEpochs.get(session.sessionId) ?? 0) + 1);
     }
     if (!this.sessionEpochs.has(session.sessionId)) this.sessionEpochs.set(session.sessionId, 0);
@@ -331,6 +378,8 @@ class PluginTerminalDataPipelineService {
       this.sessionEpochs.set(sessionId, (this.sessionEpochs.get(sessionId) ?? 0) + 1);
     }
     for (const key of [...this.active.keys()]) this.#detachKey(key, "shutdown");
+    this.declined.clear();
+    this.selectedProviders.clear();
     this.workerWarningSubscription?.dispose?.();
     this.workerWarningSubscription = null;
   }

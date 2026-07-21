@@ -1991,7 +1991,10 @@ const TerminalComponent: React.FC<TerminalProps> = ({
         chunk,
       );
       const promptSecurityOptions = { allowHostStyleGreaterThan: isNetworkDevice };
-      if (isUntrustedTerminalInputPrompt(
+      if (meta?.pluginPipelineSensitiveInput === true) {
+        passwordPromptActiveRef.current = true;
+        autocompleteCloseRef.current?.();
+      } else if (isUntrustedTerminalInputPrompt(
         sensitivePromptOutputTailRef.current,
         promptSecurityOptions,
       )) {

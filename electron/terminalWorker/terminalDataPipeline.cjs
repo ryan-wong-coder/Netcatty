@@ -1,6 +1,7 @@
 "use strict";
 
 const { TextDecoder, TextEncoder } = require("node:util");
+const { performance } = require("node:perf_hooks");
 
 const INPUT_DEADLINE_MS = 4;
 const OUTPUT_DEADLINE_MS = 50;
@@ -54,14 +55,14 @@ function visibleTerminalTail(value) {
 function createTerminalDataPipeline(options = {}) {
   const encoder = options.encoder ?? new TextEncoder();
   const decoder = options.decoder ?? new TextDecoder("utf-8", { fatal: true });
-  const now = options.now ?? (() => Date.now());
+  const now = options.now ?? (() => performance.now());
   const onWarning = options.onWarning ?? (() => {});
   const inputDeadlineMs = options.inputDeadlineMs ?? INPUT_DEADLINE_MS;
   const outputDeadlineMs = options.outputDeadlineMs ?? OUTPUT_DEADLINE_MS;
   const outputWindowBytes = options.outputWindowBytes ?? OUTPUT_WINDOW_BYTES;
   const bindings = new Map();
   const outputModes = new Map();
-  const outputTails = new Map();
+  const outputRawTails = new Map();
   const sensitiveInputSessions = new Set();
 
   const keyOf = (sessionId, direction) => `${sessionId}\0${direction}`;
@@ -73,7 +74,7 @@ function createTerminalDataPipeline(options = {}) {
     if (mode) outputModes.set(sessionId, mode);
     else outputModes.delete(sessionId);
     if (!input) {
-      outputTails.delete(sessionId);
+      outputRawTails.delete(sessionId);
       sensitiveInputSessions.delete(sessionId);
     }
   }
@@ -156,6 +157,11 @@ function createTerminalDataPipeline(options = {}) {
       if (!pending) return;
       binding.pending.delete(message.sequence);
       clearTimeout(pending.timer);
+      if (now() - pending.startedAt >= pending.deadlineMs) {
+        pending.resolve(null);
+        disable(binding, "timeout", `Terminal ${binding.direction} interceptor exceeded its ${pending.deadlineMs} ms budget`);
+        return;
+      }
       if (message.status !== "ok" || message.creditBytes !== pending.sentBytes
         || !(message.data instanceof ArrayBuffer)
         || message.data.byteLength > MAX_CHUNK_BYTES) {
@@ -195,7 +201,13 @@ function createTerminalDataPipeline(options = {}) {
         resolve(null);
         disable(binding, "timeout", `Terminal ${binding.direction} interceptor exceeded its ${deadlineMs} ms budget`);
       }, deadlineMs);
-      binding.pending.set(sequence, { resolve, timer, startedAt, sentBytes: bytes.byteLength });
+      binding.pending.set(sequence, {
+        resolve,
+        timer,
+        startedAt,
+        deadlineMs,
+        sentBytes: bytes.byteLength,
+      });
       try {
         binding.port.postMessage({
           type: "netcatty:terminal-interceptor:chunk",
@@ -217,11 +229,18 @@ function createTerminalDataPipeline(options = {}) {
 
   function observeOutput(sessionId, data) {
     if ((outputModes.get(sessionId) ?? 0) & 1) {
-      const tail = visibleTerminalTail(`${outputTails.get(sessionId) ?? ""}${data}`);
-      outputTails.set(sessionId, tail);
+      // Retain bounded raw output so an ANSI sequence split across chunks can
+      // be stripped only after its terminating byte arrives. Persisting the
+      // already-stripped tail would turn an incomplete CSI into visible text
+      // and could split a password label such as "Pass\x1b[0" + "mword:".
+      const rawTail = `${outputRawTails.get(sessionId) ?? ""}${data}`
+        .slice(-(PROMPT_TAIL_CHARS * 2));
+      outputRawTails.set(sessionId, rawTail);
+      const tail = visibleTerminalTail(rawTail);
       const lastLine = tail.split(/[\r\n]/u).at(-1) ?? "";
       if (SENSITIVE_PROMPT.test(lastLine)) sensitiveInputSessions.add(sessionId);
     }
+    return sensitiveInputSessions.has(sessionId);
   }
 
   async function transform(sessionId, direction, data, options = {}) {
@@ -234,7 +253,7 @@ function createTerminalDataPipeline(options = {}) {
       const finishPassthrough = () => {
         if (hostSensitive && /[\r\n]/u.test(String(data))) {
           sensitiveInputSessions.delete(sessionId);
-          outputTails.delete(sessionId);
+          outputRawTails.delete(sessionId);
         }
         return data;
       };
@@ -245,8 +264,13 @@ function createTerminalDataPipeline(options = {}) {
     const bytes = encoder.encode(String(data));
     if (bytes.byteLength === 0) return data;
     if (direction === "output" && binding.queuedBytes + bytes.byteLength > outputWindowBytes) {
+      // Chain the fail-open chunk behind all earlier work before disabling the
+      // binding. disable() releases pending requests, and this queue barrier
+      // ensures callers cannot deliver the newer chunk first.
+      const passthrough = binding.queue.then(() => data, () => data);
+      binding.queue = passthrough.then(() => undefined, () => undefined);
       disable(binding, "backpressure", "Terminal output interceptor exceeded its bounded credit window");
-      return data;
+      return passthrough;
     }
     binding.queuedBytes += bytes.byteLength;
     const run = async () => {

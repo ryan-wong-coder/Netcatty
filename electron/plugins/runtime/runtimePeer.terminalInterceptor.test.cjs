@@ -123,3 +123,67 @@ test("utility runtime closes a terminal port when provider ownership or kind is 
   assert.equal(dataPort.closed, true);
   await runtime.dispose();
 });
+
+test("terminal ports convert synchronous throws to failures and stop using disposed handlers", async () => {
+  const { startPluginRuntime } = await import("./runtimePeer.mjs");
+  const control = new FakePort();
+  let registration;
+  let calls = 0;
+  const runtime = await startPluginRuntime({
+    port: control,
+    config: {
+      pluginId: "com.example",
+      pluginVersion: "1.0.0",
+      netcattyVersion: "1.0.0",
+      apiVersion: "1.0.0",
+      enabledFeatures: [],
+      environment: {},
+      entryUrl: "file:///plugin.js",
+    },
+    loadPlugin: async () => ({
+      default: {
+        activate(context) {
+          registration = context.providers.register(
+            "com.example.input",
+            "terminal.interceptor.input",
+            () => {
+              calls += 1;
+              throw new Error("synchronous failure");
+            },
+          );
+        },
+      },
+    }),
+  });
+  control.emit({ jsonrpc: "2.0", id: 1, method: "plugin.initialize", params: {} });
+  await tick();
+  control.emit({ jsonrpc: "2.0", id: 2, method: "plugin.activate", params: {} });
+  await tick();
+
+  const dataPort = new FakePort();
+  control.emit({
+    type: "netcatty-plugin:terminal-interceptor:attach",
+    descriptor: {
+      providerId: "com.example.input",
+      direction: "input",
+      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    },
+  }, [dataPort]);
+  const send = (sequence) => dataPort.emit({
+    type: "netcatty:terminal-interceptor:chunk",
+    sequence,
+    direction: "input",
+    data: Uint8Array.from([sequence]).buffer,
+  });
+  send(1);
+  await tick();
+  assert.equal(dataPort.messages[0].message.status, "failed");
+  assert.equal(calls, 1);
+
+  registration.dispose();
+  send(2);
+  await tick();
+  assert.equal(dataPort.messages[1].message.status, "failed");
+  assert.equal(calls, 1);
+  await runtime.dispose();
+});

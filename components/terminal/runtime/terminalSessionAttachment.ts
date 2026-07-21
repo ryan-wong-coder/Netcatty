@@ -754,6 +754,9 @@ export const attachSessionToTerminal = (
   ctx.disposeDataRef.current = ctx.terminalBackend.onSessionData(
     id,
     (chunk, meta) => {
+      if (meta?.pluginPipelineSensitiveInput === true && ctx.passwordPromptActiveRef) {
+        ctx.passwordPromptActiveRef.current = true;
+      }
       const filtered = filterTerminalInterruptDisplayOutput(term, chunk);
       const pluginPipelineIngressBytes = Number.isFinite(meta?.pluginPipelineIngressBytes)
         ? Math.max(0, Number(meta?.pluginPipelineIngressBytes))
@@ -766,7 +769,9 @@ export const attachSessionToTerminal = (
         ctx,
         !filtered.accepted && pluginPipelineIngressBytes != null
           ? pluginPipelineIngressBytes
-          : filtered.droppedBytes,
+          : pluginPipelineIngressBytes != null
+            ? 0
+            : filtered.droppedBytes,
       );
       if (!filtered.accepted) return;
 

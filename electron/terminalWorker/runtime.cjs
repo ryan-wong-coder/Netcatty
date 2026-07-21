@@ -169,16 +169,19 @@ function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeli
     if (payload?.meta) tapMessage.meta = payload.meta;
     parentPort.postMessage(tapMessage);
     const pipelineMode = terminalDataPipeline?.getOutputMode?.(payload?.sessionId) ?? 0;
+    let sensitiveInput = false;
     if ((pipelineMode & 1) !== 0) {
-      terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data);
+      sensitiveInput = terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data) === true;
     }
     const deliver = (data, transformed = false) => {
-      const meta = transformed
-        ? {
-            ...(payload?.meta ?? {}),
-            pluginPipelineIngressBytes: String(payload?.data ?? "").length,
-          }
-        : payload?.meta;
+      const pipelineMeta = {
+        ...(payload?.meta ?? {}),
+        ...(transformed
+          ? { pluginPipelineIngressBytes: String(payload?.data ?? "").length }
+          : {}),
+        ...(sensitiveInput ? { pluginPipelineSensitiveInput: true } : {}),
+      };
+      const meta = Object.keys(pipelineMeta).length > 0 ? pipelineMeta : undefined;
       if (outputPorts?.post?.(payload?.sessionId, data, meta)) return;
       const outputMessage = {
         kind: "output",

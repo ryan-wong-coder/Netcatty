@@ -215,4 +215,6 @@ export type TerminalSessionDataMeta = {
   terminalPerf?: NetcattyTerminalOutputPerfMeta;
   /** Original host output units acknowledged even when an interceptor changes display length. */
   pluginPipelineIngressBytes?: number;
+  /** Host-owned classification from original output; plugins cannot mask it. */
+  pluginPipelineSensitiveInput?: boolean;
 };

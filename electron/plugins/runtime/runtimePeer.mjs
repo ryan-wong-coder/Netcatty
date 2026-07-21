@@ -642,7 +642,17 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
         session: freezeRuntimeJson(descriptor.session),
         data: new Uint8Array(chunk.data),
       });
-      void Promise.resolve(registration.handler(invocation)).then(
+      // Resolve the registration for every chunk so disposal/re-registration
+      // cannot keep a captured stale handler alive. Starting from a resolved
+      // promise also converts synchronous handler throws into the ordinary
+      // failed response path instead of tearing down the utility runtime.
+      void Promise.resolve().then(() => {
+        const currentRegistration = runtimeApi.providerHandlers.get(providerId);
+        if (currentRegistration?.kind !== kind) {
+          throw new PluginError("failed_precondition", "Terminal interceptor provider is no longer registered");
+        }
+        return currentRegistration.handler(invocation);
+      }).then(
         (result) => {
           let bytes;
           if (result instanceof Uint8Array) bytes = result;

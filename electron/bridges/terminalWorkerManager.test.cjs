@@ -566,6 +566,41 @@ test("worker buffered output chunk cap carries dropped metadata to retained outp
   });
 });
 
+test("metadata-only interceptor output obeys the pending chunk cap", async () => {
+  const child = new FakeChild();
+  const outputPort = { label: "worker-output-port" };
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork() { return child; } },
+    terminalOutputChannel: { openSession() { return outputPort; } },
+    electronModule: { webContents: { fromId(id) { return { id }; } } },
+    maxPendingOutputChunks: 1,
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await promise;
+  for (let index = 0; index < 3; index += 1) {
+    child.emit("message", {
+      kind: "output",
+      sessionId: "local-1",
+      data: "",
+      meta: { pluginPipelineIngressBytes: 1 },
+    });
+  }
+  child.emit("message", { kind: "output-port-ready", sessionId: "local-1" });
+
+  assert.deepEqual(child.messages[2], {
+    kind: "output-flush",
+    sessionId: "local-1",
+    chunks: [{ data: "", meta: { pluginPipelineIngressBytes: 3 } }],
+  });
+});
+
 test("worker fallback output after a ready output port is delivered over legacy IPC", async () => {
   const child = new FakeChild();
   const sent = [];

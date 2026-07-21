@@ -152,6 +152,9 @@ function mergeTerminalOutputMeta(previous, next) {
     + Number(next.pluginPipelineIngressBytes ?? 0);
   if (pluginPipelineIngressBytes > 0) merged.pluginPipelineIngressBytes = pluginPipelineIngressBytes;
   else delete merged.pluginPipelineIngressBytes;
+  if (!merged.droppedOutputMayAffectTerminalState) {
+    delete merged.droppedOutputMayAffectTerminalState;
+  }
   if (!merged.droppedOutputAlternateScreenAction) {
     delete merged.droppedOutputAlternateScreenAction;
   }
@@ -233,7 +236,11 @@ function createTerminalWorkerManager(options = {}) {
 
   function getOutputChunkLength(chunk) {
     const data = getOutputChunkData(chunk);
-    return typeof data === "string" ? data.length : 0;
+    const displayLength = typeof data === "string" ? data.length : 0;
+    // A suppressed interceptor result can carry flow-accounting metadata with
+    // an empty display string. Count that record as one bounded buffer unit so
+    // the chunk/byte trimming loop cannot stop on a zero-length head.
+    return displayLength || (getOutputChunkMeta(chunk) ? 1 : 0);
   }
 
   function withOutputChunkMeta(chunk, meta) {
@@ -282,7 +289,12 @@ function createTerminalWorkerManager(options = {}) {
       const chunk = chunks[0];
       const data = getOutputChunkData(chunk);
       const dataLength = getOutputChunkLength(chunk);
-      const dropWholeChunk = chunks.length > maxPendingOutputChunks;
+      const displayLength = typeof data === "string" ? data.length : 0;
+      // Metadata-only suppressed output still represents consumed host input.
+      // Drop it atomically when it contributes virtual ingress bytes; partial
+      // string slicing cannot safely reduce that metadata accounting.
+      const dropWholeChunk = chunks.length > maxPendingOutputChunks
+        || dataLength !== displayLength;
       const overLimitBytes = Math.max(0, totalBytes - maxPendingOutputBytes);
       const bytesToDrop = dropWholeChunk ? dataLength : Math.min(dataLength, overLimitBytes);
       if (bytesToDrop <= 0) break;
@@ -290,7 +302,7 @@ function createTerminalWorkerManager(options = {}) {
       if (typeof data !== "string" || bytesToDrop >= dataLength) {
         chunks.shift();
         totalBytes = Math.max(0, totalBytes - dataLength);
-        droppedBytes += dataLength;
+        droppedBytes += displayLength;
         recordDropped(typeof data === "string" ? data : "", getOutputChunkMeta(chunk));
         continue;
       }

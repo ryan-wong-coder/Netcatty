@@ -47,11 +47,12 @@ function harness(options = {}) {
     onDidChange(listener) { contributionListeners.push(listener); },
   };
   const runtimeSupervisor = {
-    getRuntimeIdentity() { return identity; },
+    getRuntimeIdentity() { return options.getRuntimeIdentity?.() ?? identity; },
     onDidChangeRuntime(listener) { runtimeListeners.push(listener); },
     async attachTerminalInterceptor(pluginId, descriptor, port, attachOptions) {
       port.unref?.();
       attached.push({ side: "plugin", pluginId, descriptor, port, attachOptions });
+      await options.onAttachTerminalInterceptor?.();
     },
   };
   const permissionEngine = {
@@ -82,7 +83,9 @@ function harness(options = {}) {
     MessageChannelMain: MessageChannel,
     requestSelection: async (request) => {
       selections.push(request);
-      return options.selectedProviderId ?? request.providers[0].provider.id;
+      return Object.hasOwn(options, "selectedProviderId")
+        ? options.selectedProviderId
+        : request.providers[0].provider.id;
     },
   });
   service.bindTerminalWorkerManager(worker);
@@ -119,8 +122,8 @@ test("pipeline activation requires exact session permissions and transfers one p
     "terminal.intercept.input",
   ]);
   assert.ok(h.authorized.every((entry) => entry.request.sessionId === "session-1"));
-  assert.deepEqual(h.attached.map((entry) => entry.side), ["worker", "plugin"]);
-  assert.deepEqual(h.attached[1].attachOptions.expectedIdentity, h.identity);
+  assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin", "worker"]);
+  assert.deepEqual(h.attached[0].attachOptions.expectedIdentity, h.identity);
 });
 
 test("multiple interceptors require an explicit per-session selection", async () => {
@@ -136,6 +139,26 @@ test("multiple interceptors require an explicit per-session selection", async ()
   assert.equal(h.selections[0].providers.length, 2);
   await h.service.configureDirection(session, "input");
   assert.equal(h.selections.length, 1, "an active session binding must not prompt again");
+});
+
+test("declining competing interceptors is remembered for the session and reset on disposal", async () => {
+  const h = harness({
+    providers: [
+      provider("com.example", "com.example.input", "input"),
+      provider("com.other", "com.other.input", "input"),
+    ],
+    selectedProviderId: null,
+  });
+  assert.equal((await h.service.configureDirection(session, "input")).status, "declined");
+  assert.equal((await h.service.configureDirection(session, "input")).status, "declined");
+  assert.equal(h.selections.length, 1);
+
+  await h.service.handleSessionEvent({
+    type: "disposed",
+    session: { ...session, status: "disconnected" },
+  });
+  await h.service.configureDirection(session, "input");
+  assert.equal(h.selections.length, 2);
 });
 
 test("concurrent snapshots serialize to one authorization and one port pair", async () => {
@@ -177,14 +200,14 @@ test("stale activation identity fails before permissions or port transfer", asyn
   assert.equal(h.attached.length, 0);
 });
 
-test("worker transfer failure never exposes the peer port to the plugin runtime", async () => {
+test("worker transfer starts only after the plugin port is ready", async () => {
   const h = harness();
   h.worker.attachTerminalInterceptor = () => { throw new Error("worker unavailable"); };
   await assert.rejects(
     () => h.service.configureDirection(session, "input"),
     /worker unavailable/,
   );
-  assert.equal(h.attached.length, 0);
+  assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin"]);
 });
 
 test("contribution withdrawal during authorization prevents stale port publication", async () => {
@@ -201,6 +224,52 @@ test("contribution withdrawal during authorization prevents stale port publicati
     /contribution changed/,
   );
   assert.equal(h.attached.length, 0);
+});
+
+test("runtime replacement during port attachment cannot publish a stale active binding", async () => {
+  let runtimeId = "runtime-1";
+  const h = harness({
+    getRuntimeIdentity: () => ({
+      pluginId: "com.example",
+      pluginVersion: "1.0.0",
+      runtimeId,
+      runtimeKind: "utility",
+      securityPrincipal: "principal-1",
+    }),
+    onAttachTerminalInterceptor() { runtimeId = "runtime-2"; },
+  });
+  await assert.rejects(
+    () => h.service.configureDirection(session, "input"),
+    /runtime changed during port attachment/,
+  );
+  assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin"]);
+  assert.deepEqual(h.detached, []);
+  assert.equal(h.service.active.size, 0);
+});
+
+test("disconnect detaches and reconnect restores the remembered session interceptor", async () => {
+  const h = harness({
+    providers: [
+      provider("com.example", "com.example.input", "input"),
+      provider("com.other", "com.other.input", "input"),
+    ],
+    selectedProviderId: "com.example.input",
+  });
+  await h.service.handleSessionEvent({ type: "connected", session });
+  assert.equal(h.selections.length, 1);
+  assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin", "worker"]);
+
+  await h.service.handleSessionEvent({
+    type: "disconnected",
+    session: { ...session, status: "disconnected" },
+  });
+  assert.deepEqual(h.detached, [{ sessionId: "session-1", direction: "input" }]);
+
+  await h.service.handleSessionEvent({ type: "reconnected", session });
+  assert.equal(h.selections.length, 1, "reconnect must reuse the session-local choice");
+  assert.deepEqual(h.attached.map((entry) => entry.side), [
+    "plugin", "worker", "plugin", "worker",
+  ]);
 });
 
 test("a renderer cannot attach an interceptor to another window's terminal session", async () => {

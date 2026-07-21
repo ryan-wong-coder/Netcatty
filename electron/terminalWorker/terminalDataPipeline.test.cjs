@@ -118,6 +118,9 @@ test("original output protects password input even when a plugin could hide the 
   assert.deepEqual(seen, []);
   assert.equal(await pipeline.interceptInput("session-1", "next"), "NEXT");
   assert.deepEqual(seen, [{ sequence: 1, data: "next" }]);
+  pipeline.observeOutput("session-1", "Pass\u001b[0");
+  assert.equal(pipeline.observeOutput("session-1", "mword: "), true);
+  assert.equal(await pipeline.interceptInput("session-1", "split-secret\r"), "split-secret\r");
   pipeline.observeOutput("session-1", "Custom authentication> ");
   assert.equal(await pipeline.interceptInput("session-1", "opaque\r"), "opaque\r");
   pipeline.observeOutput("session-1", "请输入验证码：");
@@ -138,6 +141,46 @@ test("an input deadline failure fails open, disables the session binding, and wa
   assert.equal(warnings.length, 1);
 });
 
+test("an elapsed deadline rejects a late response before its delayed timer callback runs", async () => {
+  const warnings = [];
+  let now = 1_000;
+  const pipeline = createTerminalDataPipeline({
+    inputDeadlineMs: 100,
+    now: () => now,
+    onWarning: (value) => warnings.push(value),
+  });
+  const channel = new MessageChannel();
+  channel.port1.unref?.();
+  channel.port2.unref?.();
+  listen(channel.port2, (message) => {
+    if (message.type !== "netcatty:terminal-interceptor:chunk") return;
+    now += 100;
+    const data = Uint8Array.from(Buffer.from("LATE")).buffer;
+    channel.port2.postMessage({
+      type: "netcatty:terminal-interceptor:result",
+      sequence: message.sequence,
+      status: "ok",
+      creditBytes: Buffer.from(message.data).byteLength,
+      data,
+    }, [data]);
+  });
+  pipeline.attach({
+    sessionId: "session-1",
+    direction: "input",
+    providerId: "com.example.interceptor",
+    pluginId: "com.example",
+    pluginVersion: "1.0.0",
+    runtimeId: "runtime-1",
+    runtimeKind: "utility",
+    securityPrincipal: "principal-1",
+  }, channel.port1);
+
+  assert.equal(await pipeline.interceptInput("session-1", "original"), "original");
+  assert.equal(pipeline.has("session-1", "input"), false);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].code, "timeout");
+});
+
 test("output interception is credit bounded and fails open under backpressure", async () => {
   const warnings = [];
   const pipeline = createTerminalDataPipeline({
@@ -146,10 +189,13 @@ test("output interception is credit bounded and fails open under backpressure", 
     onWarning: (value) => warnings.push(value),
   });
   attachTransform(pipeline, { direction: "output", hold: true });
-  const first = pipeline.interceptOutput("session-1", "1234");
-  const second = await pipeline.interceptOutput("session-1", "5678");
-  assert.equal(second, "5678");
-  assert.equal(await first, "1234");
+  const order = [];
+  const first = pipeline.interceptOutput("session-1", "1234")
+    .then((value) => { order.push(value); return value; });
+  const second = pipeline.interceptOutput("session-1", "5678")
+    .then((value) => { order.push(value); return value; });
+  assert.deepEqual(await Promise.all([first, second]), ["1234", "5678"]);
+  assert.deepEqual(order, ["1234", "5678"]);
   assert.equal(warnings[0].code, "backpressure");
   assert.equal(pipeline.has("session-1", "output"), false);
 });

@@ -269,7 +269,7 @@ test("runtime sends transformed output to the renderer while host taps retain or
     parentPort,
     terminalDataPipeline: {
       getOutputMode() { return 3; },
-      observeOutput(sessionId, data) { observed.push({ sessionId, data }); },
+      observeOutput(sessionId, data) { observed.push({ sessionId, data }); return true; },
       async interceptOutput(_sessionId, data) { return String(data).toUpperCase(); },
     },
     registerBridges(ipcMain) {
@@ -298,7 +298,7 @@ test("runtime sends transformed output to the renderer while host taps retain or
     sessionId: "s1",
     data: "HELLO",
     tapped: true,
-    meta: { pluginPipelineIngressBytes: 5 },
+    meta: { pluginPipelineIngressBytes: 5, pluginPipelineSensitiveInput: true },
   });
   assert.deepEqual(observed, [{ sessionId: "s1", data: "hello" }]);
 });

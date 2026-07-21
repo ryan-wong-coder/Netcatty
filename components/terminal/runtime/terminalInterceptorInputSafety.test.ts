@@ -4,12 +4,21 @@ import test from "node:test";
 
 const runtimeSource = readFileSync(new URL("./createXTermRuntime.ts", import.meta.url), "utf8");
 const attachmentSource = readFileSync(new URL("./terminalSessionAttachment.ts", import.meta.url), "utf8");
+const terminalSource = readFileSync(new URL("../../Terminal.tsx", import.meta.url), "utf8");
 const preloadSource = readFileSync(
   new URL("../../../electron/preload/api.cjs", import.meta.url),
   "utf8",
 );
 
 test("password-prompt input is classified before prompt state reset and cannot broadcast", () => {
+  assert.match(
+    attachmentSource,
+    /meta\?\.pluginPipelineSensitiveInput === true[\s\S]*?passwordPromptActiveRef\.current = true/u,
+  );
+  assert.match(
+    terminalSource,
+    /meta\?\.pluginPipelineSensitiveInput === true[\s\S]*?passwordPromptActiveRef\.current = true[\s\S]*?else if \(isUntrustedTerminalInputPrompt/u,
+  );
   assert.match(
     runtimeSource,
     /const sensitive = ctx\.passwordPromptActiveRef\?\.current === true;[\s\S]*?const willBroadcastInput = !sensitive &&/u,
@@ -40,5 +49,9 @@ test("renderer flow control acknowledges host ingress rather than transformed di
   assert.match(
     attachmentSource,
     /filtered\.accepted && !filtered\.data && pluginPipelineIngressBytes != null[\s\S]*?acknowledgeDroppedTerminalDisplayBytes\(ctx, pluginPipelineIngressBytes\)/u,
+  );
+  assert.match(
+    attachmentSource,
+    /!filtered\.accepted && pluginPipelineIngressBytes != null[\s\S]*?\? pluginPipelineIngressBytes[\s\S]*?: pluginPipelineIngressBytes != null[\s\S]*?\? 0[\s\S]*?: filtered\.droppedBytes/u,
   );
 });
