@@ -159,10 +159,25 @@ function createUrgentInputPortRegistry(dispatch) {
   };
 }
 
-function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeline) {
-  const pendingOutputBySession = new Map();
+function createSender(
+  parentPort,
+  webContentsId,
+  outputPorts,
+  terminalDataPipeline,
+  pendingOutputBySession = new Map(),
+) {
+  const trackPendingOutput = (sessionId, pending) => {
+    pendingOutputBySession.set(sessionId, pending);
+    const clearPending = () => {
+      if (pendingOutputBySession.get(sessionId) === pending) {
+        pendingOutputBySession.delete(sessionId);
+      }
+    };
+    void pending.then(clearPending, clearPending);
+  };
   const postRendererEvent = (channel, payload) => {
     if (channel === "netcatty:exit" && payload?.sessionId) {
+      pendingOutputBySession.delete(payload.sessionId);
       outputPorts?.closeSession?.(payload.sessionId);
       terminalDataPipeline?.detach?.(payload.sessionId, undefined, "session-closed");
     }
@@ -205,28 +220,35 @@ function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeli
       if (meta) outputMessage.meta = meta;
       parentPort.postMessage(outputMessage);
     };
-    if (!terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
-      deliver(payload?.data, false);
-      return;
-    }
     const sessionId = payload?.sessionId;
-    let pending;
-    try {
-      pending = Promise.resolve(terminalDataPipeline.interceptOutput(sessionId, payload?.data)).then(
-        (data) => deliver(data, true),
+    const previous = pendingOutputBySession.get(sessionId);
+    if (!terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
+      if (!previous) {
+        deliver(payload?.data, false);
+        return;
+      }
+      const pending = previous.then(
+        () => deliver(payload?.data, false),
         () => deliver(payload?.data, false),
       );
-    } catch {
-      deliver(payload?.data, false);
+      trackPendingOutput(sessionId, pending);
       return;
     }
-    pendingOutputBySession.set(sessionId, pending);
-    const clearPending = () => {
-      if (pendingOutputBySession.get(sessionId) === pending) {
-        pendingOutputBySession.delete(sessionId);
+    const interceptAndDeliver = () => {
+      try {
+        return Promise.resolve(terminalDataPipeline.interceptOutput(sessionId, payload?.data)).then(
+          (data) => deliver(data, true),
+          () => deliver(payload?.data, false),
+        );
+      } catch {
+        deliver(payload?.data, false);
+        return undefined;
       }
     };
-    void pending.then(clearPending, clearPending);
+    const pending = previous
+      ? previous.then(interceptAndDeliver, interceptAndDeliver)
+      : Promise.resolve(interceptAndDeliver());
+    trackPendingOutput(sessionId, pending);
   };
   return {
     id: webContentsId,
@@ -262,6 +284,7 @@ function createTerminalWorkerRuntime(options = {}) {
   const ipcMain = createIpcMainHarness();
   let started = false;
   const outputPorts = createOutputPortRegistry(parentPort);
+  const pendingOutputBySession = new Map();
   let urgentInputPorts = null;
 
   async function handleRequest(message) {
@@ -276,7 +299,13 @@ function createTerminalWorkerRuntime(options = {}) {
     }
     try {
       const result = await handler({
-        sender: createSender(parentPort, message.webContentsId, outputPorts, terminalDataPipeline),
+        sender: createSender(
+          parentPort,
+          message.webContentsId,
+          outputPorts,
+          terminalDataPipeline,
+          pendingOutputBySession,
+        ),
       }, message.payload);
       parentPort.postMessage({
         kind: "response",
@@ -296,6 +325,7 @@ function createTerminalWorkerRuntime(options = {}) {
     const listener = ipcMain.listeners.get(message.channel);
     if (!listener) return;
     if (message.channel === "netcatty:interrupt") {
+      terminalDataPipeline?.clearSensitiveInput?.(message.payload?.sessionId);
       const trace = normalizeTrace(message.payload);
       logTerminalInterruptDebug("worker-received-send", {
         channel: message.channel,
@@ -307,7 +337,13 @@ function createTerminalWorkerRuntime(options = {}) {
       terminalDataPipeline?.detach?.(message.payload.sessionId, undefined, "session-closed");
     }
     listener({
-      sender: createSender(parentPort, message.webContentsId, outputPorts, terminalDataPipeline),
+      sender: createSender(
+        parentPort,
+        message.webContentsId,
+        outputPorts,
+        terminalDataPipeline,
+        pendingOutputBySession,
+      ),
     }, message.payload);
   }
 
@@ -382,7 +418,13 @@ function createTerminalWorkerRuntime(options = {}) {
     start,
     ipcMain,
     createSender(webContentsId) {
-      return createSender(parentPort, webContentsId, outputPorts, terminalDataPipeline);
+      return createSender(
+        parentPort,
+        webContentsId,
+        outputPorts,
+        terminalDataPipeline,
+        pendingOutputBySession,
+      );
     },
     closeUrgentInputPortsForTest() {
       urgentInputPorts?.closeAll();

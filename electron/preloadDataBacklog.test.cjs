@@ -365,6 +365,27 @@ test("legacy terminal data delivery preserves terminal perf metadata", () => {
   }
 });
 
+test("legacy terminal data delivery preserves metadata-only plugin output", () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    preload.api.onSessionData("session-1", (chunk, meta) => received.push({ chunk, meta }));
+
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "",
+      meta: { pluginPipelineIngressBytes: 11 },
+    });
+
+    assert.deepEqual(received, [{
+      chunk: "",
+      meta: { pluginPipelineIngressBytes: 11 },
+    }]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
 test("terminal output port delivery preserves terminal perf metadata", () => {
   const preload = loadPreloadWithFakeElectron();
   try {

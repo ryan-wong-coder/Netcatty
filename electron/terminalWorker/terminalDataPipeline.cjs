@@ -319,6 +319,10 @@ function createTerminalDataPipeline(options = {}) {
     has: (sessionId, direction) => bindings.has(keyOf(sessionId, direction)),
     getOutputMode: (sessionId) => outputModes.get(sessionId) ?? 0,
     observeOutput,
+    clearSensitiveInput(sessionId) {
+      sensitiveInputSessions.delete(sessionId);
+      outputRawTails.delete(sessionId);
+    },
     shutdown() {
       for (const binding of [...bindings.values()]) disable(binding, "shutdown", "Terminal interceptor stopped");
     },

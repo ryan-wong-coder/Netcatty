@@ -139,6 +139,21 @@ test("output-only interception classifies sensitive prompts without retaining st
   pipeline.shutdown();
 });
 
+test("clearing sensitive input on interrupt restores ordinary interception", async () => {
+  const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 100 });
+  const { seen } = attachTransform(pipeline);
+  attachTransform(pipeline, { direction: "output" });
+
+  assert.equal(pipeline.observeOutput("session-1", "Password: "), true);
+  assert.equal(await pipeline.interceptInput("session-1", "secret"), "secret");
+  assert.deepEqual(seen, []);
+
+  pipeline.clearSensitiveInput("session-1");
+  assert.equal(await pipeline.interceptInput("session-1", "next"), "NEXT");
+  assert.deepEqual(seen, [{ sequence: 1, data: "next" }]);
+  pipeline.shutdown();
+});
+
 test("an input deadline failure fails open, disables the session binding, and warns once", async () => {
   const warnings = [];
   const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 5, onWarning: (value) => warnings.push(value) });

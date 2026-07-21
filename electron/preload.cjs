@@ -7,6 +7,7 @@ const {
   clearTerminalDataSession,
   createTerminalDataBacklog,
   createTerminalDataDispatcher,
+  hasPluginPipelineIngress,
 } = require("./preload/terminalDataBacklog.cjs");
 const {
   createTerminalOutputPortRegistry,
@@ -189,8 +190,12 @@ function scheduleMcpBufferedFlush(sessionId) {
 }
 
 function deliverTerminalData(sessionId, data, options = {}) {
-  if (!sessionId || !data) return;
+  if (!sessionId || (!data && !hasPluginPipelineIngress(options.meta))) return;
   if (closedTerminalDataSessions.has(sessionId)) return;
+  if (!data) {
+    _deliverToListeners(sessionId, "", options.meta);
+    return;
+  }
   if (options.syntheticEcho) {
     _deliverToListeners(sessionId, data, options.meta);
     return;

@@ -198,6 +198,30 @@ test("runtime routes urgent input port interrupts to the interrupt listener", ()
   ]);
 });
 
+test("runtime clears host-sensitive input state before dispatching an interrupt", () => {
+  const parentPort = createParentPort();
+  const order = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      clearSensitiveInput(sessionId) { order.push(`clear:${sessionId}`); },
+    },
+    registerBridges(ipcMain) {
+      ipcMain.on("netcatty:interrupt", (_event, payload) => order.push(`write:${payload.sessionId}`));
+    },
+  });
+  runtime.start();
+
+  parentPort.emitMessage({
+    kind: "send",
+    channel: "netcatty:interrupt",
+    payload: { sessionId: "s1" },
+    webContentsId: 7,
+  });
+
+  assert.deepEqual(order, ["clear:s1", "write:s1"]);
+});
+
 test("runtime routes terminal data over output messages", async () => {
   const parentPort = createParentPort();
   const runtime = createTerminalWorkerRuntime({
@@ -347,10 +371,8 @@ test("runtime delivers pending intercepted output before closing the session", a
     registerBridges() {},
   });
   runtime.start();
-  const sender = runtime.createSender(7);
-
-  sender.send("netcatty:data", { sessionId: "s1", data: "final" });
-  sender.send("netcatty:exit", { sessionId: "s1", reason: "closed" });
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "final" });
+  runtime.createSender(7).send("netcatty:exit", { sessionId: "s1", reason: "closed" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(parentPort.messages.map((message) => message.kind), ["output-tap"]);
 
@@ -364,6 +386,37 @@ test("runtime delivers pending intercepted output before closing the session", a
   assert.equal(parentPort.messages[1].data, "FINAL");
   assert.equal(parentPort.messages[2].channel, "netcatty:exit");
   assert.deepEqual(detached, [{ sessionId: "s1", direction: undefined, reason: "session-closed" }]);
+});
+
+test("runtime keeps direct output ordered behind a pending chunk after interceptor disable", async () => {
+  const parentPort = createParentPort();
+  let mode = 2;
+  let releaseOutput;
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return mode; },
+      observeOutput() { return false; },
+      interceptOutput() {
+        mode = 0;
+        return new Promise((resolve) => { releaseOutput = resolve; });
+      },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "first" });
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "second" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(parentPort.messages.map((message) => message.kind), ["output-tap", "output-tap"]);
+
+  releaseOutput("FIRST");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    parentPort.messages.filter((message) => message.kind === "output").map((message) => message.data),
+    ["FIRST", "second"],
+  );
 });
 
 test("runtime routes terminal data over a transferred output port", async () => {

@@ -259,7 +259,7 @@ class PluginTerminalDataPipelineService {
         reason: `Use ${providerId} to intercept Terminal ${direction} data`,
         operationId: `terminal.interceptor.${direction}:${providerId}`,
       });
-      if (!["session", "application", "always"].includes(grant?.scope)) {
+      if (!["existing", "session", "application", "always"].includes(grant?.scope)) {
         throw new PluginRpcError(
           RPC_ERRORS.permissionDenied,
           "Terminal interceptor streams require a session, application, or persistent permission grant",

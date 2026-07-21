@@ -149,6 +149,14 @@ test("pipeline rejects one-use permission grants before opening a streaming port
   assert.equal(laterOnce.attached.length, 0);
 });
 
+test("pipeline accepts an existing long-lived permission grant", async () => {
+  const h = harness({ permissionScope: "existing" });
+  const result = await h.service.configureDirection(session, "input");
+  assert.equal(result.status, "active");
+  assert.equal(h.authorized.length, 2);
+  assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin", "worker"]);
+});
+
 test("multiple interceptors require an explicit per-session selection", async () => {
   const h = harness({
     providers: [
