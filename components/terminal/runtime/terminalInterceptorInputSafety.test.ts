@@ -45,6 +45,13 @@ test("password-prompt input is classified before prompt state reset and cannot b
   );
 });
 
+test("Ctrl+C clears renderer password-prompt classification before the next input", () => {
+  assert.match(
+    runtimeSource,
+    /clearTerminalInputStateForInterrupt\(\{[\s\S]*?passwordPromptActiveRef\.current = false;[\s\S]*?interruptSession/u,
+  );
+});
+
 test("confirmed sudo credentials and preload transport preserve the sensitive marker", () => {
   assert.match(
     attachmentSource,
@@ -75,6 +82,6 @@ test("renderer flow control acknowledges host ingress rather than transformed di
   );
   assert.match(
     attachmentSource,
-    /const displayBytes = data\.length;[\s\S]*?enqueueTerminalWrite\(term, displayBytes,/u,
+    /const displayBytes = data\.length;[\s\S]*?enqueueTerminalWrite\(term, displayBytes,[\s\S]*?dropBytes: ingressBytes/u,
   );
 });

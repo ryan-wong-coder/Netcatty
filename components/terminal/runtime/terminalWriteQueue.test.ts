@@ -393,3 +393,17 @@ test("abortTerminalWriteQueue drops pending bytes and reports dropped count", ()
   assert.equal(started, true);
   assert.deepEqual(dropped, [60]);
 });
+
+test("abortTerminalWriteQueue reports ingress accounting instead of display scheduling bytes", () => {
+  const term = createFakeTerm();
+  const dropped: number[] = [];
+
+  enqueueTerminalWrite(term, 10, () => {});
+  enqueueTerminalWrite(term, 3, () => {}, {
+    dropBytes: 80,
+    onDropped: (bytes) => dropped.push(bytes),
+  });
+  abortTerminalWriteQueue(term);
+
+  assert.deepEqual(dropped, [80]);
+});

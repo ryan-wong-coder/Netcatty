@@ -14,6 +14,7 @@ export const WRITE_QUEUE_TURN_BUDGET_MS = 10;
 
 export type TerminalWriteQueueOptions = {
   onDropped?: (bytes: number) => void;
+  dropBytes?: number;
   deferStart?: boolean;
   yieldAfter?: boolean;
   maxDrainBytes?: number;
@@ -21,6 +22,7 @@ export type TerminalWriteQueueOptions = {
 
 type QueuedWrite = {
   bytes: number;
+  dropBytes: number;
   steps: QueuedWriteStep[];
   nextIndex: number;
   cancelled: boolean;
@@ -30,6 +32,7 @@ type QueuedWrite = {
 
 type QueuedWriteStep = {
   bytes: number;
+  dropBytes: number;
   write: (done: () => void) => void;
   yieldAfter: boolean;
 };
@@ -290,12 +293,14 @@ const mergePendingWrites = (queue: TerminalWriteQueue): void => {
 
   const steps: QueuedWriteStep[] = [];
   let bytes = 0;
+  let dropBytes = 0;
   // Keep a post-item yield if any source item asked for one; inter-step yields
   // come only from per-step yieldAfter / maxDrainBytes (not a forced every-step
   // pause). writeLargeTerminalBatch sets yieldAfter only every drain budget.
   let yieldAfterItem = false;
   for (const item of queue.pending) {
     bytes += item.bytes;
+    dropBytes += item.dropBytes;
     if (item.yieldAfter) {
       yieldAfterItem = true;
     }
@@ -303,6 +308,7 @@ const mergePendingWrites = (queue: TerminalWriteQueue): void => {
   }
   queue.pending = [{
     bytes,
+    dropBytes,
     steps,
     nextIndex: 0,
     cancelled: false,
@@ -391,6 +397,9 @@ export const enqueueTerminalWrite = (
   options: TerminalWriteQueueOptions = {},
 ): void => {
   const queue = getOrCreateQueue(term);
+  const dropBytes = Number.isFinite(options.dropBytes)
+    ? Math.max(0, Number(options.dropBytes))
+    : bytes;
   if (options.onDropped) {
     queue.onDropped = options.onDropped;
   } else if (!queue.onDropped) {
@@ -401,7 +410,8 @@ export const enqueueTerminalWrite = (
 
   queue.pending.push({
     bytes,
-    steps: [{ bytes, write, yieldAfter: Boolean(options.yieldAfter) }],
+    dropBytes,
+    steps: [{ bytes, dropBytes, write, yieldAfter: Boolean(options.yieldAfter) }],
     nextIndex: 0,
     cancelled: false,
     yieldAfter: Boolean(options.yieldAfter),
@@ -429,12 +439,12 @@ export const abortTerminalWriteQueue = (
   const queue = terminalWriteQueues.get(term);
   if (!queue) return;
 
-  let droppedBytes = queue.pendingBytes;
+  let droppedBytes = queue.pending.reduce((sum, item) => sum + item.dropBytes, 0);
   if (queue.active) {
     queue.active.cancelled = true;
     droppedBytes += queue.active.steps
       .slice(queue.active.nextIndex)
-      .reduce((sum, step) => sum + step.bytes, 0);
+      .reduce((sum, step) => sum + step.dropBytes, 0);
   }
 
   queue.pending = [];

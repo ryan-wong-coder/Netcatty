@@ -190,6 +190,7 @@ function createTerminalWorkerManager(options = {}) {
   const urgentInputPorts = new Map();
   const outputTaps = new Set();
   const terminalInterceptorWarningListeners = new Set();
+  const sessionOwnedListeners = new Set();
   const maxPendingOutputChunks = Number.isFinite(options.maxPendingOutputChunks)
     ? Math.max(0, Math.trunc(options.maxPendingOutputChunks))
     : 512;
@@ -408,7 +409,7 @@ function createTerminalWorkerManager(options = {}) {
     }
   }
 
-  function openOutputSession(sessionId, webContentsId) {
+  async function openOutputSession(sessionId, webContentsId) {
     if (!sessionId || !webContentsId) return false;
     if (closedSessions.has(sessionId)) {
       clearBufferedOutput(sessionId);
@@ -419,6 +420,14 @@ function createTerminalWorkerManager(options = {}) {
       return false;
     }
     sessionWebContentsIds.set(sessionId, webContentsId);
+    await Promise.allSettled([...sessionOwnedListeners].map((listener) => (
+      Promise.resolve().then(() => listener(Object.freeze({ sessionId, webContentsId })))
+    )));
+    if (closedSessions.has(sessionId)
+      || sessionWebContentsIds.get(sessionId) !== webContentsId) {
+      return false;
+    }
+    if (contents.isDestroyed?.()) return false;
     openUrgentInputPort(webContentsId, contents);
     const outputPort = terminalOutputChannel?.openSession?.(sessionId, contents, {
       transferToWorker: true,
@@ -670,8 +679,10 @@ function createTerminalWorkerManager(options = {}) {
         entry.reject(new Error(message.error));
       } else {
         const sessionId = message.result?.sessionId;
-        openOutputSession(sessionId, entry.webContentsId);
-        entry.resolve(message.result);
+        void openOutputSession(sessionId, entry.webContentsId).then(
+          () => entry.resolve(message.result),
+          (error) => entry.reject(error),
+        );
       }
       return;
     }
@@ -937,6 +948,12 @@ function createTerminalWorkerManager(options = {}) {
     return Object.freeze({ dispose: () => terminalInterceptorWarningListeners.delete(listener) });
   }
 
+  function onSessionOwned(listener) {
+    if (typeof listener !== "function") throw new TypeError("Terminal session owner listener is required");
+    sessionOwnedListeners.add(listener);
+    return Object.freeze({ dispose: () => sessionOwnedListeners.delete(listener) });
+  }
+
   function stop() {
     if (!child) return;
     const current = child;
@@ -952,6 +969,7 @@ function createTerminalWorkerManager(options = {}) {
       sessionWebContentsIds.clear();
       closeAllUrgentInputPorts();
       terminalInterceptorWarningListeners.clear();
+      sessionOwnedListeners.clear();
       terminalOutputChannel?.closeAll?.();
       rejectAllPending(new Error("Terminal worker stopped"));
     }
@@ -970,6 +988,7 @@ function createTerminalWorkerManager(options = {}) {
     attachTerminalInterceptor,
     detachTerminalInterceptor,
     onTerminalInterceptorWarning,
+    onSessionOwned,
     hasOpenSession(sessionId) {
       return Boolean(
         sessionId

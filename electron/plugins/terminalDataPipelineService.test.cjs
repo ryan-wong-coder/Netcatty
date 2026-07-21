@@ -67,6 +67,7 @@ function harness(options = {}) {
   };
   const worker = {
     warningListener: null,
+    ownedListener: null,
     ownsSession() { return true; },
     attachTerminalInterceptor(descriptor, port) {
       port.unref?.();
@@ -76,6 +77,10 @@ function harness(options = {}) {
     onTerminalInterceptorWarning(listener) {
       this.warningListener = listener;
       return { dispose: () => { this.warningListener = null; } };
+    },
+    onSessionOwned(listener) {
+      this.ownedListener = listener;
+      return { dispose: () => { this.ownedListener = null; } };
     },
   };
   const selections = [];
@@ -316,7 +321,8 @@ test("a renderer cannot attach an interceptor to another window's terminal sessi
 
 test("created events defer silently until the worker has recorded session ownership", async () => {
   const h = harness();
-  h.worker.ownsSession = () => false;
+  let owned = false;
+  h.worker.ownsSession = () => owned;
   const results = await h.service.handleSessionEvent({ type: "created", session }, {
     webContentsId: 99,
   });
@@ -326,6 +332,11 @@ test("created events defer silently until the worker has recorded session owners
   ]);
   assert.equal(h.authorized.length, 0);
   assert.equal(h.attached.length, 0);
+
+  owned = true;
+  await h.worker.ownedListener({ sessionId: session.sessionId, webContentsId: 99 });
+  assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin", "worker"]);
+  assert.equal(h.authorized.length, 2);
 });
 
 test("session disposal invalidates an in-flight lazy activation before port transfer", async () => {

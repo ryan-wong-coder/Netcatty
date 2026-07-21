@@ -1366,10 +1366,13 @@ test("tryAttachSessionToTerminal closes orphan sessions after unmount", () => {
   assert.equal(ctx.sessionRef.current, null);
 });
 
-test("attachSessionToTerminal marks connected on first output including mosh handshake", () => {
+test("attachSessionToTerminal marks connected on metadata-only or visible first output", () => {
   const { term } = createFakeTerm();
   const statuses: string[] = [];
-  let onData: ((data: string, meta?: { moshHandshake?: boolean }) => void) | null = null;
+  let onData: ((data: string, meta?: {
+    moshHandshake?: boolean;
+    pluginPipelineIngressBytes?: number;
+  }) => void) | null = null;
 
   const ctx = {
     ...createContext(false),
@@ -1385,7 +1388,10 @@ test("attachSessionToTerminal marks connected on first output including mosh han
     terminalBackend: {
       onSessionData: (
         _id: string,
-        cb: (data: string, meta?: { moshHandshake?: boolean }) => void,
+        cb: (data: string, meta?: {
+          moshHandshake?: boolean;
+          pluginPipelineIngressBytes?: number;
+        }) => void,
       ) => {
         onData = cb;
         return () => {};
@@ -1405,6 +1411,10 @@ test("attachSessionToTerminal marks connected on first output including mosh han
   };
 
   attachSessionToTerminal(ctx as never, term, "session-1");
+  // A plugin may suppress the first banner while still consuming host ingress.
+  onData?.("", { pluginPipelineIngressBytes: 12 });
+  assert.deepEqual(statuses, ["connected"]);
+  assert.equal(ctx.hasConnectedRef.current, true);
   // Handshake output must dismiss the overlay so interactive prompts are reachable.
   onData?.("ssh handshake banner\r\n", { moshHandshake: true });
   assert.deepEqual(statuses, ["connected"]);

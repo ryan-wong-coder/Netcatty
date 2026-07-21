@@ -621,6 +621,7 @@ const writeSessionDataImmediate = (
       }
     });
   }, {
+    dropBytes: ingressBytes,
     deferStart: writeOptions.deferStart,
     // Intermediate plain shards set yieldAfter via writeLargeTerminalBatch;
     // bulk pressure also yields after sizable items (Tabby FlowControl intent).
@@ -752,6 +753,27 @@ export const attachSessionToTerminal = (
     ctx.sudoAutofillRef.current = sudoAutofill;
   }
 
+  const markConnectedOnFirstOutput = () => {
+    if (ctx.hasConnectedRef.current) return;
+    ctx.updateStatus("connected");
+    opts?.onConnected?.();
+    setTimeout(() => {
+      if (ctx.isVisibleRef?.current === false) {
+        notePendingOutputScrollIfEnabled(ctx);
+        return;
+      }
+      if (!ctx.fitAddonRef.current) return;
+      try {
+        ctx.fitAddonRef.current.fit();
+        if (ctx.sessionRef.current) {
+          ctx.terminalBackend.resizeSession(ctx.sessionRef.current, term.cols, term.rows);
+        }
+      } catch (err) {
+        logger.warn("Post-connect fit failed", err);
+      }
+    }, 100);
+  };
+
   ctx.disposeDataRef.current = ctx.terminalBackend.onSessionData(
     id,
     (chunk, meta) => {
@@ -763,6 +785,7 @@ export const attachSessionToTerminal = (
         ? Math.max(0, Number(meta?.pluginPipelineIngressBytes))
         : null;
       if (filtered.accepted && !filtered.data && pluginPipelineIngressBytes != null) {
+        markConnectedOnFirstOutput();
         acknowledgeDroppedTerminalDisplayBytes(ctx, pluginPipelineIngressBytes);
         return;
       }
@@ -791,25 +814,7 @@ export const attachSessionToTerminal = (
       // remain reachable. Startup commands / pending scripts are gated
       // separately on netcatty:mosh:ready so they do not hit the handshake
       // PTY (#2199).
-      if (!ctx.hasConnectedRef.current) {
-        ctx.updateStatus("connected");
-        opts?.onConnected?.();
-        setTimeout(() => {
-          if (ctx.isVisibleRef?.current === false) {
-            notePendingOutputScrollIfEnabled(ctx);
-            return;
-          }
-          if (!ctx.fitAddonRef.current) return;
-          try {
-            ctx.fitAddonRef.current.fit();
-            if (ctx.sessionRef.current) {
-              ctx.terminalBackend.resizeSession(ctx.sessionRef.current, term.cols, term.rows);
-            }
-          } catch (err) {
-            logger.warn("Post-connect fit failed", err);
-          }
-        }, 100);
-      }
+      markConnectedOnFirstOutput();
     },
     { replayBacklog: true },
   );

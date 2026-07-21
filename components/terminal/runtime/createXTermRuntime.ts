@@ -1327,6 +1327,9 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
           serialLineBufferRef: ctx.serialLineBufferRef,
           onAutocompleteInput: ctx.onAutocompleteInput,
         });
+        if (ctx.passwordPromptActiveRef) {
+          ctx.passwordPromptActiveRef.current = false;
+        }
         if (ctx.terminalBackend.interruptSession) {
           ctx.terminalBackend.interruptSession(id, interruptTrace);
         } else {

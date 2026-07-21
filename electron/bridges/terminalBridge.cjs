@@ -79,6 +79,7 @@ let selectZmodemUploadFiles = null;
 let selectZmodemDownloadDirectory = null;
 let reportOpenedSessionActivity = null;
 let terminalDataPipeline = null;
+const terminalInputPipelineBarriers = new Map();
 
 const DEFAULT_UTF8_LOCALE = "en_US.UTF-8";
 const LOGIN_SHELLS = new Set(["bash", "zsh", "fish", "ksh"]);
@@ -119,6 +120,7 @@ function init(deps) {
     ? deps.reportOpenedSessionActivity
     : null;
   terminalDataPipeline = deps.terminalDataPipeline || null;
+  terminalInputPipelineBarriers.clear();
   configureTerminalSessionDataEmitter({
     getSession: (sessionId) => sessions?.get(sessionId),
     outputChannel: terminalOutputChannel,
@@ -1471,18 +1473,37 @@ function writeToSessionNow(payload, data, logRewrite = payload.logRewrite) {
 
 function writeToSessionWithInterception(payload, data, logRewrite = payload.logRewrite) {
   const bypass = payload?.sensitive === true || isTerminalReportSequence(data);
-  if (!terminalDataPipeline?.interceptInput
-    || !terminalDataPipeline.has?.(payload.sessionId, "input")) {
+  const hasInterceptor = Boolean(
+    terminalDataPipeline?.interceptInput
+    && terminalDataPipeline.has?.(payload.sessionId, "input"),
+  );
+  const previous = terminalInputPipelineBarriers.get(payload.sessionId);
+  if (!hasInterceptor && !previous) {
     writeToSessionNow(payload, data, logRewrite);
     return;
   }
-  void terminalDataPipeline.interceptInput(payload.sessionId, data, {
-    sensitive: payload?.sensitive === true,
-    bypass,
-  }).then(
-    (transformed) => writeToSessionNow(payload, transformed, logRewrite),
-    () => writeToSessionNow(payload, data, logRewrite),
-  );
+  const write = async () => {
+    if (!hasInterceptor) {
+      writeToSessionNow(payload, data, logRewrite);
+      return;
+    }
+    try {
+      const transformed = await terminalDataPipeline.interceptInput(payload.sessionId, data, {
+        sensitive: payload?.sensitive === true,
+        bypass,
+      });
+      writeToSessionNow(payload, transformed, logRewrite);
+    } catch {
+      writeToSessionNow(payload, data, logRewrite);
+    }
+  };
+  const operation = previous ? previous.then(write, write) : Promise.resolve().then(write);
+  terminalInputPipelineBarriers.set(payload.sessionId, operation);
+  void operation.finally(() => {
+    if (terminalInputPipelineBarriers.get(payload.sessionId) === operation) {
+      terminalInputPipelineBarriers.delete(payload.sessionId);
+    }
+  });
 }
 
 function writeToSession(event, payload) {

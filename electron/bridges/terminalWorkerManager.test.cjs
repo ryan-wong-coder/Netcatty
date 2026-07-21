@@ -86,6 +86,40 @@ test("request sends a worker command and resolves matching response", async () =
   assert.deepEqual(await promise, { sessionId: "local-1" });
 });
 
+test("session ownership listeners finish before buffered output is released", async () => {
+  const child = new FakeChild();
+  const routed = [];
+  let releaseOwnership;
+  let outputOpen = false;
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork: () => child },
+    terminalOutputChannel: {
+      openSession() { outputOpen = true; },
+      send(sessionId, data) {
+        if (!outputOpen) return false;
+        routed.push({ sessionId, data });
+        return true;
+      },
+    },
+    workerScriptPath: "/worker.cjs",
+  });
+  manager.onSessionOwned(() => new Promise((resolve) => { releaseOwnership = resolve; }));
+
+  const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", { kind: "output", sessionId: "local-1", data: "banner" });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(routed, []);
+
+  releaseOwnership();
+  assert.deepEqual(await promise, { sessionId: "local-1" });
+  assert.deepEqual(routed, [{ sessionId: "local-1", data: "banner" }]);
+});
+
 test("terminal interceptor ports transfer directly to the worker and warnings stay host-owned", () => {
   const child = new FakeChild();
   const manager = createTerminalWorkerManager({

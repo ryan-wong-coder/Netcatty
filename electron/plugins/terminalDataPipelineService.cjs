@@ -49,11 +49,13 @@ class PluginTerminalDataPipelineService {
     this.showWarning = options.showWarning ?? (() => {});
     this.terminalWorkerManager = null;
     this.workerWarningSubscription = null;
+    this.sessionOwnedSubscription = null;
     this.active = new Map();
     this.declined = new Set();
     this.selectedProviders = new Map();
     this.operations = new Map();
     this.sessionEpochs = new Map();
+    this.pendingOwnership = new Map();
     this.closed = false;
     this.runtimeSupervisor.onDidChangeRuntime?.((event) => {
       if (event.status === "running") return;
@@ -74,7 +76,9 @@ class PluginTerminalDataPipelineService {
 
   bindTerminalWorkerManager(manager) {
     this.workerWarningSubscription?.dispose?.();
+    this.sessionOwnedSubscription?.dispose?.();
     this.workerWarningSubscription = null;
+    this.sessionOwnedSubscription = null;
     this.terminalWorkerManager = manager ?? null;
     if (manager?.onTerminalInterceptorWarning) {
       this.workerWarningSubscription = manager.onTerminalInterceptorWarning((warning) => {
@@ -89,6 +93,26 @@ class PluginTerminalDataPipelineService {
         }
       });
     }
+    if (manager?.onSessionOwned) {
+      this.sessionOwnedSubscription = manager.onSessionOwned((event) => (
+        this.#handleSessionOwned(event)
+      ));
+    }
+  }
+
+  async #handleSessionOwned(event) {
+    const pending = this.pendingOwnership.get(event?.sessionId);
+    if (!pending || pending.webContentsId !== event?.webContentsId) return;
+    this.pendingOwnership.delete(event.sessionId);
+    if (this.closed
+      || (this.sessionEpochs.get(event.sessionId) ?? 0) !== pending.sessionEpoch
+      || !this.terminalWorkerManager?.ownsSession?.(event.sessionId, event.webContentsId)) {
+      return;
+    }
+    await this.handleSessionEvent({ type: "snapshot", session: pending.session }, {
+      webContentsId: pending.webContentsId,
+      locale: pending.locale,
+    });
   }
 
   #key(sessionId, direction) {
@@ -338,6 +362,7 @@ class PluginTerminalDataPipelineService {
   async handleSessionEvent(event, options = {}) {
     const session = normalizeTerminalSessionSnapshot(event?.session);
     if (event?.type === "disposed") {
+      this.pendingOwnership.delete(session.sessionId);
       this.sessionEpochs.set(session.sessionId, (this.sessionEpochs.get(session.sessionId) ?? 0) + 1);
       this.detachSession(session.sessionId);
       for (const direction of DIRECTIONS) {
@@ -348,6 +373,7 @@ class PluginTerminalDataPipelineService {
       return Object.freeze([]);
     }
     if (event?.type === "disconnected") {
+      this.pendingOwnership.delete(session.sessionId);
       this.sessionEpochs.set(session.sessionId, (this.sessionEpochs.get(session.sessionId) ?? 0) + 1);
       this.detachSession(session.sessionId, "session-disconnected");
       return Object.freeze([]);
@@ -367,6 +393,14 @@ class PluginTerminalDataPipelineService {
     }
     if (!this.sessionEpochs.has(session.sessionId)) this.sessionEpochs.set(session.sessionId, 0);
     const sessionEpoch = this.sessionEpochs.get(session.sessionId) ?? 0;
+    if (event.type === "created" && options.webContentsId != null) {
+      this.pendingOwnership.set(session.sessionId, Object.freeze({
+        session,
+        sessionEpoch,
+        webContentsId: options.webContentsId,
+        locale: options.locale,
+      }));
+    }
     const results = [];
     for (const direction of DIRECTIONS) {
       try {
@@ -386,6 +420,10 @@ class PluginTerminalDataPipelineService {
         results.push(Object.freeze({ status: "failed", direction }));
       }
     }
+    if (event.type === "created"
+      && !results.some((result) => result.status === "pending-session")) {
+      this.pendingOwnership.delete(session.sessionId);
+    }
     return Object.freeze(results);
   }
 
@@ -397,8 +435,11 @@ class PluginTerminalDataPipelineService {
     for (const key of [...this.active.keys()]) this.#detachKey(key, "shutdown");
     this.declined.clear();
     this.selectedProviders.clear();
+    this.pendingOwnership.clear();
     this.workerWarningSubscription?.dispose?.();
+    this.sessionOwnedSubscription?.dispose?.();
     this.workerWarningSubscription = null;
+    this.sessionOwnedSubscription = null;
   }
 }
 
