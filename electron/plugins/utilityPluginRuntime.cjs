@@ -209,6 +209,15 @@ class UtilityPluginRuntime {
     return this.router.streams.openOutgoing(streamId, windowBytes);
   }
 
+  attachTerminalInterceptor(descriptor, port) {
+    if (!this.router || !this.child) throw new Error("Plugin utility runtime is not connected");
+    if (!port) throw new TypeError("Terminal interceptor port is required");
+    this.child.postMessage({
+      type: "netcatty-plugin:terminal-interceptor:attach",
+      descriptor,
+    }, [port]);
+  }
+
   getProcessId() {
     return this.child?.pid ?? null;
   }

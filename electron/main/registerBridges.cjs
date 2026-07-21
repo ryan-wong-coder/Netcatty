@@ -102,6 +102,11 @@ function createBridgeRegistrar(context) {
         const {
           createNativePermissionDecisionProvider,
         } = require("../plugins/nativePermissionDecision.cjs");
+        const {
+          terminalInterceptorChoiceLabel,
+          terminalInterceptorIdentifier,
+          terminalInterceptorMessages,
+        } = require("../plugins/terminalInterceptorMessages.cjs");
         return createPluginHostService({
           app,
           electron: electronModule,
@@ -111,6 +116,36 @@ function createBridgeRegistrar(context) {
             window: win,
           }),
           getLocale: () => getWindowManager().getCurrentLanguage?.() ?? "en",
+          requestTerminalInterceptorSelection: async ({ direction, providers }) => {
+            const messages = terminalInterceptorMessages(getWindowManager().getCurrentLanguage?.() ?? "en");
+            const buttons = [
+              ...providers.map(terminalInterceptorChoiceLabel),
+              messages.noInterceptor,
+            ];
+            const result = await electronModule.dialog.showMessageBox(win, {
+              type: "question",
+              title: messages.selectTitle(direction),
+              message: messages.selectMessage(direction),
+              buttons,
+              cancelId: buttons.length - 1,
+              defaultId: buttons.length - 1,
+              noLink: true,
+            });
+            return result.response >= 0 && result.response < providers.length
+              ? providers[result.response].provider.id
+              : null;
+          },
+          showTerminalInterceptorWarning: (warning) => {
+            const messages = terminalInterceptorMessages(getWindowManager().getCurrentLanguage?.() ?? "en");
+            void electronModule.dialog.showMessageBox(win, {
+              type: "warning",
+              title: messages.warningTitle,
+              message: messages.warningMessage,
+              detail: warning?.providerId
+                ? `${messages.warningDetail}\n${terminalInterceptorIdentifier(warning.providerId)}`
+                : messages.warningDetail,
+            }).catch(() => {});
+          },
         });
       },
       registerShutdown: (handler) => {
@@ -123,6 +158,7 @@ function createBridgeRegistrar(context) {
       manager: pluginHostService?.manager,
       contributionService: pluginHostService?.contributionService,
       terminalProviderService: pluginHostService?.terminalProviderService,
+      terminalDataPipelineService: pluginHostService?.terminalDataPipelineService,
       resolveContributionIcon: (payload) => pluginHostService?.contributionIconService?.resolve(payload),
       viewHost: pluginHostService?.viewHost,
       env: process.env,
@@ -290,6 +326,7 @@ function createBridgeRegistrar(context) {
           MessageChannelMain: electronModule.MessageChannelMain,
         })
       : null;
+    pluginHostService?.terminalDataPipelineService?.bindTerminalWorkerManager(terminalWorkerManager);
     const reportOpenedSessionActivity = (event) => aiBridge.reportOpenedSessionActivity?.(event);
     terminalWorkerManager?.addOutputTap?.((sessionId) => {
       reportOpenedSessionActivity({ sessionId, phase: "touch" });

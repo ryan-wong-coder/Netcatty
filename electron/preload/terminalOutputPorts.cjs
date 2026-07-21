@@ -1,6 +1,7 @@
 "use strict";
 
 const { TERMINAL_OUTPUT_PORT_CHANNEL } = require("../bridges/terminalOutputChannel.cjs");
+const { hasPluginPipelineIngress } = require("./terminalDataBacklog.cjs");
 
 function createTerminalOutputPortRegistry(options = {}) {
   const {
@@ -36,7 +37,7 @@ function createTerminalOutputPortRegistry(options = {}) {
         return;
       }
       if (closedTerminalDataSessions.has(targetSessionId)) return;
-      if (!message.data) return;
+      if (!message.data && !hasPluginPipelineIngress(message.meta)) return;
       try {
         const filtered = typeof filterData === "function"
           ? filterData(targetSessionId, message.data, message)
@@ -47,7 +48,9 @@ function createTerminalOutputPortRegistry(options = {}) {
         const meta = filtered && typeof filtered === "object" && "data" in filtered
           ? filtered.meta
           : message.meta;
-        if (data) deliverToListeners?.(targetSessionId, data, meta);
+        if (data || hasPluginPipelineIngress(meta)) {
+          deliverToListeners?.(targetSessionId, data ?? "", meta);
+        }
       } catch (err) {
         onPortError("Terminal output port callback failed", err);
       }

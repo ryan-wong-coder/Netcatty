@@ -64,6 +64,72 @@ JSON-RPC Provider path is not suitable for hot interception. PR 6 owns the
 separate permission-gated MessagePort fast path for input/output interceptors,
 sensitive-input bypass, circuit breaking, and the 4 ms interceptor budget.
 
+## Privileged terminal data pipeline
+
+PR 6 implements the two declared raw kinds without exposing xterm, Electron
+IPC, backend streams, or the general plugin control plane. Only an advanced
+utility runtime with `provider.terminal` and the matching
+`terminal.intercept.input` or `terminal.intercept.output` grant can be attached.
+Authorization is bound to the exact plugin version, runtime ID, runtime kind,
+security principal, terminal session, direction, and declared Provider.
+Browser runtimes are rejected before a port is transferred. Publisher
+signature eligibility remains a distribution-policy decision owned by PR 9;
+the advanced runtime and explicit high-risk permission boundary is already
+enforced here.
+
+An activated utility plugin uses the same registration owner and receives a
+specialized SDK invocation:
+
+```ts
+context.subscriptions.add(context.providers.register(
+  "com.example.filter.input",
+  "terminal.interceptor.input",
+  async ({ data, session, sequence }) => {
+    // The transferred UTF-8 Uint8Array is owned by this invocation.
+    return data;
+  },
+));
+```
+
+For each terminal session, Netcatty permits at most one arbitrary interceptor
+per direction. A single candidate can be selected automatically; competing
+candidates require an explicit host-owned user choice and "No interceptor" is
+the default/cancel action. The choice is session-local and is discarded on
+session disposal, contribution withdrawal, runtime replacement, crash, or
+quarantine. The requesting renderer must own the terminal session before any
+authorization or activation work occurs.
+
+The main process transfers the two ends of one `MessageChannelMain` directly
+to the terminal worker and selected plugin utility process. Data messages
+contain a monotonic sequence, direction, bounded credit information, and one
+transferable `ArrayBuffer`; the main process never copies terminal payloads.
+The worker serializes chunks, caps each transfer at 64 KiB, and limits queued
+output to a 256 KiB credit window. Output remains ordered and host output taps
+retain the original data. Renderer flow acknowledgements use the original
+ingress count even when a plugin expands, contracts, or completely suppresses
+visible output. Host-bypassed sensitive input and protocol replies still wait
+behind earlier ordinary input so bypass cannot reorder the terminal stream.
+
+Input requests have a 4 ms worker-owned deadline. Output requests have a
+bounded 50 ms deadline and a 256 KiB queued-output window. A timeout, malformed
+response, invalid UTF-8 result, closed port, runtime exit, or credit-window
+overflow trips the circuit breaker immediately: the original chunk fails open,
+the interceptor is disabled for that session/direction, and Netcatty displays
+a host-owned warning. An interceptor cannot suppress that warning or re-enable
+itself without a fresh host authorization path.
+
+Credential protection is outside plugin control. Input that the host marks as
+sensitive/no-echo bypasses the port before buffer creation, including every
+character entered while the password-prompt state is active and confirmed
+sudo/su credential autofill. The terminal worker also recognizes authentication
+challenges from bounded original-output tails before output interception, so an
+output plugin cannot expose a password by hiding or rewriting its prompt.
+Sensitive input is also excluded from terminal broadcast. Terminal protocol replies, urgent interrupts, transfer input gates,
+transport encoding, Telnet IAC escaping, host logs, renderer flow accounting,
+and marker/safety filtering remain host-owned. With no active interceptor, the
+worker uses the existing synchronous output path and performs no interceptor
+Promise, transfer, or payload allocation.
+
 ## Host adapters
 
 Netcatty's built-in autocomplete engine and keyword highlighter use the same

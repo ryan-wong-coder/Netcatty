@@ -920,6 +920,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     const inputSource = options?.source ?? "terminal";
     const id = ctx.sessionRef.current;
     const dataToWrite = data;
+    const sensitive = ctx.passwordPromptActiveRef?.current === true;
     let handledSubmittedInput = false;
     const submittedInput: { text: string; lineEnding: "\r\n" | "\r" | "\n" } | null =
       inputSource === "shift-enter"
@@ -931,7 +932,8 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     const broadcastDataBeforeSudo = mapTerminalBackspaceInput(data, ctx.host.backspaceBehavior);
     const suppressTerminalBroadcast = inputSource === "terminal" && suppressNextTerminalDataBroadcast;
     if (suppressTerminalBroadcast) suppressNextTerminalDataBroadcast = false;
-    const willBroadcastInput = inputSource !== "kitty" &&
+    const willBroadcastInput = !sensitive &&
+      inputSource !== "kitty" &&
       !handlingKittyBroadcast &&
       !suppressTerminalBroadcast &&
       !!id && shouldBroadcastTerminalUserInput(term, broadcastDataBeforeSudo, {
@@ -939,7 +941,6 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
       hasBroadcastInputHandler: !!onBroadcastInput,
     });
     if (ctx.statusRef.current === "connected" && submittedInput) {
-      const sensitive = ctx.passwordPromptActiveRef?.current === true;
       if (submittedInput.text) {
         ctx.commandBufferRef.current += submittedInput.text;
         ctx.scriptRecorderRef?.current?.recordInput(submittedInput.text);
@@ -971,7 +972,6 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     ) {
       const pastedCommand = getSinglePastedCommand(data);
       if (pastedCommand) {
-        const sensitive = ctx.passwordPromptActiveRef?.current === true;
         if (ctx.passwordPromptActiveRef) ctx.passwordPromptActiveRef.current = false;
         const recordedCommand = recordTerminalCommandExecution(
           `${ctx.commandBufferRef.current}${pastedCommand.command}`,
@@ -1010,7 +1010,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
           localEcho: ctx.serialLocalEcho,
           writeToSession: (nextData) => {
             ctx.onOutputTriggerUserInputRef?.current?.(nextData);
-            ctx.terminalBackend.writeToSession(id, nextData);
+            ctx.terminalBackend.writeToSession(id, nextData, { sensitive });
           },
           writeToTerminal: writeLocalTerminalData,
         });
@@ -1019,7 +1019,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
         // When backspaceBehavior is configured, remap the Backspace key output
         const outData = mapTerminalBackspaceInput(dataToWrite, ctx.host.backspaceBehavior);
         ctx.onOutputTriggerUserInputRef?.current?.(outData);
-        ctx.terminalBackend.writeToSession(id, outData);
+        ctx.terminalBackend.writeToSession(id, outData, { sensitive });
 
         // Local echo for serial connections only when explicitly enabled
         if (inputSource !== "kitty" && ctx.host.protocol === "serial" && ctx.serialLocalEcho) {

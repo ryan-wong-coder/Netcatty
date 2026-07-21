@@ -114,6 +114,13 @@ function main() {
 
   const sessions = new Map();
   const sftpClients = new Map();
+  const { createTerminalDataPipeline } = require("./terminalDataPipeline.cjs");
+  const terminalDataPipeline = createTerminalDataPipeline({
+    onWarning: (warning) => parentPort.postMessage({
+      kind: "terminal-interceptor-warning",
+      warning,
+    }),
+  });
   let runtime = null;
   const electronModule = {
     webContents: {
@@ -141,10 +148,12 @@ function main() {
     electronModule,
     selectZmodemUploadFiles,
     selectZmodemDownloadDirectory,
+    terminalDataPipeline,
   };
 
   runtime = createTerminalWorkerRuntime({
     parentPort,
+    terminalDataPipeline,
     registerBridges(ipcMain) {
       sshBridge.init(deps);
       terminalBridge.init(deps);

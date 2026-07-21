@@ -163,6 +163,25 @@ test("drops terminal perf metadata after backlog data is merged or trimmed", () 
   });
 });
 
+test("sums original plugin-pipeline ingress counts when display chunks are merged", () => {
+  const backlog = createTerminalDataBacklog({ maxBytesPerSession: 8 });
+  backlog.append("session-1", "expanded", { pluginPipelineIngressBytes: 3 });
+  backlog.append("session-1", "!", { pluginPipelineIngressBytes: 2 });
+  assert.deepEqual(backlog.takeEntry("session-1"), {
+    data: "xpanded!",
+    meta: { pluginPipelineIngressBytes: 5 },
+  });
+});
+
+test("retains metadata-only plugin output so suppressed data can still be acknowledged", () => {
+  const backlog = createTerminalDataBacklog();
+  backlog.append("session-1", "", { pluginPipelineIngressBytes: 9 });
+  assert.deepEqual(backlog.takeEntry("session-1"), {
+    data: "",
+    meta: { pluginPipelineIngressBytes: 9 },
+  });
+});
+
 test("keeps latest alternate-screen metadata while trimming backlog data", () => {
   const backlog = createTerminalDataBacklog({ maxBytesPerSession: 5 });
 
@@ -300,6 +319,28 @@ test("onSessionData replays pending terminal data metadata on subscribe", () => 
   }]);
 });
 
+test("onSessionData replays metadata-only plugin output on subscribe", () => {
+  const dataListeners = new Map();
+  const displayDataListeners = new Map();
+  const terminalDataBacklog = createTerminalDataBacklog();
+  terminalDataBacklog.append("session-1", "", { pluginPipelineIngressBytes: 7 });
+  const api = createPreloadApi({
+    ipcRenderer: { invoke() {}, send() {}, on() {}, removeListener() {} },
+    os: { release: () => "10.0.19045" },
+    dataListeners,
+    displayDataListeners,
+    terminalDataBacklog,
+  });
+  const received = [];
+  api.onSessionData("session-1", (chunk, meta) => received.push({ chunk, meta }), {
+    replayBacklog: true,
+  });
+  assert.deepEqual(received, [{
+    chunk: "",
+    meta: { pluginPipelineIngressBytes: 7 },
+  }]);
+});
+
 test("legacy terminal data delivery preserves terminal perf metadata", () => {
   const preload = loadPreloadWithFakeElectron();
   try {
@@ -344,6 +385,30 @@ test("terminal output port delivery preserves terminal perf metadata", () => {
     assert.deepEqual(received, [{
       chunk: "hello",
       meta: { terminalPerf },
+    }]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
+test("terminal output port delivers metadata-only plugin output for flow acknowledgement", () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    const port = createFakePort();
+    preload.api.onSessionData("session-1", (chunk, meta) => received.push({ chunk, meta }));
+    preload.handlers.get("netcatty:terminal-output-port")?.(
+      { ports: [port] },
+      { sessionId: "session-1" },
+    );
+    port.emit({
+      sessionId: "session-1",
+      data: "",
+      meta: { pluginPipelineIngressBytes: 11 },
+    });
+    assert.deepEqual(received, [{
+      chunk: "",
+      meta: { pluginPipelineIngressBytes: 11 },
     }]);
   } finally {
     preload.cleanup();

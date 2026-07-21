@@ -425,6 +425,43 @@ test("runtime placement and state events are injectable without changing lifecyc
   assert.equal(events[0].runtimeId, events[2].runtimeId);
 });
 
+test("supervisor transfers privileged terminal ports only to the exact utility runtime identity", async (context) => {
+  const attached = [];
+  const fixture = createFixture(context, () => ({
+    async start(config) {
+      return {
+        pluginId: config.pluginId,
+        pluginVersion: config.pluginVersion,
+        apiVersion: config.apiVersion,
+        enabledFeatures: config.enabledFeatures,
+      };
+    },
+    async stop() {},
+    attachTerminalInterceptor(descriptor, port) { attached.push({ descriptor, port }); },
+  }), {
+    resolveRuntimeKind: () => "utility",
+  });
+  await fixture.supervisor.start(fixture.manifest.id);
+  const identity = fixture.supervisor.getRuntimeIdentity(fixture.manifest.id);
+  const port = { close() {} };
+  await fixture.supervisor.attachTerminalInterceptor(
+    fixture.manifest.id,
+    { providerId: "com.example.input", direction: "input" },
+    port,
+    { expectedIdentity: identity },
+  );
+  assert.equal(attached[0].port, port);
+  await assert.rejects(
+    fixture.supervisor.attachTerminalInterceptor(
+      fixture.manifest.id,
+      { providerId: "com.example.input", direction: "input" },
+      port,
+      { expectedIdentity: { ...identity, runtimeId: "stale-runtime" } },
+    ),
+    (error) => error?.code === RPC_ERRORS.unavailable,
+  );
+});
+
 test("progress events carry immutable activation identity for downstream provider correlation", async (context) => {
   let runtimeOptions;
   const fixture = createFixture(context, (options) => {

@@ -200,6 +200,50 @@ test("first-party placement selects the utility runtime for companion manifests"
   assert.deepEqual(requested, ["companion.execute", "runtime.advanced"]);
 });
 
+test("first-party placement selects utility for dual-entrypoint terminal interceptors", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-host-service-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const requested = [];
+  const service = createPluginHostService({
+    ...createOptions(root),
+    requestPermissionDecision: async (request) => {
+      requested.push(request.permission);
+      return { requestId: request.requestId, decision: "allow", scope: "application" };
+    },
+  });
+  context.after(() => service.manager.shutdown());
+  const manifest = {
+    manifestVersion: 1,
+    id: "com.example.interceptor-placement",
+    name: "interceptor-placement",
+    version: "1.0.0",
+    publisher: "example",
+    engines: { netcatty: ">=0.0.0", api: ">=0.1.0-internal <0.2.0" },
+    main: { browser: "browser.js", node: "node.js" },
+    permissions: {
+      required: ["runtime.advanced", "provider.terminal", "terminal.intercept.input"],
+    },
+    contributes: {
+      providers: [{
+        id: "com.example.interceptor-placement.input",
+        label: "Input filter",
+        kind: "terminal.interceptor.input",
+      }],
+    },
+  };
+  assert.equal(await service.runtimeSupervisor.resolveRuntimeKind({
+    plugin: { id: manifest.id, activeVersion: manifest.version, manifest },
+    availableKinds: ["browser", "utility"],
+    securityPrincipal: "unsigned-package:interceptor-placement",
+    signal: new AbortController().signal,
+  }), "utility");
+  assert.deepEqual(requested, [
+    "provider.terminal",
+    "terminal.intercept.input",
+    "runtime.advanced",
+  ]);
+});
+
 test("secure host methods fail closed without an approver while public logging remains available", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-host-service-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));

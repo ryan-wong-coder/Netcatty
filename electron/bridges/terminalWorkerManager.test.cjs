@@ -86,6 +86,36 @@ test("request sends a worker command and resolves matching response", async () =
   assert.deepEqual(await promise, { sessionId: "local-1" });
 });
 
+test("terminal interceptor ports transfer directly to the worker and warnings stay host-owned", () => {
+  const child = new FakeChild();
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork: () => child },
+    workerScriptPath: "/worker.cjs",
+  });
+  const port = new FakePort("interceptor");
+  const warnings = [];
+  manager.onTerminalInterceptorWarning((warning) => warnings.push(warning));
+  manager.attachTerminalInterceptor({
+    sessionId: "session-1",
+    direction: "input",
+    providerId: "com.example.input",
+  }, port);
+  assert.equal(child.messages[0].kind, "terminal-interceptor-port");
+  assert.deepEqual(child.transferLists[0], [port]);
+  child.emit("message", {
+    kind: "terminal-interceptor-warning",
+    warning: { sessionId: "session-1", direction: "input", code: "timeout" },
+  });
+  assert.equal(warnings[0].code, "timeout");
+  manager.detachTerminalInterceptor("session-1", "input");
+  assert.equal(child.messages[1].kind, "terminal-interceptor-detach");
+  child.emit("exit", 9);
+  assert.deepEqual(warnings[1], {
+    code: "worker-exit",
+    message: "Terminal worker exited with code 9",
+  });
+});
+
 test("request opens a terminal output port when a session starts", async () => {
   const child = new FakeChild();
   const opened = [];

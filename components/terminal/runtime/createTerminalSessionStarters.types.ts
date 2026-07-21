@@ -87,7 +87,7 @@ export type TerminalBackendApi = {
   onConnectionReuseFallback?: (
     cb: (sessionId: string, sourceSessionId?: string) => void,
   ) => (() => void) | undefined;
-  writeToSession: (sessionId: string, data: string, options?: { automated?: boolean; lineDelayMs?: number; logRewrite?: ProgrammaticCommandLogRewrite }) => void;
+  writeToSession: (sessionId: string, data: string, options?: { automated?: boolean; sensitive?: boolean; lineDelayMs?: number; logRewrite?: ProgrammaticCommandLogRewrite }) => void;
   interruptSession?: (sessionId: string, trace?: NetcattyTerminalInterruptTrace) => void;
   resizeSession: (sessionId: string, cols: number, rows: number) => void;
   closeSession: (sessionId: string) => void | Promise<void>;
@@ -213,4 +213,6 @@ export type TerminalSessionDataMeta = {
   /** True while Mosh is still on the ephemeral SSH handshake PTY. */
   moshHandshake?: boolean;
   terminalPerf?: NetcattyTerminalOutputPerfMeta;
+  /** Original host output units acknowledged even when an interceptor changes display length. */
+  pluginPipelineIngressBytes?: number;
 };

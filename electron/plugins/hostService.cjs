@@ -32,6 +32,7 @@ const { registerSecurePluginCapabilities } = require("./secureCapabilities.cjs")
 const { PluginSecretStore } = require("./secretStore.cjs");
 const { SecretLeaseStore } = require("./secretLease.cjs");
 const { PluginTerminalProviderService } = require("./terminalProviderService.cjs");
+const { PluginTerminalDataPipelineService } = require("./terminalDataPipelineService.cjs");
 
 function getElectronProcessMetrics(app, pid) {
   const metric = app.getAppMetrics?.().find((candidate) => candidate.pid === pid);
@@ -200,6 +201,16 @@ function createPluginHostService(options) {
       permissionEngine,
       runtimeSupervisor,
     });
+    const terminalDataPipelineService = options.electron.MessageChannelMain
+      ? new PluginTerminalDataPipelineService({
+          contributionService,
+          permissionEngine,
+          runtimeSupervisor,
+          MessageChannelMain: options.electron.MessageChannelMain,
+          requestSelection: options.requestTerminalInterceptorSelection,
+          showWarning: options.showTerminalInterceptorWarning,
+        })
+      : null;
     quotaManager.setViolationHandler((identity, error) => (
       runtimeSupervisor.enforcePolicyViolation(identity, error)
     ));
@@ -218,6 +229,7 @@ function createPluginHostService(options) {
       runtimeSupervisor,
       contributionService,
       beforeClose: async () => {
+        terminalDataPipelineService?.shutdown();
         await viewHost?.shutdown();
         await companionSupervisor.shutdown();
         leaseStore.shutdown();
@@ -245,6 +257,7 @@ function createPluginHostService(options) {
       runtimeSupervisor,
       secretStore,
       terminalProviderService,
+      terminalDataPipelineService,
       viewHost,
     };
   } catch (error) {

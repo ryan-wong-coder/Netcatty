@@ -2,6 +2,11 @@
 
 const { mergeTerminalDataMeta } = require("./terminalDataMeta.cjs");
 
+function hasPluginPipelineIngress(meta) {
+  return Number.isFinite(meta?.pluginPipelineIngressBytes)
+    && Number(meta.pluginPipelineIngressBytes) > 0;
+}
+
 function createTerminalDataBacklog(options = {}) {
   const maxBytesPerSession = options.maxBytesPerSession ?? 64 * 1024;
   const pendingBySession = new Map();
@@ -12,7 +17,7 @@ function createTerminalDataBacklog(options = {}) {
   }
 
   function append(sessionId, data, meta) {
-    if (!sessionId || !data) return;
+    if (!sessionId || (!data && !hasPluginPipelineIngress(meta))) return;
     const previous = pendingBySession.get(sessionId) || { data: "", meta: undefined };
     const nextData = trimToLimit(previous.data + data);
     const preserveTerminalPerf = previous.data.length === 0 && nextData === data;
@@ -62,7 +67,7 @@ function createTerminalDataDispatcher({
   shouldDropSession = () => false,
 }) {
   return function deliverToListeners(sessionId, data, meta) {
-    if (!data) return;
+    if (!data && !hasPluginPipelineIngress(meta)) return;
     if (shouldDropSession(sessionId)) return;
 
     if (!hasSessionListeners(displayDataListeners, sessionId)) {
@@ -103,4 +108,5 @@ module.exports = {
   createTerminalDataBacklog,
   createTerminalDataDispatcher,
   clearTerminalDataSession,
+  hasPluginPipelineIngress,
 };

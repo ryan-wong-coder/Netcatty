@@ -43,7 +43,13 @@ function freezeJson(value) {
 }
 
 function resolveDefaultRuntimeKind({ plugin }) {
-  if (plugin.manifest.companionExecutables?.length) return "utility";
+  const requiresPrivilegedTerminalPipeline = plugin.manifest.contributes?.providers?.some((provider) => (
+    provider.kind === "terminal.interceptor.input"
+    || provider.kind === "terminal.interceptor.output"
+  ));
+  if (plugin.manifest.companionExecutables?.length || requiresPrivilegedTerminalPipeline) {
+    return "utility";
+  }
   return plugin.manifest.main.browser ? "browser" : "utility";
 }
 
@@ -660,6 +666,18 @@ class RuntimeSupervisor {
       try { stream?.cancel?.(); } catch {}
       throw error;
     }
+  }
+
+  async attachTerminalInterceptor(pluginId, descriptor, port, options) {
+    const { identity, runtime } = await this.#getRunningRuntime(pluginId);
+    this.#assertExpectedRuntimeIdentity(identity, options?.expectedIdentity);
+    if (identity.runtimeKind !== "utility" || typeof runtime.attachTerminalInterceptor !== "function") {
+      throw new PluginRpcError(
+        RPC_ERRORS.failedPrecondition,
+        `Terminal interceptors require an advanced utility runtime: ${pluginId}`,
+      );
+    }
+    runtime.attachTerminalInterceptor(descriptor, port);
   }
 
   shutdown() {

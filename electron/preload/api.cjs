@@ -199,6 +199,7 @@ function createPreloadApi(ctx) {
       sessionId,
       data,
       automated: Boolean(options?.automated),
+      sensitive: options?.sensitive === true,
       lineDelayMs: Number.isFinite(lineDelayMs) && lineDelayMs > 0 ? lineDelayMs : undefined,
       logRewrite: options?.logRewrite && typeof options.logRewrite === "object"
         ? {
@@ -487,7 +488,7 @@ function createPreloadApi(ctx) {
       displayDataListeners.get(sessionId).add(cb);
       const pendingEntry = terminalDataBacklog?.takeEntry?.(sessionId)
         ?? { data: terminalDataBacklog?.take?.(sessionId) || "", meta: undefined };
-      if (pendingEntry.data) {
+      if (pendingEntry.data || Number(pendingEntry.meta?.pluginPipelineIngressBytes) > 0) {
         try {
           cb(pendingEntry.data, pendingEntry.meta);
         } catch (err) {

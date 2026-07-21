@@ -743,7 +743,7 @@ export const attachSessionToTerminal = (
     mode: assistMode,
     password,
     candidates,
-    write: (data) => ctx.terminalBackend.writeToSession(id, data, { automated: true }),
+    write: (data) => ctx.terminalBackend.writeToSession(id, data, { automated: true, sensitive: true }),
     onHint: (active) => ctx.onSudoHint?.(active) ?? false,
     onPicker: (active, state) => ctx.onPasswordPromptPicker?.(active, state) ?? false,
   });
@@ -755,10 +755,24 @@ export const attachSessionToTerminal = (
     id,
     (chunk, meta) => {
       const filtered = filterTerminalInterruptDisplayOutput(term, chunk);
-      acknowledgeDroppedTerminalDisplayBytes(ctx, filtered.droppedBytes);
+      const pluginPipelineIngressBytes = Number.isFinite(meta?.pluginPipelineIngressBytes)
+        ? Math.max(0, Number(meta?.pluginPipelineIngressBytes))
+        : null;
+      if (filtered.accepted && !filtered.data && pluginPipelineIngressBytes != null) {
+        acknowledgeDroppedTerminalDisplayBytes(ctx, pluginPipelineIngressBytes);
+        return;
+      }
+      acknowledgeDroppedTerminalDisplayBytes(
+        ctx,
+        !filtered.accepted && pluginPipelineIngressBytes != null
+          ? pluginPipelineIngressBytes
+          : filtered.droppedBytes,
+      );
       if (!filtered.accepted) return;
 
-      const ingressBytes = filtered.acceptedBytes ?? filtered.data.length;
+      const ingressBytes = pluginPipelineIngressBytes
+        ?? filtered.acceptedBytes
+        ?? filtered.data.length;
       let data = filtered.data;
       if (opts?.convertLfToCrlf) {
         data = data.replace(/(?<!\r)\n/g, "\r\n");

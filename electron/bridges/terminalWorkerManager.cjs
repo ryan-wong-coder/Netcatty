@@ -148,6 +148,10 @@ function mergeTerminalOutputMeta(previous, next) {
     ),
     droppedOutputAlternateScreenAction: nextAction,
   };
+  const pluginPipelineIngressBytes = Number(previous?.pluginPipelineIngressBytes ?? 0)
+    + Number(next.pluginPipelineIngressBytes ?? 0);
+  if (pluginPipelineIngressBytes > 0) merged.pluginPipelineIngressBytes = pluginPipelineIngressBytes;
+  else delete merged.pluginPipelineIngressBytes;
   if (!merged.droppedOutputAlternateScreenAction) {
     delete merged.droppedOutputAlternateScreenAction;
   }
@@ -182,6 +186,7 @@ function createTerminalWorkerManager(options = {}) {
   const sessionWebContentsIds = new Map();
   const urgentInputPorts = new Map();
   const outputTaps = new Set();
+  const terminalInterceptorWarningListeners = new Set();
   const maxPendingOutputChunks = Number.isFinite(options.maxPendingOutputChunks)
     ? Math.max(0, Math.trunc(options.maxPendingOutputChunks))
     : 512;
@@ -695,6 +700,12 @@ function createTerminalWorkerManager(options = {}) {
       }
       return;
     }
+    if (message.kind === "terminal-interceptor-warning") {
+      for (const listener of [...terminalInterceptorWarningListeners]) {
+        try { listener(message.warning); } catch {}
+      }
+      return;
+    }
     if (message.kind === "renderer-event") {
       // Prefer the currently rebound display target. Worker-captured
       // webContentsId is from session start and goes stale after attach/rebind.
@@ -804,6 +815,11 @@ function createTerminalWorkerManager(options = {}) {
   function handleExit(code) {
     const error = new Error(`Terminal worker exited${Number.isFinite(code) ? ` with code ${code}` : ""}`);
     const exitCode = Number.isFinite(code) ? code : 1;
+    for (const listener of [...terminalInterceptorWarningListeners]) {
+      try {
+        listener(Object.freeze({ code: "worker-exit", message: error.message }));
+      } catch {}
+    }
     for (const [sessionId, webContentsId] of sessionWebContentsIds.entries()) {
       const targets = new Set();
       if (webContentsId != null) targets.add(webContentsId);
@@ -890,6 +906,25 @@ function createTerminalWorkerManager(options = {}) {
     });
   }
 
+  function attachTerminalInterceptor(descriptor, port) {
+    if (!port) throw new TypeError("Terminal interceptor port is required");
+    ensureStarted().postMessage({
+      kind: "terminal-interceptor-port",
+      ...descriptor,
+    }, [port]);
+  }
+
+  function detachTerminalInterceptor(sessionId, direction) {
+    if (!child) return;
+    child.postMessage({ kind: "terminal-interceptor-detach", sessionId, direction });
+  }
+
+  function onTerminalInterceptorWarning(listener) {
+    if (typeof listener !== "function") throw new TypeError("Terminal interceptor warning listener is required");
+    terminalInterceptorWarningListeners.add(listener);
+    return Object.freeze({ dispose: () => terminalInterceptorWarningListeners.delete(listener) });
+  }
+
   function stop() {
     if (!child) return;
     const current = child;
@@ -904,6 +939,7 @@ function createTerminalWorkerManager(options = {}) {
       outputPortReady.clear();
       sessionWebContentsIds.clear();
       closeAllUrgentInputPorts();
+      terminalInterceptorWarningListeners.clear();
       terminalOutputChannel?.closeAll?.();
       rejectAllPending(new Error("Terminal worker stopped"));
     }
@@ -919,6 +955,9 @@ function createTerminalWorkerManager(options = {}) {
     restoreAttachHome,
     getAttachHomeWebContentsId,
     clearAttachHome,
+    attachTerminalInterceptor,
+    detachTerminalInterceptor,
+    onTerminalInterceptorWarning,
     hasOpenSession(sessionId) {
       return Boolean(
         sessionId
@@ -929,6 +968,14 @@ function createTerminalWorkerManager(options = {}) {
     getSessionWebContentsId(sessionId) {
       if (!sessionId) return null;
       return sessionWebContentsIds.get(sessionId) ?? null;
+    },
+    ownsSession(sessionId, webContentsId) {
+      return Boolean(
+        sessionId
+        && Number.isSafeInteger(webContentsId)
+        && sessionWebContentsIds.get(sessionId) === webContentsId
+        && !closedSessions.has(sessionId),
+      );
     },
     addOutputTap(listener) {
       if (typeof listener !== "function") return () => {};

@@ -198,6 +198,7 @@ test("plugin setting scope catalogs are bounded, sender-owned, and merged for se
 test("plugin terminal Provider bridge owns cancellation by renderer sender", async () => {
   const ipcMain = createIpcMain();
   const calls = [];
+  const pipelineCalls = [];
   let destroyed;
   const terminalProviderService = {
     listProviders(options) {
@@ -218,6 +219,12 @@ test("plugin terminal Provider bridge owns cancellation by renderer sender", asy
   registerPluginBridge(ipcMain, {
     manager: { initialize: async () => {} },
     terminalProviderService,
+    terminalDataPipelineService: {
+      async handleSessionEvent(payload, options) {
+        pipelineCalls.push([payload, options]);
+        return [{ direction: "input", attached: true }];
+      },
+    },
     env: { NETCATTY_PLUGIN_DEV: "1" },
     isTrustedSender: () => true,
   });
@@ -249,6 +256,10 @@ test("plugin terminal Provider bridge owns cancellation by renderer sender", asy
     type: "created",
     session: { sessionId: "session-1" },
   }), [{ pluginId: "com.example", delivered: true }]);
+  assert.deepEqual(pipelineCalls, [[
+    { type: "created", session: { sessionId: "session-1" } },
+    { webContentsId: 42 },
+  ]]);
   assert.equal(typeof destroyed, "function");
   const destroyedPending = ipcMain.handlers.get(CHANNELS.terminalProvide)(event, {
     requestId: "renderer-request-destroyed",

@@ -159,7 +159,45 @@ function createUrgentInputPortRegistry(dispatch) {
   };
 }
 
-function createSender(parentPort, webContentsId, outputPorts) {
+function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeline) {
+  const deliverTerminalData = (payload) => {
+    const tapMessage = {
+      kind: "output-tap",
+      sessionId: payload?.sessionId,
+      data: payload?.data,
+    };
+    if (payload?.meta) tapMessage.meta = payload.meta;
+    parentPort.postMessage(tapMessage);
+    const pipelineMode = terminalDataPipeline?.getOutputMode?.(payload?.sessionId) ?? 0;
+    if ((pipelineMode & 1) !== 0) {
+      terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data);
+    }
+    const deliver = (data, transformed = false) => {
+      const meta = transformed
+        ? {
+            ...(payload?.meta ?? {}),
+            pluginPipelineIngressBytes: String(payload?.data ?? "").length,
+          }
+        : payload?.meta;
+      if (outputPorts?.post?.(payload?.sessionId, data, meta)) return;
+      const outputMessage = {
+        kind: "output",
+        sessionId: payload?.sessionId,
+        data,
+        tapped: true,
+      };
+      if (meta) outputMessage.meta = meta;
+      parentPort.postMessage(outputMessage);
+    };
+    if (!terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
+      deliver(payload?.data, false);
+      return;
+    }
+    void terminalDataPipeline.interceptOutput(payload?.sessionId, payload?.data).then(
+      (data) => deliver(data, true),
+      () => deliver(payload?.data, false),
+    );
+  };
   return {
     id: webContentsId,
     isDestroyed() {
@@ -167,32 +205,12 @@ function createSender(parentPort, webContentsId, outputPorts) {
     },
     send(channel, payload) {
       if (channel === "netcatty:data") {
-        const tapMessage = {
-          kind: "output-tap",
-          sessionId: payload?.sessionId,
-          data: payload?.data,
-        };
-        if (payload?.meta) tapMessage.meta = payload.meta;
-        parentPort.postMessage(tapMessage);
-        if (outputPorts?.post?.(payload?.sessionId, payload?.data, payload?.meta)) {
-          return;
-        }
-        const outputMessage = {
-          kind: "output",
-          sessionId: payload?.sessionId,
-          data: payload?.data,
-          // The output-tap message above already notified main-process taps
-          // for this chunk; flag the fallback delivery so the worker manager
-          // does not notify them a second time (would double-write session
-          // logs and script output buffers).
-          tapped: true,
-        };
-        if (payload?.meta) outputMessage.meta = payload.meta;
-        parentPort.postMessage(outputMessage);
+        deliverTerminalData(payload);
         return;
       }
       if (channel === "netcatty:exit" && payload?.sessionId) {
         outputPorts?.closeSession?.(payload.sessionId);
+        terminalDataPipeline?.detach?.(payload.sessionId, undefined, "session-closed");
       }
       parentPort.postMessage({
         kind: "renderer-event",
@@ -208,6 +226,7 @@ function createTerminalWorkerRuntime(options = {}) {
   const {
     parentPort,
     registerBridges,
+    terminalDataPipeline,
   } = options;
   const ipcMain = createIpcMainHarness();
   let started = false;
@@ -226,7 +245,7 @@ function createTerminalWorkerRuntime(options = {}) {
     }
     try {
       const result = await handler({
-        sender: createSender(parentPort, message.webContentsId, outputPorts),
+        sender: createSender(parentPort, message.webContentsId, outputPorts, terminalDataPipeline),
       }, message.payload);
       parentPort.postMessage({
         kind: "response",
@@ -254,9 +273,10 @@ function createTerminalWorkerRuntime(options = {}) {
     }
     if (message.channel === "netcatty:close" && message.payload?.sessionId) {
       outputPorts.closeSession(message.payload.sessionId);
+      terminalDataPipeline?.detach?.(message.payload.sessionId, undefined, "session-closed");
     }
     listener({
-      sender: createSender(parentPort, message.webContentsId, outputPorts),
+      sender: createSender(parentPort, message.webContentsId, outputPorts, terminalDataPipeline),
     }, message.payload);
   }
 
@@ -285,6 +305,14 @@ function createTerminalWorkerRuntime(options = {}) {
     }
     if (message?.kind === "output-port") {
       outputPorts.open(message.sessionId, ports?.[0], message.bufferedOutput);
+      return;
+    }
+    if (message?.kind === "terminal-interceptor-port") {
+      terminalDataPipeline?.attach?.(message, ports?.[0]);
+      return;
+    }
+    if (message?.kind === "terminal-interceptor-detach") {
+      terminalDataPipeline?.detach?.(message.sessionId, message.direction, "detached");
       return;
     }
     if (message?.kind === "output-flush") {
@@ -323,7 +351,7 @@ function createTerminalWorkerRuntime(options = {}) {
     start,
     ipcMain,
     createSender(webContentsId) {
-      return createSender(parentPort, webContentsId, outputPorts);
+      return createSender(parentPort, webContentsId, outputPorts, terminalDataPipeline);
     },
     closeUrgentInputPortsForTest() {
       urgentInputPorts?.closeAll();

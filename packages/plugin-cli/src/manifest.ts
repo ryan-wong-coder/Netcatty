@@ -466,6 +466,13 @@ function validateSemantics(manifest: PluginManifest): string[] {
     for (const permission of providerPermissions.get(provider.kind) ?? ["provider.terminal"]) {
       requirePermission(true, permission, `Provider ${provider.id}`);
     }
+    if (provider.kind === "terminal.interceptor.input"
+      || provider.kind === "terminal.interceptor.output") {
+      requirePermission(true, "runtime.advanced", `Provider ${provider.id}`);
+      if (!manifest.main.node) {
+        errors.push(`Provider ${provider.id} requires a Node utility entrypoint`);
+      }
+    }
   }
   for (const companion of manifest.companionExecutables ?? []) {
     for (const permission of companion.permissions ?? []) {

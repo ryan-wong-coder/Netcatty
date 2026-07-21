@@ -94,6 +94,7 @@ function registerPluginBridge(ipcMain, options) {
   const manager = options.manager;
   const contributionService = options.contributionService;
   const terminalProviderService = options.terminalProviderService;
+  const terminalDataPipelineService = options.terminalDataPipelineService;
   const viewHost = options.viewHost;
   const env = options.env ?? process.env;
   const isTrustedSender = options.isTrustedSender;
@@ -253,9 +254,15 @@ function registerPluginBridge(ipcMain, options) {
     controller?.abort();
     return controller != null;
   });
-  handle(CHANNELS.terminalSessionEvent, async (_activeManager, payload) => {
+  handle(CHANNELS.terminalSessionEvent, async (_activeManager, payload, event) => {
     if (!terminalProviderService) throw new Error("Plugin Terminal Providers are unavailable");
-    return terminalProviderService.publishSessionEvent(payload);
+    const [providers] = await Promise.all([
+      terminalProviderService.publishSessionEvent(payload),
+      terminalDataPipelineService?.handleSessionEvent?.(payload, {
+        webContentsId: event?.sender?.id,
+      }) ?? [],
+    ]);
+    return providers;
   });
   handle(CHANNELS.openView, async (_activeManager, payload, event) => {
     if (!viewHost) throw new Error("Plugin views are unavailable");

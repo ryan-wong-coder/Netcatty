@@ -310,6 +310,8 @@ declare global {
       data: string,
       options?: {
         automated?: boolean;
+        /** Host-classified secret/no-echo input; always bypasses plugin observers and interceptors. */
+        sensitive?: boolean;
         lineDelayMs?: number;
         logRewrite?: { sentCommand: string; displayCommand: string };
       },
@@ -437,6 +439,8 @@ declare global {
           /** True while Mosh is still on the ephemeral SSH handshake PTY. */
           moshHandshake?: boolean;
           terminalPerf?: NetcattyTerminalOutputPerfMeta;
+          /** Original host output units acknowledged even when an interceptor changes display length. */
+          pluginPipelineIngressBytes?: number;
         },
       ) => void,
       options?: { replayBacklog?: boolean },

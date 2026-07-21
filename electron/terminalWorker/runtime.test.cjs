@@ -82,6 +82,29 @@ test("runtime invokes registered request handlers and posts responses", async ()
   ]);
 });
 
+test("runtime routes interceptor ports to the worker-owned data pipeline", () => {
+  const parentPort = createParentPort();
+  const attached = [];
+  const detached = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      attach(message, port) { attached.push({ message, port }); },
+      detach(sessionId, direction) { detached.push({ sessionId, direction }); },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+  const port = new FakePort();
+  parentPort.emitMessage({
+    data: { kind: "terminal-interceptor-port", sessionId: "session-1", direction: "output" },
+    ports: [port],
+  });
+  assert.equal(attached[0].port, port);
+  parentPort.emitMessage({ kind: "terminal-interceptor-detach", sessionId: "session-1", direction: "output" });
+  assert.deepEqual(detached, [{ sessionId: "session-1", direction: "output" }]);
+});
+
 test("runtime invokes fire-and-forget listeners", () => {
   const parentPort = createParentPort();
   const calls = [];
@@ -208,6 +231,76 @@ test("runtime routes terminal data over output messages", async () => {
     data: "hello",
     tapped: true,
   });
+});
+
+test("runtime keeps the no-interceptor output path synchronous and allocation-free", async () => {
+  const parentPort = createParentPort();
+  let interceptCalls = 0;
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 0; },
+      async interceptOutput() { interceptCalls += 1; return "changed"; },
+    },
+    registerBridges(ipcMain) {
+      ipcMain.handle("netcatty:test", (event) => {
+        event.sender.send("netcatty:data", { sessionId: "s1", data: "hello" });
+        assert.equal(parentPort.messages[1]?.data, "hello");
+        return null;
+      });
+    },
+  });
+  runtime.start();
+  parentPort.emitMessage({
+    kind: "request",
+    requestId: "req-no-plugin",
+    channel: "netcatty:test",
+    payload: {},
+    webContentsId: 7,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(interceptCalls, 0);
+});
+
+test("runtime sends transformed output to the renderer while host taps retain original data", async () => {
+  const parentPort = createParentPort();
+  const observed = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 3; },
+      observeOutput(sessionId, data) { observed.push({ sessionId, data }); },
+      async interceptOutput(_sessionId, data) { return String(data).toUpperCase(); },
+    },
+    registerBridges(ipcMain) {
+      ipcMain.handle("netcatty:test", (event) => {
+        event.sender.send("netcatty:data", { sessionId: "s1", data: "hello" });
+        return null;
+      });
+    },
+  });
+  runtime.start();
+  parentPort.emitMessage({
+    kind: "request",
+    requestId: "req-plugin",
+    channel: "netcatty:test",
+    payload: {},
+    webContentsId: 7,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(parentPort.messages[0], {
+    kind: "output-tap",
+    sessionId: "s1",
+    data: "hello",
+  });
+  assert.deepEqual(parentPort.messages[1], {
+    kind: "output",
+    sessionId: "s1",
+    data: "HELLO",
+    tapped: true,
+    meta: { pluginPipelineIngressBytes: 5 },
+  });
+  assert.deepEqual(observed, [{ sessionId: "s1", data: "hello" }]);
 });
 
 test("runtime routes terminal data over a transferred output port", async () => {

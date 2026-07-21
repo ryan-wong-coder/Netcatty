@@ -26,6 +26,8 @@ function mergeTerminalDataMeta(first, second, options = {}) {
   const droppedOutputAlternateScreenAction = second?.droppedOutputMayAffectTerminalState
     ? second?.droppedOutputAlternateScreenAction
     : (second?.droppedOutputAlternateScreenAction ?? first?.droppedOutputAlternateScreenAction);
+  const pluginPipelineIngressBytes = Number(first?.pluginPipelineIngressBytes ?? 0)
+    + Number(second?.pluginPipelineIngressBytes ?? 0);
 
   if (droppedOutputMayAffectTerminalState) {
     merged.droppedOutputMayAffectTerminalState = true;
@@ -37,6 +39,12 @@ function mergeTerminalDataMeta(first, second, options = {}) {
     merged.droppedOutputAlternateScreenAction = droppedOutputAlternateScreenAction;
   } else {
     delete merged.droppedOutputAlternateScreenAction;
+  }
+
+  if (pluginPipelineIngressBytes > 0) {
+    merged.pluginPipelineIngressBytes = pluginPipelineIngressBytes;
+  } else {
+    delete merged.pluginPipelineIngressBytes;
   }
 
   if (options.preserveTerminalPerf !== true) {

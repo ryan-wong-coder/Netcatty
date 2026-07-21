@@ -924,11 +924,14 @@ test("terminal provider kinds require their least-privilege data capabilities", 
   });
   assert.equal(insufficient.valid, false);
   assert.match(insufficient.errors.join("\n"), /terminal\.intercept\.input/);
+  assert.match(insufficient.errors.join("\n"), /runtime\.advanced/);
+  assert.match(insufficient.errors.join("\n"), /Node utility entrypoint/);
 
   const sufficient = validateManifestValue({
     ...validManifest,
+    main: { ...validManifest.main, node: "dist/node.js" },
     permissions: {
-      required: ["provider.terminal", "terminal.intercept.input"],
+      required: ["runtime.advanced", "provider.terminal", "terminal.intercept.input"],
     },
     contributes: { providers: [provider] },
   });
@@ -1047,8 +1050,10 @@ test("planned phase consumers are representable without private application type
     },
     {
       ...validManifest,
+      main: { ...validManifest.main, node: "dist/node.js" },
       permissions: {
         required: [
+          "runtime.advanced",
           "provider.terminal",
           "terminal.intercept.input",
           "terminal.intercept.output",

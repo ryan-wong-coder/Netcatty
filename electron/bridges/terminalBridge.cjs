@@ -78,6 +78,7 @@ let terminalOutputChannel = null;
 let selectZmodemUploadFiles = null;
 let selectZmodemDownloadDirectory = null;
 let reportOpenedSessionActivity = null;
+let terminalDataPipeline = null;
 
 const DEFAULT_UTF8_LOCALE = "en_US.UTF-8";
 const LOGIN_SHELLS = new Set(["bash", "zsh", "fish", "ksh"]);
@@ -117,6 +118,7 @@ function init(deps) {
   reportOpenedSessionActivity = typeof deps.reportOpenedSessionActivity === "function"
     ? deps.reportOpenedSessionActivity
     : null;
+  terminalDataPipeline = deps.terminalDataPipeline || null;
   configureTerminalSessionDataEmitter({
     getSession: (sessionId) => sessions?.get(sessionId),
     outputChannel: terminalOutputChannel,
@@ -1467,6 +1469,22 @@ function writeToSessionNow(payload, data, logRewrite = payload.logRewrite) {
   }
 }
 
+function writeToSessionWithInterception(payload, data, logRewrite = payload.logRewrite) {
+  const bypass = payload?.sensitive === true || isTerminalReportSequence(data);
+  if (!terminalDataPipeline?.interceptInput
+    || !terminalDataPipeline.has?.(payload.sessionId, "input")) {
+    writeToSessionNow(payload, data, logRewrite);
+    return;
+  }
+  void terminalDataPipeline.interceptInput(payload.sessionId, data, {
+    sensitive: payload?.sensitive === true,
+    bypass,
+  }).then(
+    (transformed) => writeToSessionNow(payload, transformed, logRewrite),
+    () => writeToSessionNow(payload, data, logRewrite),
+  );
+}
+
 function writeToSession(event, payload) {
   const session = sessions.get(payload.sessionId);
   if (!session) return;
@@ -1493,7 +1511,7 @@ function writeToSession(event, payload) {
       const sendChunk = () => {
         const current = sessions.get(payload.sessionId);
         if (!current) return;
-        writeToSessionNow(
+        writeToSessionWithInterception(
           { ...payload, lineDelayMs: undefined },
           chunk,
           index === 0 ? payload.logRewrite : undefined,
@@ -1509,7 +1527,7 @@ function writeToSession(event, payload) {
     return;
   }
 
-  writeToSessionNow(payload, payload.data);
+  writeToSessionWithInterception(payload, payload.data);
 }
 
 function drainPendingOutputForInterrupt(sessionId, session, trace) {

@@ -93,6 +93,8 @@ The first-party placement path selects the utility runtime whenever companions
 are declared, including manifests that also provide a browser entrypoint.
 The supervisor repeats the placement check immediately before reserving or
 spawning a process. Phase 9 adds verified publisher trust to this same boundary.
+Privileged Terminal interceptors use the same deterministic utility placement
+rule and additionally require their direction-specific interception grant.
 
 ### Network
 

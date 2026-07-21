@@ -80,6 +80,14 @@ test("PluginSecretStore exposes opaque references instead of plaintext reads", a
   assert.equal(testSecretRef.key, "token");
 });
 
+test("terminal interceptors cannot fall back to the JSON Provider overload", async () => {
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /kind: Exclude<ProviderKind, TerminalInterceptorKind>,\s*handler: PluginProviderHandler/u,
+  );
+});
+
 test("DisposableStore disposes every item once", () => {
   const store = new DisposableStore();
   const calls: string[] = [];

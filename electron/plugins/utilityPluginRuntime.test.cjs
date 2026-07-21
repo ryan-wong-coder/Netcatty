@@ -9,6 +9,23 @@ const { EventEmitter } = require("node:events");
 
 const { UtilityPluginRuntime, resolveUtilityEntrypoint } = require("./utilityPluginRuntime.cjs");
 
+test("utility runtime transfers a dedicated terminal interceptor port without routing payload bytes", () => {
+  const posts = [];
+  const runtime = new UtilityPluginRuntime({
+    utilityProcess: {},
+    plugin: { id: "com.example", manifest: { main: { node: "dist/index.js" } } },
+    packageRoot: "/tmp/plugin",
+    bootstrapPath: "/runtime.mjs",
+    moduleMappings: {},
+  });
+  runtime.router = {};
+  runtime.child = { postMessage(message, transfer) { posts.push({ message, transfer }); } };
+  const port = { close() {} };
+  runtime.attachTerminalInterceptor({ providerId: "com.example.input", direction: "input" }, port);
+  assert.equal(posts[0].message.type, "netcatty-plugin:terminal-interceptor:attach");
+  assert.deepEqual(posts[0].transfer, [port]);
+});
+
 test("utility entrypoint is realpath-contained at the moment of launch", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-plugin-utility-entry-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
