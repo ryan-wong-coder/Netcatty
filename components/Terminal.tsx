@@ -1594,12 +1594,15 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     hibernatePendingBufferRef.current = "";
     disposeDataRef.current = terminalBackend.onSessionData(
       backendId,
-      (chunk) => {
+      (chunk, meta) => {
         hibernatePendingBufferRef.current = appendHibernatePendingBuffer(
           hibernatePendingBufferRef.current,
           chunk,
         );
-        ackTerminalSessionFlow(terminalBackend, backendId, chunk.length);
+        const pluginPipelineIngressBytes = Number.isFinite(meta?.pluginPipelineIngressBytes)
+          ? Math.max(0, Number(meta.pluginPipelineIngressBytes))
+          : chunk.length;
+        ackTerminalSessionFlow(terminalBackend, backendId, pluginPipelineIngressBytes);
       },
       { replayBacklog: true },
     );

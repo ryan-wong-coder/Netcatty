@@ -52,6 +52,7 @@ class PluginTerminalDataPipelineService {
     this.sessionOwnedSubscription = null;
     this.active = new Map();
     this.declined = new Set();
+    this.quarantined = new Set();
     this.selectedProviders = new Map();
     this.operations = new Map();
     this.sessionEpochs = new Map();
@@ -95,6 +96,7 @@ class PluginTerminalDataPipelineService {
           // broken interceptor with its existing grants.
           this.selectedProviders.delete(key);
           this.declined.add(key);
+          this.quarantined.add(key);
           this.showWarning(warning);
         }
       });
@@ -227,6 +229,9 @@ class PluginTerminalDataPipelineService {
     const providers = this.#providers(direction, options.locale);
     if (providers.length === 0) return Object.freeze({ status: "none", direction });
     const key = this.#key(session.sessionId, direction);
+    if (this.quarantined.has(key)) {
+      return Object.freeze({ status: "declined", direction });
+    }
     if (options.providerId == null && this.declined.has(key)) {
       return Object.freeze({ status: "declined", direction });
     }
@@ -374,6 +379,7 @@ class PluginTerminalDataPipelineService {
       for (const direction of DIRECTIONS) {
         const key = this.#key(session.sessionId, direction);
         this.declined.delete(key);
+        this.quarantined.delete(key);
         this.selectedProviders.delete(key);
       }
       return Object.freeze([]);
@@ -393,6 +399,7 @@ class PluginTerminalDataPipelineService {
       for (const direction of DIRECTIONS) {
         const key = this.#key(session.sessionId, direction);
         this.declined.delete(key);
+        this.quarantined.delete(key);
         this.selectedProviders.delete(key);
       }
       this.sessionEpochs.set(session.sessionId, (this.sessionEpochs.get(session.sessionId) ?? 0) + 1);
@@ -440,6 +447,7 @@ class PluginTerminalDataPipelineService {
     }
     for (const key of [...this.active.keys()]) this.#detachKey(key, "shutdown");
     this.declined.clear();
+    this.quarantined.clear();
     this.selectedProviders.clear();
     this.pendingOwnership.clear();
     this.workerWarningSubscription?.dispose?.();

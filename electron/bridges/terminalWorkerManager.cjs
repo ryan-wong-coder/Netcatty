@@ -152,6 +152,11 @@ function mergeTerminalOutputMeta(previous, next) {
     + Number(next.pluginPipelineIngressBytes ?? 0);
   if (pluginPipelineIngressBytes > 0) merged.pluginPipelineIngressBytes = pluginPipelineIngressBytes;
   else delete merged.pluginPipelineIngressBytes;
+  if (next.pluginPipelineSensitiveInput === true) {
+    merged.pluginPipelineSensitiveInput = true;
+  } else {
+    delete merged.pluginPipelineSensitiveInput;
+  }
   if (!merged.droppedOutputMayAffectTerminalState) {
     delete merged.droppedOutputMayAffectTerminalState;
   }
@@ -246,7 +251,11 @@ function createTerminalWorkerManager(options = {}) {
   }
 
   function withOutputChunkMeta(chunk, meta) {
-    const mergedMeta = mergeTerminalOutputMeta(getOutputChunkMeta(chunk), meta);
+    // Dropped metadata describes older chunks. Merge the retained chunk last
+    // so latest-chunk state such as sensitive-input classification cannot be
+    // revived by an earlier prompt while additive ingress/state metadata is
+    // still preserved.
+    const mergedMeta = mergeTerminalOutputMeta(meta, getOutputChunkMeta(chunk));
     if (!mergedMeta) return chunk;
     return { data: getOutputChunkData(chunk), meta: mergedMeta };
   }

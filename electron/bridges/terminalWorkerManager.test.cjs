@@ -685,6 +685,45 @@ test("metadata-only interceptor output obeys the pending chunk cap", async () =>
   });
 });
 
+test("pending output merge keeps sensitive state from only the latest chunk", async () => {
+  const child = new FakeChild();
+  const outputPort = { label: "worker-output-port" };
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork() { return child; } },
+    terminalOutputChannel: { openSession() { return outputPort; } },
+    electronModule: { webContents: { fromId(id) { return { id }; } } },
+    maxPendingOutputChunks: 1,
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "local-1" },
+  });
+  await promise;
+  child.emit("message", {
+    kind: "output",
+    sessionId: "local-1",
+    data: "Password: ",
+    meta: { pluginPipelineIngressBytes: 10, pluginPipelineSensitiveInput: true },
+  });
+  child.emit("message", {
+    kind: "output",
+    sessionId: "local-1",
+    data: "READY",
+    meta: { pluginPipelineIngressBytes: 5 },
+  });
+  child.emit("message", { kind: "output-port-ready", sessionId: "local-1" });
+
+  assert.deepEqual(child.messages[2], {
+    kind: "output-flush",
+    sessionId: "local-1",
+    chunks: [{ data: "READY", meta: { pluginPipelineIngressBytes: 15 } }],
+  });
+});
+
 test("worker fallback output after a ready output port is delivered over legacy IPC", async () => {
   const child = new FakeChild();
   const sent = [];

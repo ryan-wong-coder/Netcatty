@@ -109,6 +109,7 @@ function harness(options = {}) {
     selections,
     warnings,
     runtimeListeners,
+    contributionListeners,
     contributionService,
   };
 }
@@ -426,4 +427,22 @@ test("a failed interceptor stays quarantined for the rest of the session", async
   assert.equal(h.authorized.length, 2, "the quarantined provider must not be authorized again");
   assert.equal(h.attached.length, 2, "the quarantined provider must not be reattached");
   assert.equal(h.warnings.length, 1);
+});
+
+test("contribution changes do not clear a failed interceptor quarantine", async () => {
+  const h = harness();
+  assert.equal((await h.service.configureDirection(session, "input")).status, "active");
+
+  h.worker.warningListener({
+    sessionId: session.sessionId,
+    direction: "input",
+    code: "protocol",
+    message: "Interceptor returned an invalid frame",
+  });
+  h.contributionListeners[0]();
+
+  const [result] = await h.service.handleSessionEvent({ type: "snapshot", session });
+  assert.equal(result.status, "declined");
+  assert.equal(h.authorized.length, 2);
+  assert.equal(h.attached.length, 2);
 });

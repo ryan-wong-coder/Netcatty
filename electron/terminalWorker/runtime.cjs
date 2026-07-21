@@ -186,9 +186,10 @@ function createSender(
     };
     if (payload?.meta) tapMessage.meta = payload.meta;
     if (payload?.tapped !== true) parentPort.postMessage(tapMessage);
+    const pipelineProcessed = payload?.pipelineProcessed === true;
     const pipelineMode = terminalDataPipeline?.getOutputMode?.(payload?.sessionId) ?? 0;
     let sensitiveInput = false;
-    if (pipelineMode !== 0) {
+    if (!pipelineProcessed && pipelineMode !== 0) {
       sensitiveInput = terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data) === true;
     }
     const deliver = (data, transformed = false) => {
@@ -212,7 +213,7 @@ function createSender(
       parentPort.postMessage(outputMessage);
     };
     const previous = pendingOutputBySession.get(sessionId);
-    if (!terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
+    if (pipelineProcessed || !terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
       if (!previous) {
         deliver(payload?.data, false);
         return;
@@ -294,7 +295,14 @@ function createTerminalWorkerRuntime(options = {}) {
     for (const chunk of chunks || []) {
       const data = chunk && typeof chunk === "object" && "data" in chunk ? chunk.data : chunk;
       const meta = chunk && typeof chunk === "object" ? chunk.meta : undefined;
-      sender.send("netcatty:data", { sessionId, data, meta, tapped: true });
+      const pipelineProcessed = Number.isFinite(meta?.pluginPipelineIngressBytes);
+      sender.send("netcatty:data", {
+        sessionId,
+        data,
+        meta,
+        tapped: true,
+        pipelineProcessed,
+      });
     }
   }
 

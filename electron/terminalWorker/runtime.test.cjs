@@ -576,6 +576,46 @@ test("runtime routes buffered startup output through the selected interceptor", 
   assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
 });
 
+test("runtime does not re-intercept already transformed buffered output", async () => {
+  const parentPort = createParentPort();
+  const outputPort = new FakePort();
+  const intercepted = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode: () => 2,
+      observeOutput: () => false,
+      interceptOutput(sessionId, data) {
+        intercepted.push({ sessionId, data });
+        return Promise.resolve(`again:${data}`);
+      },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  parentPort.emitMessage({
+    data: {
+      kind: "output-port",
+      sessionId: "s1",
+      bufferedOutput: [{
+        data: "EARLY",
+        meta: { pluginPipelineIngressBytes: 5, pluginPipelineSensitiveInput: true },
+      }],
+    },
+    ports: [outputPort],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(intercepted, []);
+  assert.deepEqual(outputPort.messages, [{
+    sessionId: "s1",
+    data: "EARLY",
+    meta: { pluginPipelineIngressBytes: 5, pluginPipelineSensitiveInput: true },
+  }]);
+  assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
+});
+
 test("runtime.createSender uses the transferred output port", () => {
   const parentPort = createParentPort();
   const outputPort = new FakePort();
