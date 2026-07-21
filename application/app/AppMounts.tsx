@@ -172,11 +172,16 @@ export const TerminalLayerMount: React.FC<TerminalLayerProps> = (props) => {
     sessionIds,
     workspaceIds,
   }) || !!props.draggingSessionId;
-  const [shouldMount, setShouldMount] = useState(isVisible);
+  // Silent MCP sessions never become the activeTabId, so `isVisible` alone
+  // would leave this whole layer (and its PTY-starting TerminalPane) unmounted
+  // for up to 5s (the idle-callback fallback below) after host_open returns —
+  // long enough for an immediate terminal_execute to race an unstarted session.
+  const hasHiddenSession = props.sessions.some((session) => session.hiddenFromTabs);
+  const [shouldMount, setShouldMount] = useState(isVisible || hasHiddenSession);
 
   useEffect(() => {
-    if (isVisible) setShouldMount(true);
-  }, [isVisible]);
+    if (isVisible || hasHiddenSession) setShouldMount(true);
+  }, [isVisible, hasHiddenSession]);
 
   useEffect(() => {
     if (shouldMount) return;

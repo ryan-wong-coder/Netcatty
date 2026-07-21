@@ -65,3 +65,12 @@ test('active tab chrome keeps removed theme side effects unmounted', () => {
   assert.equal(activeTabChromeSource.includes(removedThemeHook), false);
   assert.equal(activeTabChromeSource.includes(removedThemeStoreSetter), false);
 });
+
+test('terminal layer force-mounts immediately when a hidden MCP session exists', () => {
+  // A silent session never becomes activeTabId, so without this it would wait
+  // for the up-to-5s idle-callback fallback before TerminalPanesHost renders
+  // TerminalPane and starts the PTY — racing an immediate terminal_execute.
+  assert.match(appMountsSource, /hasHiddenSession = props\.sessions\.some\(\(session\) => session\.hiddenFromTabs\)/);
+  assert.match(appMountsSource, /useState\(isVisible \|\| hasHiddenSession\)/);
+  assert.match(appMountsSource, /if \(isVisible \|\| hasHiddenSession\) setShouldMount\(true\)/);
+});
