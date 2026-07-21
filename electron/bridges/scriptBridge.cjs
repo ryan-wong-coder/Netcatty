@@ -166,6 +166,7 @@ function writeToSession(sessionId, data, options = {}) {
     sessionId,
     data,
     automated: options.automated !== false,
+    ...(options.sensitive === true ? { sensitive: true } : {}),
   };
   const webContentsId = getMainWindow?.()?.webContents?.id;
   if (terminalWorkerManager) {

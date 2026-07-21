@@ -494,6 +494,7 @@ export function ScriptDialogHost() {
         </DialogHeader>
         {request.type === 'prompt' ? (
           <Input
+            type={request.sensitive ? 'password' : 'text'}
             value={promptValue}
             onChange={(event) => setPromptValue(event.target.value)}
             autoFocus

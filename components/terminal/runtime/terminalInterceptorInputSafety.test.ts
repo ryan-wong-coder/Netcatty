@@ -9,6 +9,18 @@ const preloadSource = readFileSync(
   new URL("../../../electron/preload/api.cjs", import.meta.url),
   "utf8",
 );
+const scriptBridgeSource = readFileSync(
+  new URL("../../../electron/bridges/scriptBridge.cjs", import.meta.url),
+  "utf8",
+);
+const scriptCodegenSource = readFileSync(
+  new URL("../../../electron/scripts/scriptCodegen.cjs", import.meta.url),
+  "utf8",
+);
+const scriptDialogSource = readFileSync(
+  new URL("../../scripts/ScriptDialogHost.tsx", import.meta.url),
+  "utf8",
+);
 
 test("password-prompt input is classified before prompt state reset and cannot broadcast", () => {
   assert.match(
@@ -41,6 +53,13 @@ test("confirmed sudo credentials and preload transport preserve the sensitive ma
   assert.match(preloadSource, /sensitive: options\?\.sensitive === true/u);
 });
 
+test("generated script credentials stay masked and preserve the sensitive marker", () => {
+  assert.match(scriptCodegenSource, /dialog\.prompt\([\s\S]*?\{ sensitive: true \}\)/u);
+  assert.match(scriptCodegenSource, /screen\.sendLine\([\s\S]*?\{ sensitive: true \}\)/u);
+  assert.match(scriptBridgeSource, /options\.sensitive === true \? \{ sensitive: true \} : \{\}/u);
+  assert.match(scriptDialogSource, /type=\{request\.sensitive \? 'password' : 'text'\}/u);
+});
+
 test("renderer flow control acknowledges host ingress rather than transformed display length", () => {
   assert.match(
     attachmentSource,
@@ -53,5 +72,9 @@ test("renderer flow control acknowledges host ingress rather than transformed di
   assert.match(
     attachmentSource,
     /!filtered\.accepted && pluginPipelineIngressBytes != null[\s\S]*?\? pluginPipelineIngressBytes[\s\S]*?: pluginPipelineIngressBytes != null[\s\S]*?\? 0[\s\S]*?: filtered\.droppedBytes/u,
+  );
+  assert.match(
+    attachmentSource,
+    /const displayBytes = data\.length;[\s\S]*?enqueueTerminalWrite\(term, displayBytes,/u,
   );
 });

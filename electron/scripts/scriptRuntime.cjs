@@ -608,27 +608,31 @@ function createScriptRuntime(deps) {
   };
 
   const screenApi = {
-    send(text) {
+    send(text, options = {}) {
       return markHandled(ignoreIfStopped(async () => {
         if (deps.isAborted?.()) return;
         assertWriteAllowed("screen.send");
         await waitIfPaused();
         const payload = String(text ?? "");
-        await trackStep(`send: ${truncateActivityLabel(formatScriptInputForLog(payload), 60)}`);
+        const sensitive = options?.sensitive === true;
+        const visiblePayload = sensitive ? "[sensitive]" : formatScriptInputForLog(payload);
+        await trackStep(`send: ${truncateActivityLabel(visiblePayload, 60)}`);
         if (deps.isAborted?.()) return;
-        appendLog(runId, `→ ${formatScriptInputForLog(payload)}`);
-        writeToSession(sessionId, payload, { automated: true });
+        appendLog(runId, `→ ${visiblePayload}`);
+        writeToSession(sessionId, payload, { automated: true, sensitive });
       }));
     },
-    sendLine(text) {
+    sendLine(text, options = {}) {
       return markHandled(ignoreIfStopped(async () => {
         if (deps.isAborted?.()) return;
         assertWriteAllowed("screen.sendLine");
         await waitIfPaused();
         const line = String(text ?? "");
-        await trackStep(`sendLine: ${truncateActivityLabel(line, 60)}`);
+        const sensitive = options?.sensitive === true;
+        const visibleLine = sensitive ? "[sensitive]" : line;
+        await trackStep(`sendLine: ${truncateActivityLabel(visibleLine, 60)}`);
         if (deps.isAborted?.()) return;
-        appendLog(runId, `→ ${line}`);
+        appendLog(runId, `→ ${visibleLine}`);
         // Bastion menus can ignore a single "line\r" packet even when
         // stream.write succeeds. Match xterm: body, then Enter (#1960).
         // Consume only pre-send buffer length so prompts that arrive between
@@ -638,6 +642,7 @@ function createScriptRuntime(deps) {
         if (line.length > 0) {
           writeToSession(sessionId, line, {
             automated: true,
+            sensitive,
             invalidateStartupSeed: false,
           });
           await interruptibleSleep(30, deps.isAborted);
@@ -645,6 +650,7 @@ function createScriptRuntime(deps) {
         }
         writeToSession(sessionId, "\r", {
           automated: true,
+          sensitive,
           invalidateStartupSeed: false,
         });
         buffer.consumeThroughAbsolute(lengthBeforeSend);
@@ -713,9 +719,14 @@ function createScriptRuntime(deps) {
       assertNotAborted();
       return markHandled(showDialog("confirm", String(message ?? "")));
     },
-    prompt(message, defaultValue = "") {
+    prompt(message, defaultValue = "", options = {}) {
       assertNotAborted();
-      return markHandled(showDialog("prompt", String(message ?? ""), String(defaultValue ?? "")));
+      return markHandled(showDialog(
+        "prompt",
+        String(message ?? ""),
+        String(defaultValue ?? ""),
+        { sensitive: options?.sensitive === true },
+      ));
     },
     form(spec) {
       assertNotAborted();

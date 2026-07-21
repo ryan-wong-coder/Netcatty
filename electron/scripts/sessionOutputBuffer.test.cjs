@@ -804,8 +804,8 @@ test("stepsToJavaScript sends sensitive prompt result", () => {
     { type: "send", value: "secret", sensitive: true },
     { type: "waitForPrompt", timeoutMs: 30000 },
   ], "2026-06-27");
-  assert.match(code, /const sensitiveValue0 = await nct\.dialog\.prompt\("Enter sensitive value", ""\);/);
-  assert.match(code, /await nct\.screen\.sendLine\(sensitiveValue0\);/);
+  assert.match(code, /const sensitiveValue0 = await nct\.dialog\.prompt\("Enter sensitive value", "", \{ sensitive: true \}\);/);
+  assert.match(code, /await nct\.screen\.sendLine\(sensitiveValue0, \{ sensitive: true \}\);/);
 });
 
 test("stepsToJavaScript generates sendLine and waitForPrompt steps", () => {

@@ -59,7 +59,10 @@ function harness(options = {}) {
     async authorize(context, request) {
       authorized.push({ context, request });
       await options.onAuthorize?.({ context, request, providers });
-      return { scope: "session" };
+      const scope = typeof options.permissionScope === "function"
+        ? options.permissionScope({ context, request, call: authorized.length })
+        : options.permissionScope ?? "session";
+      return { scope };
     },
   };
   const worker = {
@@ -124,6 +127,26 @@ test("pipeline activation requires exact session permissions and transfers one p
   assert.ok(h.authorized.every((entry) => entry.request.sessionId === "session-1"));
   assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin", "worker"]);
   assert.deepEqual(h.attached[0].attachOptions.expectedIdentity, h.identity);
+});
+
+test("pipeline rejects one-use permission grants before opening a streaming port", async () => {
+  const h = harness({ permissionScope: "once" });
+  await assert.rejects(
+    () => h.service.configureDirection(session, "input"),
+    /require a session, application, or persistent permission grant/,
+  );
+  assert.equal(h.authorized.length, 1);
+  assert.equal(h.attached.length, 0);
+
+  const laterOnce = harness({
+    permissionScope: ({ call }) => (call === 2 ? "once" : "session"),
+  });
+  await assert.rejects(
+    () => laterOnce.service.configureDirection(session, "input"),
+    /require a session, application, or persistent permission grant/,
+  );
+  assert.equal(laterOnce.authorized.length, 2);
+  assert.equal(laterOnce.attached.length, 0);
 });
 
 test("multiple interceptors require an explicit per-session selection", async () => {
@@ -331,6 +354,29 @@ test("runtime exit and session disposal detach both directions", async () => {
   });
   assert.deepEqual(h.detached.map((entry) => entry.direction).sort(), ["input", "output"]);
   await h.service.handleSessionEvent({ type: "disposed", session: { ...session, status: "disconnected" } });
+});
+
+test("runtime exit clears the cached provider choice but ordinary reconnect preserves it", async () => {
+  const providers = [
+    provider("com.example", "com.example.input", "input"),
+    provider("com.other", "com.other.input", "input"),
+  ];
+  const h = harness({
+    providers,
+    selectedProviderId: "com.example.input",
+  });
+  await h.service.configureDirection(session, "input");
+  assert.equal(h.selections.length, 1);
+
+  const withdrawn = providers.splice(0);
+  h.runtimeListeners[0]({
+    status: "error",
+    pluginId: "com.example",
+    runtimeId: "runtime-1",
+  });
+  providers.push(...withdrawn);
+  await h.service.configureDirection(session, "input");
+  assert.equal(h.selections.length, 2, "a stopped runtime must discard its session-local choice");
 });
 
 test("terminal worker exit invalidates active bindings before worker restart", async () => {

@@ -129,6 +129,16 @@ test("original output protects password input even when a plugin could hide the 
   pipeline.shutdown();
 });
 
+test("output-only interception classifies sensitive prompts without retaining stale input state", () => {
+  const pipeline = createTerminalDataPipeline();
+  attachTransform(pipeline, { direction: "output" });
+
+  assert.equal(pipeline.observeOutput("session-1", "Pass"), false);
+  assert.equal(pipeline.observeOutput("session-1", "word: "), true);
+  assert.equal(pipeline.observeOutput("session-1", "\r\nordinary output"), false);
+  pipeline.shutdown();
+});
+
 test("an input deadline failure fails open, disables the session binding, and warns once", async () => {
   const warnings = [];
   const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 5, onWarning: (value) => warnings.push(value) });

@@ -110,6 +110,7 @@ export interface ScriptDialogRequest {
   type: 'alert' | 'confirm' | 'prompt' | 'waitForTimeout' | 'form';
   message: string;
   defaultValue?: string;
+  sensitive?: boolean;
   pattern?: string;
   timeoutMs?: number;
   form?: ScriptDialogForm;

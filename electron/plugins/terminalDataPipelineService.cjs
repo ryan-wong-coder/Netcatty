@@ -57,6 +57,11 @@ class PluginTerminalDataPipelineService {
     this.closed = false;
     this.runtimeSupervisor.onDidChangeRuntime?.((event) => {
       if (event.status === "running") return;
+      for (const [key, selection] of this.selectedProviders) {
+        if (selection.pluginId === event.pluginId) {
+          this.selectedProviders.delete(key);
+        }
+      }
       for (const [key, binding] of this.active) {
         if (binding.identity.pluginId === event.pluginId
           && (event.runtimeId == null || binding.identity.runtimeId === event.runtimeId)) {
@@ -97,9 +102,11 @@ class PluginTerminalDataPipelineService {
 
   #pruneContributions() {
     this.declined.clear();
-    for (const [key, providerId] of this.selectedProviders) {
+    for (const [key, selection] of this.selectedProviders) {
       const direction = key.slice(key.lastIndexOf("\0") + 1);
-      if (!this.#providers(direction).some((entry) => entry.provider.id === providerId)) {
+      if (!this.#providers(direction).some((entry) => (
+        entry.provider.id === selection.providerId && entry.pluginId === selection.pluginId
+      ))) {
         this.selectedProviders.delete(key);
       }
     }
@@ -207,7 +214,8 @@ class PluginTerminalDataPipelineService {
         pluginId: existing.identity.pluginId,
       });
     }
-    let providerId = options.providerId ?? this.selectedProviders.get(key);
+    const cachedSelection = this.selectedProviders.get(key);
+    let providerId = options.providerId ?? cachedSelection?.providerId;
     if (providerId != null && !providers.some((entry) => entry.provider.id === providerId)) {
       this.selectedProviders.delete(key);
       providerId = options.providerId;
@@ -244,13 +252,19 @@ class PluginTerminalDataPipelineService {
       securityPrincipal: identity.securityPrincipal,
     };
     for (const permission of ["provider.terminal", `terminal.intercept.${direction}`]) {
-      await this.permissionEngine.authorize(context, {
+      const grant = await this.permissionEngine.authorize(context, {
         permission,
         resources: ["*"],
         sessionId: session.sessionId,
         reason: `Use ${providerId} to intercept Terminal ${direction} data`,
         operationId: `terminal.interceptor.${direction}:${providerId}`,
       });
+      if (!["session", "application", "always"].includes(grant?.scope)) {
+        throw new PluginRpcError(
+          RPC_ERRORS.permissionDenied,
+          "Terminal interceptor streams require a session, application, or persistent permission grant",
+        );
+      }
       this.#assertSessionCurrent(session.sessionId, options.sessionEpoch);
     }
     const currentIdentity = this.runtimeSupervisor.getRuntimeIdentity(activation.plugin.id);
@@ -314,7 +328,10 @@ class PluginTerminalDataPipelineService {
       sessionEpoch: options.sessionEpoch,
     }));
     this.declined.delete(key);
-    this.selectedProviders.set(key, providerId);
+    this.selectedProviders.set(key, Object.freeze({
+      providerId,
+      pluginId: identity.pluginId,
+    }));
     return Object.freeze({ status: "active", direction, providerId, pluginId: identity.pluginId });
   }
 

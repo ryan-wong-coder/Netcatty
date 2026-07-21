@@ -303,6 +303,69 @@ test("runtime sends transformed output to the renderer while host taps retain or
   assert.deepEqual(observed, [{ sessionId: "s1", data: "hello" }]);
 });
 
+test("runtime classifies original prompts when only an output interceptor is active", async () => {
+  const parentPort = createParentPort();
+  const observed = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 2; },
+      observeOutput(sessionId, data) { observed.push({ sessionId, data }); return true; },
+      async interceptOutput() { return "masked> "; },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "Password: " });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(observed, [{ sessionId: "s1", data: "Password: " }]);
+  assert.deepEqual(parentPort.messages.at(-1), {
+    kind: "output",
+    sessionId: "s1",
+    data: "masked> ",
+    tapped: true,
+    meta: { pluginPipelineIngressBytes: 10, pluginPipelineSensitiveInput: true },
+  });
+});
+
+test("runtime delivers pending intercepted output before closing the session", async () => {
+  const parentPort = createParentPort();
+  let releaseOutput;
+  const detached = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 2; },
+      observeOutput() { return false; },
+      interceptOutput() {
+        return new Promise((resolve) => { releaseOutput = resolve; });
+      },
+      detach(sessionId, direction, reason) { detached.push({ sessionId, direction, reason }); },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+  const sender = runtime.createSender(7);
+
+  sender.send("netcatty:data", { sessionId: "s1", data: "final" });
+  sender.send("netcatty:exit", { sessionId: "s1", reason: "closed" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(parentPort.messages.map((message) => message.kind), ["output-tap"]);
+
+  releaseOutput("FINAL");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(parentPort.messages.map((message) => message.kind), [
+    "output-tap",
+    "output",
+    "renderer-event",
+  ]);
+  assert.equal(parentPort.messages[1].data, "FINAL");
+  assert.equal(parentPort.messages[2].channel, "netcatty:exit");
+  assert.deepEqual(detached, [{ sessionId: "s1", direction: undefined, reason: "session-closed" }]);
+});
+
 test("runtime routes terminal data over a transferred output port", async () => {
   const parentPort = createParentPort();
   const outputPort = new FakePort();

@@ -89,6 +89,51 @@ test("createScriptRuntime executes simple log script", async () => {
   assert.deepEqual(logs, ["hello"]);
 });
 
+test("sensitive script input is masked in UI and logs and remains host-bypassed", async () => {
+  const logs = [];
+  const writes = [];
+  const dialogs = [];
+  const runtime = createScriptRuntime({
+    sessionId: "s1",
+    runId: "r-sensitive",
+    appendLog: (_id, message) => logs.push(message),
+    writeToSession: (sessionId, data, options) => writes.push({ sessionId, data, options }),
+    getOutputBuffer: () => ({
+      getText: () => "",
+      consumeThroughAbsolute() {},
+    }),
+    getSessionMeta: () => ({ connected: true, hostname: "host", username: "user" }),
+    showDialog: async (...args) => {
+      dialogs.push(args);
+      return "super-secret";
+    },
+    isPaused: () => false,
+    isAborted: () => false,
+    onStatusChange: () => {},
+  });
+
+  await runtime.execute(`
+    const value = await nct.dialog.prompt("Secret", "", { sensitive: true });
+    await nct.screen.sendLine(value, { sensitive: true });
+  `);
+
+  assert.deepEqual(dialogs[0], ["prompt", "Secret", "", { sensitive: true }]);
+  assert.deepEqual(writes, [
+    {
+      sessionId: "s1",
+      data: "super-secret",
+      options: { automated: true, sensitive: true, invalidateStartupSeed: false },
+    },
+    {
+      sessionId: "s1",
+      data: "\r",
+      options: { automated: true, sensitive: true, invalidateStartupSeed: false },
+    },
+  ]);
+  assert.equal(logs.some((entry) => entry.includes("super-secret")), false);
+  assert.equal(logs.some((entry) => entry.includes("[sensitive]")), true);
+});
+
 test("createScriptRuntime supports regex waits over multiline output", async () => {
   const logs = [];
   const buffer = new SessionOutputBuffer("s1");

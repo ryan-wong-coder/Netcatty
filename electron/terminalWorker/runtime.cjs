@@ -160,6 +160,19 @@ function createUrgentInputPortRegistry(dispatch) {
 }
 
 function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeline) {
+  const pendingOutputBySession = new Map();
+  const postRendererEvent = (channel, payload) => {
+    if (channel === "netcatty:exit" && payload?.sessionId) {
+      outputPorts?.closeSession?.(payload.sessionId);
+      terminalDataPipeline?.detach?.(payload.sessionId, undefined, "session-closed");
+    }
+    parentPort.postMessage({
+      kind: "renderer-event",
+      webContentsId,
+      channel,
+      payload,
+    });
+  };
   const deliverTerminalData = (payload) => {
     const tapMessage = {
       kind: "output-tap",
@@ -170,7 +183,7 @@ function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeli
     parentPort.postMessage(tapMessage);
     const pipelineMode = terminalDataPipeline?.getOutputMode?.(payload?.sessionId) ?? 0;
     let sensitiveInput = false;
-    if ((pipelineMode & 1) !== 0) {
+    if (pipelineMode !== 0) {
       sensitiveInput = terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data) === true;
     }
     const deliver = (data, transformed = false) => {
@@ -196,10 +209,24 @@ function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeli
       deliver(payload?.data, false);
       return;
     }
-    void terminalDataPipeline.interceptOutput(payload?.sessionId, payload?.data).then(
-      (data) => deliver(data, true),
-      () => deliver(payload?.data, false),
-    );
+    const sessionId = payload?.sessionId;
+    let pending;
+    try {
+      pending = Promise.resolve(terminalDataPipeline.interceptOutput(sessionId, payload?.data)).then(
+        (data) => deliver(data, true),
+        () => deliver(payload?.data, false),
+      );
+    } catch {
+      deliver(payload?.data, false);
+      return;
+    }
+    pendingOutputBySession.set(sessionId, pending);
+    const clearPending = () => {
+      if (pendingOutputBySession.get(sessionId) === pending) {
+        pendingOutputBySession.delete(sessionId);
+      }
+    };
+    void pending.then(clearPending, clearPending);
   };
   return {
     id: webContentsId,
@@ -212,15 +239,16 @@ function createSender(parentPort, webContentsId, outputPorts, terminalDataPipeli
         return;
       }
       if (channel === "netcatty:exit" && payload?.sessionId) {
-        outputPorts?.closeSession?.(payload.sessionId);
-        terminalDataPipeline?.detach?.(payload.sessionId, undefined, "session-closed");
+        const pending = pendingOutputBySession.get(payload.sessionId);
+        if (pending) {
+          void pending.then(
+            () => postRendererEvent(channel, payload),
+            () => postRendererEvent(channel, payload),
+          );
+          return;
+        }
       }
-      parentPort.postMessage({
-        kind: "renderer-event",
-        webContentsId,
-        channel,
-        payload,
-      });
+      postRendererEvent(channel, payload);
     },
   };
 }

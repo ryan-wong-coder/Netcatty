@@ -72,6 +72,9 @@ utility runtime with `provider.terminal` and the matching
 `terminal.intercept.input` or `terminal.intercept.output` grant can be attached.
 Authorization is bound to the exact plugin version, runtime ID, runtime kind,
 security principal, terminal session, direction, and declared Provider.
+Because the transferred port is a long-lived capability, both permissions must
+resolve to a session, application, or persistent grant; a one-use grant is
+rejected before either port endpoint is published.
 Browser runtimes are rejected before a port is transferred. Publisher
 signature eligibility remains a distribution-policy decision owned by PR 9;
 the advanced runtime and explicit high-risk permission boundary is already
@@ -121,7 +124,9 @@ itself without a fresh host authorization path.
 Credential protection is outside plugin control. Input that the host marks as
 sensitive/no-echo bypasses the port before buffer creation, including every
 character entered while the password-prompt state is active and confirmed
-sudo/su credential autofill. The terminal worker also recognizes authentication
+sudo/su credential autofill. Recorded automation credentials use a password
+dialog, remain redacted from script activity/logs, and carry the same sensitive
+marker through the script bridge. The terminal worker also recognizes authentication
 challenges from bounded original-output tails before output interception, so an
 output plugin cannot expose a password by hiding or rewriting its prompt.
 Sensitive input is also excluded from terminal broadcast. Terminal protocol replies, urgent interrupts, transfer input gates,

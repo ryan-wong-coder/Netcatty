@@ -73,8 +73,10 @@ function createTerminalDataPipeline(options = {}) {
     const mode = (input ? 1 : 0) | (output ? 2 : 0);
     if (mode) outputModes.set(sessionId, mode);
     else outputModes.delete(sessionId);
-    if (!input) {
+    if (!mode) {
       outputRawTails.delete(sessionId);
+      sensitiveInputSessions.delete(sessionId);
+    } else if (!input) {
       sensitiveInputSessions.delete(sessionId);
     }
   }
@@ -228,7 +230,9 @@ function createTerminalDataPipeline(options = {}) {
   }
 
   function observeOutput(sessionId, data) {
-    if ((outputModes.get(sessionId) ?? 0) & 1) {
+    const mode = outputModes.get(sessionId) ?? 0;
+    let sensitivePrompt = false;
+    if (mode !== 0) {
       // Retain bounded raw output so an ANSI sequence split across chunks can
       // be stripped only after its terminating byte arrives. Persisting the
       // already-stripped tail would turn an incomplete CSI into visible text
@@ -238,9 +242,10 @@ function createTerminalDataPipeline(options = {}) {
       outputRawTails.set(sessionId, rawTail);
       const tail = visibleTerminalTail(rawTail);
       const lastLine = tail.split(/[\r\n]/u).at(-1) ?? "";
-      if (SENSITIVE_PROMPT.test(lastLine)) sensitiveInputSessions.add(sessionId);
+      sensitivePrompt = SENSITIVE_PROMPT.test(lastLine);
+      if ((mode & 1) !== 0 && sensitivePrompt) sensitiveInputSessions.add(sessionId);
     }
-    return sensitiveInputSessions.has(sessionId);
+    return (mode & 1) !== 0 ? sensitiveInputSessions.has(sessionId) : sensitivePrompt;
   }
 
   async function transform(sessionId, direction, data, options = {}) {

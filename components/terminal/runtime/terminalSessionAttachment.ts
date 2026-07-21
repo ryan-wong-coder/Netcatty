@@ -443,9 +443,10 @@ const writeSessionDataImmediate = (
   // Tabby-like: under bulk pressure, force a yield after sizable shards so the
   // event loop can paint/input between xterm parses (serial queue otherwise
   // chains the next write the moment the callback fires).
+  const displayBytes = data.length;
   const bulkYieldAfter = shouldDegradeTerminalSideWork(term)
-    && ingressBytes >= XTERM_WRITE_CALLBACK_FAST_PATH_MAX_BYTES;
-  enqueueTerminalWrite(term, ingressBytes, (done) => {
+    && displayBytes >= XTERM_WRITE_CALLBACK_FAST_PATH_MAX_BYTES;
+  enqueueTerminalWrite(term, displayBytes, (done) => {
     const shouldMeasurePerf = Boolean(writeOptions.perfTrace);
     const queueItemStartedAt = shouldMeasurePerf ? performance.now() : 0;
     const prepareStartedAt = shouldMeasurePerf ? performance.now() : 0;
