@@ -427,6 +427,7 @@ test("runtime placement and state events are injectable without changing lifecyc
 
 test("supervisor transfers privileged terminal ports only to the exact utility runtime identity", async (context) => {
   const attached = [];
+  let releaseAttachment;
   const fixture = createFixture(context, () => ({
     async start(config) {
       return {
@@ -437,20 +438,29 @@ test("supervisor transfers privileged terminal ports only to the exact utility r
       };
     },
     async stop() {},
-    attachTerminalInterceptor(descriptor, port) { attached.push({ descriptor, port }); },
+    attachTerminalInterceptor(descriptor, port) {
+      attached.push({ descriptor, port });
+      return new Promise((resolve) => { releaseAttachment = resolve; });
+    },
   }), {
     resolveRuntimeKind: () => "utility",
   });
   await fixture.supervisor.start(fixture.manifest.id);
   const identity = fixture.supervisor.getRuntimeIdentity(fixture.manifest.id);
   const port = { close() {} };
-  await fixture.supervisor.attachTerminalInterceptor(
+  let attachmentFinished = false;
+  const attachment = fixture.supervisor.attachTerminalInterceptor(
     fixture.manifest.id,
     { providerId: "com.example.input", direction: "input" },
     port,
     { expectedIdentity: identity },
-  );
+  ).then(() => { attachmentFinished = true; });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attached[0].port, port);
+  assert.equal(attachmentFinished, false);
+  releaseAttachment();
+  await attachment;
+  assert.equal(attachmentFinished, true);
   await assert.rejects(
     fixture.supervisor.attachTerminalInterceptor(
       fixture.manifest.id,

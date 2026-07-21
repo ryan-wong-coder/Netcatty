@@ -225,6 +225,66 @@ test("output interception is credit bounded and fails open under backpressure", 
   assert.equal(pipeline.has("session-1", "output"), false);
 });
 
+test("queued output keeps the deadline from its arrival time", async () => {
+  let now = 0;
+  const warnings = [];
+  const pipeline = createTerminalDataPipeline({
+    now: () => now,
+    outputDeadlineMs: 100,
+    onWarning: (value) => warnings.push(value),
+  });
+  const channel = new MessageChannel();
+  channel.port1.unref?.();
+  channel.port2.unref?.();
+  const chunks = [];
+  listen(channel.port2, (message) => {
+    if (message.type === "netcatty:terminal-interceptor:chunk") chunks.push(message);
+  });
+  pipeline.attach({
+    sessionId: "session-1",
+    direction: "output",
+    providerId: "com.example.interceptor",
+    pluginId: "com.example",
+    pluginVersion: "1.0.0",
+    runtimeId: "runtime-1",
+    runtimeKind: "utility",
+    securityPrincipal: "principal-1",
+  }, channel.port1);
+
+  const first = pipeline.interceptOutput("session-1", "first");
+  const second = pipeline.interceptOutput("session-1", "second");
+  for (let attempt = 0; attempt < 10 && chunks.length < 1; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(chunks.length, 1);
+  now = 90;
+  const firstData = Uint8Array.from(Buffer.from("FIRST")).buffer;
+  channel.port2.postMessage({
+    type: "netcatty:terminal-interceptor:result",
+    sequence: chunks[0].sequence,
+    status: "ok",
+    creditBytes: 5,
+    data: firstData,
+  }, [firstData]);
+  for (let attempt = 0; attempt < 10 && chunks.length < 2; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(chunks.length, 2);
+  now = 101;
+  const secondData = Uint8Array.from(Buffer.from("SECOND")).buffer;
+  channel.port2.postMessage({
+    type: "netcatty:terminal-interceptor:result",
+    sequence: chunks[1].sequence,
+    status: "ok",
+    creditBytes: 6,
+    data: secondData,
+  }, [secondData]);
+
+  assert.deepEqual(await Promise.all([first, second]), ["FIRST", "second"]);
+  assert.equal(warnings.at(-1).code, "timeout");
+  assert.equal(pipeline.has("session-1", "output"), false);
+});
+
 test("invalid interceptor UTF-8 fails open and permanently trips the circuit breaker", async () => {
   const warnings = [];
   const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 100, onWarning: (value) => warnings.push(value) });

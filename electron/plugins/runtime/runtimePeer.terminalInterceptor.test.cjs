@@ -69,12 +69,27 @@ test("utility runtime dispatches dedicated terminal ports to the exact registere
   const dataPort = new FakePort();
   control.emit({
     type: "netcatty-plugin:terminal-interceptor:attach",
+    attachmentId: 1,
     descriptor: {
       providerId: "com.example.input",
       direction: "input",
       session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
     },
   }, [dataPort]);
+  assert.equal(
+    control.messages.some(({ message }) => (
+      message.type === "netcatty-plugin:terminal-interceptor:attached"
+      && message.attachmentId === 1
+    )),
+    true,
+  );
+  dataPort.emit({
+    type: "netcatty:terminal-interceptor:ready",
+    sessionId: "session-1",
+    direction: "input",
+    windowBytes: 64 * 1024,
+  });
+  assert.equal(dataPort.closed, false);
   const data = Uint8Array.from(Buffer.from("hello")).buffer;
   dataPort.emit({
     type: "netcatty:terminal-interceptor:chunk",
@@ -114,6 +129,7 @@ test("utility runtime closes a terminal port when provider ownership or kind is 
   const dataPort = new FakePort();
   control.emit({
     type: "netcatty-plugin:terminal-interceptor:attach",
+    attachmentId: 2,
     descriptor: {
       providerId: "com.example.missing",
       direction: "input",
@@ -121,6 +137,13 @@ test("utility runtime closes a terminal port when provider ownership or kind is 
     },
   }, [dataPort]);
   assert.equal(dataPort.closed, true);
+  assert.equal(
+    control.messages.some(({ message }) => (
+      message.type === "netcatty-plugin:terminal-interceptor:rejected"
+      && message.attachmentId === 2
+    )),
+    true,
+  );
   await runtime.dispose();
 });
 
@@ -163,6 +186,7 @@ test("terminal ports convert synchronous throws to failures and stop using dispo
   const dataPort = new FakePort();
   control.emit({
     type: "netcatty-plugin:terminal-interceptor:attach",
+    attachmentId: 3,
     descriptor: {
       providerId: "com.example.input",
       direction: "input",

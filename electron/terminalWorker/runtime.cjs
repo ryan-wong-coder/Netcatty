@@ -245,9 +245,11 @@ function createSender(
         return undefined;
       }
     };
-    const pending = previous
-      ? previous.then(interceptAndDeliver, interceptAndDeliver)
-      : Promise.resolve(interceptAndDeliver());
+    // Invoke the pipeline immediately so its bounded byte window and monotonic
+    // deadline cover time spent waiting behind earlier transforms. The
+    // pipeline owns per-session transform ordering; this outer registry only
+    // retains the latest barrier for direct fail-open output and session exit.
+    const pending = Promise.resolve(interceptAndDeliver());
     trackPendingOutput(sessionId, pending);
   };
   return {

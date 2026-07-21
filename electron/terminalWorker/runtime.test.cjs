@@ -419,6 +419,38 @@ test("runtime keeps direct output ordered behind a pending chunk after intercept
   );
 });
 
+test("runtime submits queued output to the bounded pipeline before earlier transforms finish", async () => {
+  const parentPort = createParentPort();
+  const releases = [];
+  const calls = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 2; },
+      observeOutput() { return false; },
+      interceptOutput(_sessionId, data) {
+        calls.push(data);
+        return new Promise((resolve) => releases.push(() => resolve(data.toUpperCase())));
+      },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "first" });
+  runtime.createSender(7).send("netcatty:data", { sessionId: "s1", data: "second" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["first", "second"]);
+
+  releases[0]();
+  releases[1]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    parentPort.messages.filter((message) => message.kind === "output").map((message) => message.data),
+    ["FIRST", "SECOND"],
+  );
+});
+
 test("runtime routes terminal data over a transferred output port", async () => {
   const parentPort = createParentPort();
   const outputPort = new FakePort();

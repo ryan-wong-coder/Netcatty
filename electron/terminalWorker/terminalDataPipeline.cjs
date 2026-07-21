@@ -159,7 +159,7 @@ function createTerminalDataPipeline(options = {}) {
       if (!pending) return;
       binding.pending.delete(message.sequence);
       clearTimeout(pending.timer);
-      if (now() - pending.startedAt >= pending.deadlineMs) {
+      if (now() >= pending.deadlineAt) {
         pending.resolve(null);
         disable(binding, "timeout", `Terminal ${binding.direction} interceptor exceeded its ${pending.deadlineMs} ms budget`);
         return;
@@ -192,21 +192,25 @@ function createTerminalDataPipeline(options = {}) {
     }
   }
 
-  function requestChunk(binding, bytes, deadlineMs) {
+  function requestChunk(binding, bytes, deadlineAt, deadlineMs) {
     if (!binding.active) return Promise.resolve(null);
+    const remainingMs = deadlineAt - now();
+    if (remainingMs <= 0) {
+      disable(binding, "timeout", `Terminal ${binding.direction} interceptor exceeded its ${deadlineMs} ms budget`);
+      return Promise.resolve(null);
+    }
     const sequence = binding.nextSequence++;
     const data = toTransferBuffer(bytes);
     return new Promise((resolve) => {
-      const startedAt = now();
       const timer = setTimeout(() => {
         binding.pending.delete(sequence);
         resolve(null);
         disable(binding, "timeout", `Terminal ${binding.direction} interceptor exceeded its ${deadlineMs} ms budget`);
-      }, deadlineMs);
+      }, remainingMs);
       binding.pending.set(sequence, {
         resolve,
         timer,
-        startedAt,
+        deadlineAt,
         deadlineMs,
         sentBytes: bytes.byteLength,
       });
@@ -268,6 +272,8 @@ function createTerminalDataPipeline(options = {}) {
     }
     const bytes = encoder.encode(String(data));
     if (bytes.byteLength === 0) return data;
+    const deadlineMs = direction === "input" ? inputDeadlineMs : outputDeadlineMs;
+    const deadlineAt = now() + deadlineMs;
     if (direction === "output" && binding.queuedBytes + bytes.byteLength > outputWindowBytes) {
       // Chain the fail-open chunk behind all earlier work before disabling the
       // binding. disable() releases pending requests, and this queue barrier
@@ -286,7 +292,8 @@ function createTerminalDataPipeline(options = {}) {
         const result = await requestChunk(
           binding,
           chunk,
-          direction === "input" ? inputDeadlineMs : outputDeadlineMs,
+          deadlineAt,
+          deadlineMs,
         );
         if (!result) return data;
         output.push(result);

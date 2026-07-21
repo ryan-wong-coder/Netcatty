@@ -9,7 +9,7 @@ const { EventEmitter } = require("node:events");
 
 const { UtilityPluginRuntime, resolveUtilityEntrypoint } = require("./utilityPluginRuntime.cjs");
 
-test("utility runtime transfers a dedicated terminal interceptor port without routing payload bytes", () => {
+test("utility runtime waits for acceptance of a dedicated terminal interceptor port", async () => {
   const posts = [];
   const runtime = new UtilityPluginRuntime({
     utilityProcess: {},
@@ -21,9 +21,18 @@ test("utility runtime transfers a dedicated terminal interceptor port without ro
   runtime.router = {};
   runtime.child = { postMessage(message, transfer) { posts.push({ message, transfer }); } };
   const port = { close() {} };
-  runtime.attachTerminalInterceptor({ providerId: "com.example.input", direction: "input" }, port);
+  const attached = runtime.attachTerminalInterceptor(
+    { providerId: "com.example.input", direction: "input" },
+    port,
+  );
   assert.equal(posts[0].message.type, "netcatty-plugin:terminal-interceptor:attach");
+  assert.equal(posts[0].message.attachmentId, 1);
   assert.deepEqual(posts[0].transfer, [port]);
+  const pending = runtime.pendingTerminalInterceptorAttachments.get(1);
+  clearTimeout(pending.timer);
+  runtime.pendingTerminalInterceptorAttachments.delete(1);
+  pending.resolve();
+  await attached;
 });
 
 test("utility entrypoint is realpath-contained at the moment of launch", async (context) => {
@@ -80,6 +89,11 @@ test("utility runtime launches without a shell using a minimal environment", asy
         }));
       } else if (message.method === "plugin.activate") {
         queueMicrotask(() => this.emit("message", { jsonrpc: "2.0", id: message.id, result: null }));
+      } else if (message.type === "netcatty-plugin:terminal-interceptor:attach") {
+        queueMicrotask(() => this.emit("message", {
+          type: "netcatty-plugin:terminal-interceptor:attached",
+          attachmentId: message.attachmentId,
+        }));
       }
     }
     kill() { return true; }
@@ -120,6 +134,12 @@ test("utility runtime launches without a shell using a minimal environment", asy
   assert.deepEqual(messages.find((message) => message.method === "plugin.activate").params, {
     environment: { locale: "zh-CN", theme: "dark" },
   });
+  const interceptorPort = { close() {} };
+  await runtime.attachTerminalInterceptor(
+    { providerId: "com.example.input", direction: "input" },
+    interceptorPort,
+  );
+  assert.deepEqual(transferLists.at(-1), [interceptorPort]);
   const transferable = new ArrayBuffer(8);
   runtime.router.send({ type: "transfer-test", transferable }, [transferable]);
   assert.deepEqual(transferLists.at(-1), [transferable]);

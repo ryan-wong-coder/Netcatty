@@ -677,7 +677,7 @@ class RuntimeSupervisor {
         `Terminal interceptors require an advanced utility runtime: ${pluginId}`,
       );
     }
-    runtime.attachTerminalInterceptor(descriptor, port);
+    await runtime.attachTerminalInterceptor(descriptor, port);
   }
 
   shutdown() {

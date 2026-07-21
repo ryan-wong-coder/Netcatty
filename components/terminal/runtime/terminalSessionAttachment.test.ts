@@ -1369,9 +1369,11 @@ test("tryAttachSessionToTerminal closes orphan sessions after unmount", () => {
 test("attachSessionToTerminal marks connected on metadata-only or visible first output", () => {
   const { term } = createFakeTerm();
   const statuses: string[] = [];
+  const output: Array<{ data: string; sensitive: boolean }> = [];
   let onData: ((data: string, meta?: {
     moshHandshake?: boolean;
     pluginPipelineIngressBytes?: number;
+    pluginPipelineSensitiveInput?: boolean;
   }) => void) | null = null;
 
   const ctx = {
@@ -1385,12 +1387,16 @@ test("attachSessionToTerminal marks connected on metadata-only or visible first 
     fitAddonRef: { current: null },
     serializeAddonRef: { current: null },
     pendingAuthRef: { current: null },
+    onTerminalOutput: (data: string, meta?: { pluginPipelineSensitiveInput?: boolean }) => {
+      output.push({ data, sensitive: meta?.pluginPipelineSensitiveInput === true });
+    },
     terminalBackend: {
       onSessionData: (
         _id: string,
         cb: (data: string, meta?: {
           moshHandshake?: boolean;
           pluginPipelineIngressBytes?: number;
+          pluginPipelineSensitiveInput?: boolean;
         }) => void,
       ) => {
         onData = cb;
@@ -1412,9 +1418,10 @@ test("attachSessionToTerminal marks connected on metadata-only or visible first 
 
   attachSessionToTerminal(ctx as never, term, "session-1");
   // A plugin may suppress the first banner while still consuming host ingress.
-  onData?.("", { pluginPipelineIngressBytes: 12 });
+  onData?.("", { pluginPipelineIngressBytes: 12, pluginPipelineSensitiveInput: true });
   assert.deepEqual(statuses, ["connected"]);
   assert.equal(ctx.hasConnectedRef.current, true);
+  assert.deepEqual(output, [{ data: "", sensitive: true }]);
   // Handshake output must dismiss the overlay so interactive prompts are reachable.
   onData?.("ssh handshake banner\r\n", { moshHandshake: true });
   assert.deepEqual(statuses, ["connected"]);

@@ -786,6 +786,9 @@ export const attachSessionToTerminal = (
         : null;
       if (filtered.accepted && !filtered.data && pluginPipelineIngressBytes != null) {
         markConnectedOnFirstOutput();
+        if (meta?.pluginPipelineSensitiveInput === true) {
+          ctx.onTerminalOutput?.("", meta);
+        }
         acknowledgeDroppedTerminalDisplayBytes(ctx, pluginPipelineIngressBytes);
         return;
       }

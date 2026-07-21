@@ -627,6 +627,7 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
     runtimeApi.terminalInterceptorPorts.add(interceptorPort);
     const handleChunk = (event) => {
       const chunk = messageData(event);
+      if (chunk?.type === "netcatty:terminal-interceptor:ready") return;
       if (!chunk || chunk.type !== "netcatty:terminal-interceptor:chunk"
         || chunk.direction !== direction
         || !Number.isSafeInteger(chunk.sequence) || chunk.sequence < 1
@@ -689,8 +690,22 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
 
   const dispose = transport.onMessage((message, ports) => {
     if (message?.type === "netcatty-plugin:terminal-interceptor:attach") {
-      try { attachTerminalInterceptor(message, ports); }
-      catch { ports?.[0]?.close?.(); }
+      try {
+        if (!Number.isSafeInteger(message.attachmentId) || message.attachmentId < 1) {
+          throw new PluginError("invalid_argument", "Terminal interceptor attachment ID is invalid");
+        }
+        attachTerminalInterceptor(message, ports);
+        transport.post({
+          type: "netcatty-plugin:terminal-interceptor:attached",
+          attachmentId: message.attachmentId,
+        });
+      } catch {
+        ports?.[0]?.close?.();
+        transport.post({
+          type: "netcatty-plugin:terminal-interceptor:rejected",
+          attachmentId: message?.attachmentId,
+        });
+      }
       return;
     }
     if (message && typeof message === "object" && Object.hasOwn(message, "frame")) {

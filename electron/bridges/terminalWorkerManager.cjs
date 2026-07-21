@@ -186,6 +186,7 @@ function createTerminalWorkerManager(options = {}) {
   const closedSessions = new Set();
   const outputPortPending = new Set();
   const outputPortReady = new Set();
+  const outputRoutePending = new Set();
   const sessionWebContentsIds = new Map();
   const urgentInputPorts = new Map();
   const outputTaps = new Set();
@@ -420,20 +421,26 @@ function createTerminalWorkerManager(options = {}) {
       return false;
     }
     sessionWebContentsIds.set(sessionId, webContentsId);
+    outputRoutePending.add(sessionId);
     await Promise.allSettled([...sessionOwnedListeners].map((listener) => (
       Promise.resolve().then(() => listener(Object.freeze({ sessionId, webContentsId })))
     )));
     if (closedSessions.has(sessionId)
       || sessionWebContentsIds.get(sessionId) !== webContentsId) {
+      outputRoutePending.delete(sessionId);
       return false;
     }
-    if (contents.isDestroyed?.()) return false;
+    if (contents.isDestroyed?.()) {
+      outputRoutePending.delete(sessionId);
+      return false;
+    }
     openUrgentInputPort(webContentsId, contents);
     const outputPort = terminalOutputChannel?.openSession?.(sessionId, contents, {
       transferToWorker: true,
     });
     if (outputPort && outputPort !== true && child?.postMessage) {
       outputPortPending.add(sessionId);
+      outputRoutePending.delete(sessionId);
       child.postMessage({
         kind: "output-port",
         sessionId,
@@ -441,6 +448,7 @@ function createTerminalWorkerManager(options = {}) {
       }, [outputPort]);
       return true;
     }
+    outputRoutePending.delete(sessionId);
     flushBufferedOutput(sessionId);
     return true;
   }
@@ -556,6 +564,7 @@ function createTerminalWorkerManager(options = {}) {
     if (!sessionId) return;
     closedSessions.add(sessionId);
     clearBufferedOutput(sessionId);
+    outputRoutePending.delete(sessionId);
     outputPortPending.delete(sessionId);
     outputPortReady.delete(sessionId);
     sessionWebContentsIds.delete(sessionId);
@@ -696,7 +705,7 @@ function createTerminalWorkerManager(options = {}) {
       if (!message.tapped) {
         notifyOutputTaps(message.sessionId, message.data);
       }
-      if (outputPortPending.has(message.sessionId)) {
+      if (outputRoutePending.has(message.sessionId) || outputPortPending.has(message.sessionId)) {
         bufferOutput(message.sessionId, message.data, message.meta);
         return;
       }
@@ -868,6 +877,7 @@ function createTerminalWorkerManager(options = {}) {
     closedSessions.clear();
     outputPortPending.clear();
     outputPortReady.clear();
+    outputRoutePending.clear();
     sessionWebContentsIds.clear();
     attachHomeWebContentsIds.clear();
     closeAllUrgentInputPorts();
@@ -966,6 +976,7 @@ function createTerminalWorkerManager(options = {}) {
       closedSessions.clear();
       outputPortPending.clear();
       outputPortReady.clear();
+      outputRoutePending.clear();
       sessionWebContentsIds.clear();
       closeAllUrgentInputPorts();
       terminalInterceptorWarningListeners.clear();

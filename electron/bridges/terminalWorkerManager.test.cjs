@@ -106,13 +106,13 @@ test("session ownership listeners finish before buffered output is released", as
   manager.onSessionOwned(() => new Promise((resolve) => { releaseOwnership = resolve; }));
 
   const promise = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
-  child.emit("message", { kind: "output", sessionId: "local-1", data: "banner" });
   child.emit("message", {
     kind: "response",
     requestId: child.messages[0].requestId,
     result: { sessionId: "local-1" },
   });
   await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", { kind: "output", sessionId: "local-1", data: "banner" });
   assert.deepEqual(routed, []);
 
   releaseOwnership();
