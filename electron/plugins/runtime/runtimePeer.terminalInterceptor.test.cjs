@@ -157,6 +157,52 @@ test("utility runtime closes a terminal port when provider ownership or kind is 
   await runtime.dispose();
 });
 
+test("utility runtime closes the transferred terminal port when the attachment descriptor is malformed", async () => {
+  const { startPluginRuntime } = await import("./runtimePeer.mjs");
+  const control = new FakePort();
+  const runtime = await startPluginRuntime({
+    port: control,
+    config: {
+      pluginId: "com.example",
+      pluginVersion: "1.0.0",
+      netcattyVersion: "1.0.0",
+      apiVersion: "1.0.0",
+      enabledFeatures: [],
+      environment: {},
+      entryUrl: "file:///plugin.js",
+    },
+    loadPlugin: async () => ({ default: { activate() {} } }),
+  });
+  control.emit({ jsonrpc: "2.0", id: 1, method: "plugin.initialize", params: {} });
+  await tick();
+  control.emit({ jsonrpc: "2.0", id: 2, method: "plugin.activate", params: {} });
+  await tick();
+  const dataPort = new FakePort();
+  control.emit({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "plugin.terminal.interceptor.attach",
+    params: {
+      descriptor: {
+        providerId: "not-owned.input",
+        direction: "input",
+        session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+      },
+    },
+  }, [dataPort]);
+  await tick();
+  assert.equal(dataPort.closed, true);
+  assert.equal(
+    control.messages.some(({ message }) => (
+      message.jsonrpc === "2.0"
+      && message.id === 3
+      && message.error?.code === -32003
+    )),
+    true,
+  );
+  await runtime.dispose();
+});
+
 test("utility runtime rejects the retired private terminal attachment protocol", async () => {
   const { startPluginRuntime } = await import("./runtimePeer.mjs");
   const control = new FakePort();

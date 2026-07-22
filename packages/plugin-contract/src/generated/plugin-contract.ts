@@ -299,7 +299,7 @@ export type RpcId = (string) | (SafeUnsignedInteger);
 
 export type RpcLimits = {"maxJsonBytes":1048576};
 
-export type RpcMessage = (RpcRequest) | (RpcNotification) | (RpcSuccess) | (RpcFailure) | (RpcCancel) | (RpcProgressNotification) | (RuntimeInitializeRequest);
+export type RpcMessage = (RpcRequest) | (RpcNotification) | (RpcSuccess) | (RpcFailure) | (RpcCancel) | (RpcProgressNotification) | (RuntimeInitializeRequest) | (TerminalInterceptorAttachmentRequest);
 
 export type RpcNotification = {
   jsonrpc: "2.0";
@@ -460,6 +460,49 @@ export type StreamId = string;
 export type StreamLimits = {"maxStreamIdLength":128,"maxChunkBytes":16777216,"maxFrameJsonBytes":25165824,"minWindowBytes":1024,"maxWindowBytes":16777216,"maxCreditBytes":16777216};
 
 export type StreamWindowBytes = number;
+
+export type TerminalInterceptorAttachmentDescriptor = {
+  providerId: ContributionId;
+  direction: "input" | "output";
+  session: TerminalSessionSnapshot;
+};
+
+export type TerminalInterceptorAttachmentParams = {
+  descriptor: TerminalInterceptorAttachmentDescriptor;
+};
+
+export type TerminalInterceptorAttachmentRequest = {
+  jsonrpc: "2.0";
+  id: RpcId;
+  method: "plugin.terminal.interceptor.attach";
+  params: TerminalInterceptorAttachmentParams;
+  deadlineMs?: number;
+  cancellationId?: string;
+};
+
+export type TerminalInterceptorAttachmentResult = {
+  accepted: true;
+};
+
+export type TerminalInterceptorAttachmentSuccess = {
+  jsonrpc: "2.0";
+  id: RpcId;
+  result: TerminalInterceptorAttachmentResult;
+};
+
+export type TerminalSessionSnapshot = {
+  sessionId: string;
+  hostId?: string;
+  workspaceId?: string;
+  protocol: string;
+  status: "connecting" | "connected" | "disconnected";
+  cwd?: string;
+  title?: string;
+  shellType?: "posix" | "fish" | "powershell" | "cmd" | "unknown";
+  cols?: number;
+  rows?: number;
+  alternateScreen?: boolean;
+};
 
 export type ThemeIcon = {
   kind: "theme";

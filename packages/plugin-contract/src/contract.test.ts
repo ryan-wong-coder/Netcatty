@@ -167,6 +167,10 @@ test("RPC, stream, permission, and provider schemas validate independently", () 
   const initialize = validator("RuntimeInitializeParams");
   const initializeRequest = validator("RuntimeInitializeRequest");
   const initializeSuccess = validator("RuntimeInitializeSuccess");
+  const interceptorAttachmentParams = validator("TerminalInterceptorAttachmentParams");
+  const interceptorAttachmentResult = validator("TerminalInterceptorAttachmentResult");
+  const interceptorAttachmentRequest = validator("TerminalInterceptorAttachmentRequest");
+  const interceptorAttachmentSuccess = validator("TerminalInterceptorAttachmentSuccess");
   const permission = validator("PermissionRequest");
   const permissionDecision = validator("PermissionDecision");
   const secretRef = validator("SecretRef");
@@ -241,6 +245,57 @@ test("RPC, stream, permission, and provider schemas validate independently", () 
     jsonrpc: "2.0",
     id: "init-1",
     result: { unsupportedShape: true },
+  }), false);
+  const attachmentParams = {
+    descriptor: {
+      providerId: "com.example.contract-test.interceptor",
+      direction: "input",
+      session: {
+        sessionId: "terminal-session-1",
+        protocol: "ssh",
+        status: "connected",
+        cols: 120,
+        rows: 40,
+      },
+    },
+  };
+  assert.equal(interceptorAttachmentParams(attachmentParams), true, JSON.stringify(interceptorAttachmentParams.errors));
+  assert.equal(interceptorAttachmentParams({
+    descriptor: { ...attachmentParams.descriptor, session: { sessionId: "terminal-session-1" } },
+  }), false);
+  assert.equal(interceptorAttachmentParams({
+    descriptor: { ...attachmentParams.descriptor, unexpected: true },
+  }), false);
+  assert.equal(interceptorAttachmentResult({ accepted: true }), true, JSON.stringify(interceptorAttachmentResult.errors));
+  assert.equal(interceptorAttachmentResult({ accepted: false }), false);
+  assert.equal(interceptorAttachmentResult({ accepted: true, unexpected: true }), false);
+  assert.equal(interceptorAttachmentRequest({
+    jsonrpc: "2.0",
+    id: "attach-1",
+    method: "plugin.terminal.interceptor.attach",
+    params: attachmentParams,
+  }), true, JSON.stringify(interceptorAttachmentRequest.errors));
+  assert.equal(rpcMessage({
+    jsonrpc: "2.0",
+    id: "attach-1",
+    method: "plugin.terminal.interceptor.attach",
+    params: attachmentParams,
+  }), true, JSON.stringify(rpcMessage.errors));
+  assert.equal(rpcMessage({
+    jsonrpc: "2.0",
+    id: "attach-1",
+    method: "plugin.terminal.interceptor.attach",
+    params: { descriptor: { providerId: "com.example.contract-test.interceptor" } },
+  }), false);
+  assert.equal(interceptorAttachmentSuccess({
+    jsonrpc: "2.0",
+    id: "attach-1",
+    result: { accepted: true },
+  }), true, JSON.stringify(interceptorAttachmentSuccess.errors));
+  assert.equal(interceptorAttachmentSuccess({
+    jsonrpc: "2.0",
+    id: "attach-1",
+    result: { accepted: false },
   }), false);
   assert.equal(failure({
     jsonrpc: "2.0",

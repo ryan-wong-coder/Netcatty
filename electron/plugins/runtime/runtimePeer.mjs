@@ -530,8 +530,13 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
         for (const port of ports) port?.close?.();
         throw new PluginError("invalid_argument", "Terminal interceptor attachment requires exactly one port");
       }
-      attachTerminalInterceptor(message.params, ports);
-      return { accepted: true };
+      try {
+        attachTerminalInterceptor(message.params, ports);
+        return { accepted: true };
+      } catch (error) {
+        for (const port of ports) port?.close?.();
+        throw error;
+      }
     }
     for (const port of ports) port?.close?.();
     if (message.method === "plugin.command.execute") {

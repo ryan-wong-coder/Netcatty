@@ -378,7 +378,11 @@ test("outgoing requests keep transferable setup under router correlation and val
   const fixture = createRouter();
   const port = { postMessage() {} };
   const response = fixture.router.request("plugin.terminal.interceptor.attach", {
-    descriptor: { providerId: "com.example.input", direction: "input" },
+    descriptor: {
+      providerId: "com.example.input",
+      direction: "input",
+      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    },
   }, {
     transfer: [port],
     validateResult(result) {

@@ -26,15 +26,63 @@ test("utility runtime waits for acceptance of a dedicated terminal interceptor p
   };
   const port = { close() {} };
   await runtime.attachTerminalInterceptor(
-    { providerId: "com.example.input", direction: "input" },
+    {
+      providerId: "com.example.input",
+      direction: "input",
+      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    },
     port,
   );
   assert.equal(requests[0].method, "plugin.terminal.interceptor.attach");
   assert.deepEqual(requests[0].params, {
-    descriptor: { providerId: "com.example.input", direction: "input" },
+    descriptor: {
+      providerId: "com.example.input",
+      direction: "input",
+      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    },
   });
   assert.deepEqual(requests[0].options.transfer, [port]);
   assert.equal(requests[0].options.timeoutMs > 0, true);
+});
+
+test("utility runtime validates terminal attachment params and results against the canonical contract", async () => {
+  const runtime = new UtilityPluginRuntime({
+    utilityProcess: {},
+    plugin: { id: "com.example", manifest: { main: { node: "dist/index.js" } } },
+    packageRoot: "/tmp/plugin",
+    bootstrapPath: "/runtime.mjs",
+    moduleMappings: {},
+  });
+  let requests = 0;
+  runtime.router = {
+    request(_method, _params, options) {
+      requests += 1;
+      return Promise.resolve().then(() => (
+        options.validateResult({ accepted: true, unexpected: true })
+      ));
+    },
+  };
+  const port = { close() {} };
+  assert.throws(
+    () => runtime.attachTerminalInterceptor(
+      { providerId: "com.example.input", direction: "input", session: { sessionId: "session-1" } },
+      port,
+    ),
+    /attachment params violates the plugin contract/,
+  );
+  assert.equal(requests, 0);
+  await assert.rejects(
+    runtime.attachTerminalInterceptor(
+      {
+        providerId: "com.example.input",
+        direction: "input",
+        session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+      },
+      port,
+    ),
+    /attachment result violates the plugin contract/,
+  );
+  assert.equal(requests, 1);
 });
 
 test("utility entrypoint is realpath-contained at the moment of launch", async (context) => {
@@ -139,7 +187,11 @@ test("utility runtime launches without a shell using a minimal environment", asy
   });
   const interceptorPort = { close() {} };
   await runtime.attachTerminalInterceptor(
-    { providerId: "com.example.input", direction: "input" },
+    {
+      providerId: "com.example.input",
+      direction: "input",
+      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    },
     interceptorPort,
   );
   assert.deepEqual(transferLists.at(-1), [interceptorPort]);

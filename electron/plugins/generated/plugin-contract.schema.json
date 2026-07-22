@@ -1209,6 +1209,7 @@
           "method": {
             "enum": [
               "plugin.initialize",
+              "plugin.terminal.interceptor.attach",
               "$/cancelRequest",
               "$/progress"
             ]
@@ -1245,6 +1246,7 @@
           "method": {
             "enum": [
               "plugin.initialize",
+              "plugin.terminal.interceptor.attach",
               "$/cancelRequest",
               "$/progress"
             ]
@@ -1846,6 +1848,186 @@
       },
       "additionalProperties": false
     },
+    "TerminalSessionSnapshot": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "protocol",
+        "status"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000]+$"
+        },
+        "hostId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000]+$"
+        },
+        "protocol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "connecting",
+            "connected",
+            "disconnected"
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000]+$"
+        },
+        "shellType": {
+          "type": "string",
+          "enum": [
+            "posix",
+            "fish",
+            "powershell",
+            "cmd",
+            "unknown"
+          ]
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "alternateScreen": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorAttachmentDescriptor": {
+      "type": "object",
+      "required": [
+        "providerId",
+        "direction",
+        "session"
+      ],
+      "properties": {
+        "providerId": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "input",
+            "output"
+          ]
+        },
+        "session": {
+          "$ref": "#/$defs/TerminalSessionSnapshot"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorAttachmentParams": {
+      "type": "object",
+      "required": [
+        "descriptor"
+      ],
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/TerminalInterceptorAttachmentDescriptor"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorAttachmentResult": {
+      "type": "object",
+      "required": [
+        "accepted"
+      ],
+      "properties": {
+        "accepted": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorAttachmentRequest": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RpcId"
+        },
+        "method": {
+          "const": "plugin.terminal.interceptor.attach"
+        },
+        "params": {
+          "$ref": "#/$defs/TerminalInterceptorAttachmentParams"
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "cancellationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorAttachmentSuccess": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RpcId"
+        },
+        "result": {
+          "$ref": "#/$defs/TerminalInterceptorAttachmentResult"
+        }
+      },
+      "additionalProperties": false
+    },
     "RpcMessage": {
       "description": "A mutually exclusive RPC wire envelope. Reserved inbound methods use their exact schemas. Successful responses require method-specific validation through request correlation.",
       "oneOf": [
@@ -1869,6 +2051,9 @@
         },
         {
           "$ref": "#/$defs/RuntimeInitializeRequest"
+        },
+        {
+          "$ref": "#/$defs/TerminalInterceptorAttachmentRequest"
         }
       ]
     },
