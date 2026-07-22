@@ -50,6 +50,18 @@ function toTransferBuffer(bytes) {
   return copy.buffer;
 }
 
+function nextUtf8ChunkEnd(bytes, offset, maxChunkBytes = MAX_CHUNK_BYTES) {
+  let end = Math.min(bytes.byteLength, offset + maxChunkBytes);
+  if (end >= bytes.byteLength) return end;
+  while (end > offset && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  if (end > offset) return end;
+  // TextEncoder output is valid UTF-8 and a code point is at most four bytes,
+  // so this branch is only reachable with an artificially tiny test limit.
+  end = Math.min(bytes.byteLength, offset + maxChunkBytes);
+  while (end < bytes.byteLength && (bytes[end] & 0xc0) === 0x80) end += 1;
+  return end;
+}
+
 function visibleTerminalTail(value) {
   return String(value ?? "")
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, "")
@@ -155,6 +167,7 @@ function createTerminalDataPipeline(options = {}) {
       nextSequence: 1,
       pending: new Map(),
       queuedBytes: 0,
+      outputExpansionCreditBytes: direction === "output" ? outputWindowBytes : 0,
       queue: Promise.resolve(),
       removeListener: null,
     };
@@ -308,9 +321,11 @@ function createTerminalDataPipeline(options = {}) {
     binding.queuedBytes += bytes.byteLength;
     const run = async () => {
       const output = [];
-      for (let offset = 0; offset < bytes.byteLength; offset += MAX_CHUNK_BYTES) {
+      for (let offset = 0; offset < bytes.byteLength;) {
         if (!binding.active) return data;
-        const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + MAX_CHUNK_BYTES));
+        const end = nextUtf8ChunkEnd(bytes, offset);
+        const chunk = bytes.subarray(offset, end);
+        offset = end;
         const result = await requestChunk(
           binding,
           chunk,
@@ -322,6 +337,26 @@ function createTerminalDataPipeline(options = {}) {
       }
       try {
         const total = output.reduce((sum, item) => sum + item.byteLength, 0);
+        if (direction === "output") {
+          // Each original byte replenishes one byte of expansion credit. This
+          // permits a bounded 2x steady-state rewrite plus one initial window
+          // burst, while repeated tiny-to-64-KiB expansion trips fail-open
+          // before it can outrun the renderer's display-byte queue.
+          const replenishedCredit = Math.min(
+            outputWindowBytes,
+            binding.outputExpansionCreditBytes + bytes.byteLength,
+          );
+          const expansionBytes = Math.max(0, total - bytes.byteLength);
+          if (total > outputWindowBytes || expansionBytes > replenishedCredit) {
+            disable(
+              binding,
+              "backpressure",
+              "Terminal output interceptor exceeded its bounded expansion credit",
+            );
+            return data;
+          }
+          binding.outputExpansionCreditBytes = replenishedCredit - expansionBytes;
+        }
         const combined = new Uint8Array(total);
         let offset = 0;
         for (const item of output) {
@@ -363,6 +398,7 @@ module.exports = {
   MAX_CHUNK_BYTES,
   OUTPUT_DEADLINE_MS,
   OUTPUT_WINDOW_BYTES,
+  nextUtf8ChunkEnd,
   visibleTerminalTail,
   createTerminalDataPipeline,
 };

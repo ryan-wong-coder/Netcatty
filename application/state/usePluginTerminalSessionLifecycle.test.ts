@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  beginPluginTerminalSessionMountLifecycle,
   normalizePluginTerminalProtocol,
+  shouldPublishPluginTerminalSessionMountLifecycle,
   transitionPluginTerminalConnectionState,
 } from './usePluginTerminalSessionLifecycle.ts';
 
@@ -89,4 +91,26 @@ test('terminal lifecycle snapshots preserve dynamic protocol identifiers', () =>
   );
   assert.equal(normalizePluginTerminalProtocol('mosh'), 'mosh');
   assert.equal(normalizePluginTerminalProtocol(undefined), 'ssh');
+});
+
+test('an attach popup does not publish backend session mount or disposal lifecycle', () => {
+  assert.equal(shouldPublishPluginTerminalSessionMountLifecycle(true), false);
+  assert.equal(shouldPublishPluginTerminalSessionMountLifecycle(false), true);
+
+  const events: string[] = [];
+  const cleanup = beginPluginTerminalSessionMountLifecycle(
+    shouldPublishPluginTerminalSessionMountLifecycle(true),
+    () => events.push('created'),
+    () => events.push('disposed'),
+  );
+  cleanup?.();
+  assert.deepEqual(events, []);
+
+  const ownerCleanup = beginPluginTerminalSessionMountLifecycle(
+    shouldPublishPluginTerminalSessionMountLifecycle(false),
+    () => events.push('created'),
+    () => events.push('disposed'),
+  );
+  ownerCleanup?.();
+  assert.deepEqual(events, ['created', 'disposed']);
 });

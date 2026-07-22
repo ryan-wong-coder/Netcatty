@@ -34,8 +34,8 @@ function mergeTerminalDataMeta(first, second, options = {}) {
       + Number(second?.pluginPipelineIngressBytes ?? 0),
   );
 
-  if (second?.pluginPipelineSensitiveInput === true) {
-    merged.pluginPipelineSensitiveInput = true;
+  if (typeof second?.pluginPipelineSensitiveInput === "boolean") {
+    merged.pluginPipelineSensitiveInput = second.pluginPipelineSensitiveInput;
   } else {
     delete merged.pluginPipelineSensitiveInput;
   }

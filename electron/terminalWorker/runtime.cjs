@@ -188,9 +188,12 @@ function createSender(
     if (payload?.tapped !== true) parentPort.postMessage(tapMessage);
     const pipelineProcessed = payload?.pipelineProcessed === true;
     const pipelineMode = terminalDataPipeline?.getOutputMode?.(payload?.sessionId) ?? 0;
-    let sensitiveInput = false;
+    let sensitiveInputState;
     if (!pipelineProcessed && pipelineMode !== 0) {
-      sensitiveInput = terminalDataPipeline.observeOutput?.(payload?.sessionId, payload?.data) === true;
+      sensitiveInputState = terminalDataPipeline.observeOutput?.(
+        payload?.sessionId,
+        payload?.data,
+      ) === true;
     }
     const deliver = (data, transformed = false) => {
       if ((sessionOutputGenerations.get(sessionId) ?? 0) !== outputGeneration) return;
@@ -213,7 +216,9 @@ function createSender(
             pluginPipelineProcessed: true,
           }
           : {}),
-        ...(sensitiveInput ? { pluginPipelineSensitiveInput: true } : {}),
+        ...(sensitiveInputState === undefined
+          ? {}
+          : { pluginPipelineSensitiveInput: sensitiveInputState }),
       };
       const meta = Object.keys(pipelineMeta).length > 0 ? pipelineMeta : undefined;
       if (outputPorts?.post?.(payload?.sessionId, data, meta)) return;

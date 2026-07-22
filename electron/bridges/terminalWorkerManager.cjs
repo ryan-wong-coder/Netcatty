@@ -152,8 +152,8 @@ function mergeTerminalOutputMeta(previous, next) {
     + Number(next.pluginPipelineIngressBytes ?? 0);
   if (pluginPipelineIngressBytes > 0) merged.pluginPipelineIngressBytes = pluginPipelineIngressBytes;
   else delete merged.pluginPipelineIngressBytes;
-  if (next.pluginPipelineSensitiveInput === true) {
-    merged.pluginPipelineSensitiveInput = true;
+  if (typeof next.pluginPipelineSensitiveInput === "boolean") {
+    merged.pluginPipelineSensitiveInput = next.pluginPipelineSensitiveInput;
   } else {
     delete merged.pluginPipelineSensitiveInput;
   }

@@ -25,11 +25,11 @@ const scriptDialogSource = readFileSync(
 test("password-prompt input is classified before prompt state reset and cannot broadcast", () => {
   assert.match(
     attachmentSource,
-    /meta\?\.pluginPipelineSensitiveInput === true[\s\S]*?passwordPromptActiveRef\.current = true/u,
+    /typeof meta\?\.pluginPipelineSensitiveInput === "boolean"[\s\S]*?passwordPromptActiveRef\.current = meta\.pluginPipelineSensitiveInput/u,
   );
   assert.match(
     terminalSource,
-    /meta\?\.pluginPipelineSensitiveInput === true[\s\S]*?passwordPromptActiveRef\.current = true[\s\S]*?else if \(isUntrustedTerminalInputPrompt/u,
+    /typeof meta\?\.pluginPipelineSensitiveInput === "boolean"[\s\S]*?passwordPromptActiveRef\.current = meta\.pluginPipelineSensitiveInput[\s\S]*?sensitivePromptOutputTailRef\.current = "";[\s\S]*?return;[\s\S]*?else if \(isUntrustedTerminalInputPrompt/u,
   );
   assert.match(
     runtimeSource,
@@ -104,7 +104,7 @@ test("renderer flow control acknowledges host ingress rather than transformed di
 test("active and hibernated output share host-owned sensitive prompt classification", () => {
   assert.match(
     terminalSource,
-    /const observeTerminalInputPrompt = useCallback[\s\S]*?pluginPipelineSensitiveInput === true[\s\S]*?passwordPromptActiveRef\.current = true[\s\S]*?isConfirmedTerminalShellPrompt[\s\S]*?passwordPromptActiveRef\.current = false/u,
+    /const observeTerminalInputPrompt = useCallback[\s\S]*?typeof meta\?\.pluginPipelineSensitiveInput === "boolean"[\s\S]*?passwordPromptActiveRef\.current = meta\.pluginPipelineSensitiveInput[\s\S]*?sensitivePromptOutputTailRef\.current = "";[\s\S]*?return;[\s\S]*?isConfirmedTerminalShellPrompt[\s\S]*?passwordPromptActiveRef\.current = false/u,
   );
   assert.match(
     terminalSource,

@@ -64,7 +64,10 @@ import { useStoredBoolean } from "../application/state/useStoredBoolean";
 import { readOptionalStoredStringValue, useStoredString } from "../application/state/useStoredString";
 import { useSessionLogBackend } from "../application/state/useSessionLogBackend";
 import { useTerminalLayoutSuppressActive } from "../application/state/terminalLayoutSuppressStore";
-import { usePluginTerminalSessionLifecycle } from "../application/state/usePluginTerminalSessionLifecycle";
+import {
+  shouldPublishPluginTerminalSessionMountLifecycle,
+  usePluginTerminalSessionLifecycle,
+} from "../application/state/usePluginTerminalSessionLifecycle";
 import { usePluginTerminalProviders } from "../application/state/usePluginTerminalProviders";
 import type { PluginTerminalDecorationRule } from "../domain/pluginTerminalProviders";
 import { terminalReconnectRegistry } from "../application/state/terminalReconnectRegistry";
@@ -1596,9 +1599,14 @@ const TerminalComponent: React.FC<TerminalProps> = ({
       chunk,
     );
     const promptSecurityOptions = { allowHostStyleGreaterThan: isNetworkDevice };
-    if (meta?.pluginPipelineSensitiveInput === true) {
-      passwordPromptActiveRef.current = true;
-      autocompleteCloseRef.current?.();
+    if (typeof meta?.pluginPipelineSensitiveInput === "boolean") {
+      passwordPromptActiveRef.current = meta.pluginPipelineSensitiveInput;
+      if (meta.pluginPipelineSensitiveInput) {
+        autocompleteCloseRef.current?.();
+      } else {
+        sensitivePromptOutputTailRef.current = "";
+      }
+      return;
     } else if (isUntrustedTerminalInputPrompt(
       sensitivePromptOutputTailRef.current,
       promptSecurityOptions,
@@ -1859,6 +1867,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     status,
     shellType,
     initialCwd: knownCwdRef.current ?? lastCwd,
+    ownsBackendSessionMount: shouldPublishPluginTerminalSessionMountLifecycle(attachExistingSession),
   });
   pluginTerminalSessionExitRef.current = pluginTerminalLifecycle.onSessionExited;
   const getPluginTerminalSnapshotState = useCallback((): Partial<NetcattyTerminalSessionSnapshot> => {

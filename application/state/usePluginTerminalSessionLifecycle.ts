@@ -10,6 +10,8 @@ interface PluginTerminalSessionLifecycleOptions {
   status: 'connecting' | 'connected' | 'disconnected';
   shellType?: string;
   initialCwd?: string;
+  /** False for a renderer that only temporarily owns an existing backend session. */
+  ownsBackendSessionMount?: boolean;
 }
 
 export interface PluginTerminalSnapshotState {
@@ -68,6 +70,22 @@ export function normalizePluginTerminalProtocol(
   return normalized || 'ssh';
 }
 
+export function shouldPublishPluginTerminalSessionMountLifecycle(
+  attachExistingSession: boolean,
+): boolean {
+  return !attachExistingSession;
+}
+
+export function beginPluginTerminalSessionMountLifecycle(
+  ownsBackendSessionMount: boolean,
+  publishCreated: () => void,
+  disposeBackendSession: () => void,
+): (() => void) | undefined {
+  if (!ownsBackendSessionMount) return undefined;
+  publishCreated();
+  return disposeBackendSession;
+}
+
 function normalizeShellType(shellType: string | undefined): NetcattyTerminalSessionSnapshot['shellType'] | undefined {
   if (shellType === 'posix' || shellType === 'fish' || shellType === 'powershell' || shellType === 'cmd') {
     return shellType;
@@ -116,12 +134,15 @@ export function usePluginTerminalSessionLifecycle(options: PluginTerminalSession
   }, [registry, snapshot]);
 
   useEffect(() => {
-    publish('created');
-    return () => {
-      publish('disposed');
-      registry?.cancelSession(metadataRef.current.sessionId);
-    };
-  }, [publish, registry]);
+    return beginPluginTerminalSessionMountLifecycle(
+      options.ownsBackendSessionMount !== false,
+      () => publish('created'),
+      () => {
+        publish('disposed');
+        registry?.cancelSession(metadataRef.current.sessionId);
+      },
+    );
+  }, [options.ownsBackendSessionMount, publish, registry]);
 
   useEffect(() => {
     const transition = transitionPluginTerminalConnectionState(

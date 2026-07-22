@@ -72,6 +72,38 @@ test("terminal input interception transfers bounded UTF-8 chunks and preserves o
   pipeline.shutdown();
 });
 
+test("terminal interceptor chunks never split a UTF-8 code point", async () => {
+  const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 100 });
+  const channel = new MessageChannel();
+  channel.port1.unref?.();
+  channel.port2.unref?.();
+  const chunks = [];
+  const strictDecoder = new TextDecoder("utf-8", { fatal: true });
+  listen(channel.port2, (message) => {
+    const envelope = readFrame(message);
+    if (envelope.frame.type !== "netcatty:terminal-interceptor:chunk") return;
+    const bytes = new Uint8Array(envelope.transfer);
+    chunks.push(strictDecoder.decode(bytes));
+    const result = Uint8Array.from(bytes).buffer;
+    postResult(channel.port2, envelope.frame.sequence, envelope.frame.byteLength, result);
+  });
+  pipeline.attach({
+    sessionId: "session-1",
+    direction: "input",
+    providerId: "com.example.interceptor",
+    pluginId: "com.example",
+    pluginVersion: "1.0.0",
+    runtimeId: "runtime-1",
+    runtimeKind: "utility",
+    securityPrincipal: "principal-1",
+  }, channel.port1);
+
+  const input = `${"a".repeat((64 * 1024) - 1)}😀tail`;
+  assert.equal(await pipeline.interceptInput("session-1", input), input);
+  assert.deepEqual(chunks.map((chunk) => Buffer.byteLength(chunk)), [(64 * 1024) - 1, 8]);
+  pipeline.shutdown();
+});
+
 test("sensitive input bypasses the third-party port unconditionally", async () => {
   const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 100 });
   const { seen } = attachTransform(pipeline);
@@ -279,6 +311,24 @@ test("output interception is credit bounded and fails open under backpressure", 
   assert.deepEqual(order, ["1234", "5678"]);
   assert.equal(warnings[0].code, "backpressure");
   assert.equal(pipeline.has("session-1", "output"), false);
+});
+
+test("output expansion consumes bounded credit before transformed data is delivered", async () => {
+  const warnings = [];
+  const pipeline = createTerminalDataPipeline({
+    outputDeadlineMs: 100,
+    outputWindowBytes: 5,
+    onWarning: (value) => warnings.push(value),
+  });
+  attachTransform(pipeline, {
+    direction: "output",
+    transform: () => "12345",
+  });
+
+  assert.equal(await pipeline.interceptOutput("session-1", "a"), "12345");
+  assert.equal(await pipeline.interceptOutput("session-1", "b"), "b");
+  assert.equal(pipeline.has("session-1", "output"), false);
+  assert.equal(warnings.at(-1).code, "backpressure");
 });
 
 test("queued output keeps the deadline from its arrival time", async () => {

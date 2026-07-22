@@ -213,10 +213,16 @@ test("sensitive prompt metadata follows the latest merged output chunk", () => {
     pluginPipelineIngressBytes: 10,
     pluginPipelineSensitiveInput: true,
   });
-  backlog.append("session-1", "user@host$ ", { pluginPipelineIngressBytes: 11 });
+  backlog.append("session-1", "user@host$ ", {
+    pluginPipelineIngressBytes: 11,
+    pluginPipelineSensitiveInput: false,
+  });
   assert.deepEqual(backlog.takeEntry("session-1"), {
     data: "Password: user@host$ ",
-    meta: { pluginPipelineIngressBytes: 21 },
+    meta: {
+      pluginPipelineIngressBytes: 21,
+      pluginPipelineSensitiveInput: false,
+    },
   });
 });
 

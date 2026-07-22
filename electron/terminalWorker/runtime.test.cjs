@@ -362,6 +362,31 @@ test("runtime classifies original prompts when only an output interceptor is act
   });
 });
 
+test("runtime publishes an explicit sensitive-state clear from original output", async () => {
+  const parentPort = createParentPort();
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode() { return 3; },
+      observeOutput() { return false; },
+      async interceptOutput() { return "renamed prompt> "; },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  runtime.createSender(7).send("netcatty:data", {
+    sessionId: "s1",
+    data: "\r\nAccess denied\r\n$ ",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    parentPort.messages.at(-1).meta.pluginPipelineSensitiveInput,
+    false,
+  );
+});
+
 test("runtime delivers pending intercepted output before closing the session", async () => {
   const parentPort = createParentPort();
   let releaseOutput;
@@ -583,6 +608,7 @@ test("runtime routes buffered startup output through the selected interceptor", 
       source: "startup",
       pluginPipelineIngressBytes: 5,
       pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: false,
     },
   }]);
   assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
@@ -674,6 +700,7 @@ test("runtime re-intercepts raw buffered output that only inherited ingress acco
     meta: {
       pluginPipelineIngressBytes: 12,
       pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: false,
     },
   }]);
   assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
@@ -717,6 +744,7 @@ test("runtime adds retained raw bytes after manager partial-trim accounting", as
     meta: {
       pluginPipelineIngressBytes: 15,
       pluginPipelineProcessed: true,
+      pluginPipelineSensitiveInput: false,
     },
   }]);
 });
