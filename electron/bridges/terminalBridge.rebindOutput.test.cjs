@@ -187,7 +187,7 @@ test("in-process explicit close sends an exit event before dropping the output r
   assert.match(sshSource, /if \(liveSession\?\.closed\)/, "SSH close callback suppresses duplicate explicit-close exits");
 });
 
-test("in-process explicit close notifies a rebound popup and its home renderer", () => {
+test("in-process explicit close notifies a rebound popup and its home renderer", async () => {
   const { bridge, fakeChannel } = loadTerminalBridgeWithMocks();
   const sent = [];
   const contents = new Map([7, 9].map((id) => [id, {
@@ -215,10 +215,10 @@ test("in-process explicit close notifies a rebound popup and its home renderer",
   };
   bridge.registerHandlers(ipcMain);
   assert.equal(
-    ipcMain.handlers.get("netcatty:terminal:rebindOutput")(
+    (await ipcMain.handlers.get("netcatty:terminal:rebindOutput")(
       { sender: contents.get(9) },
       { sessionId: "session-close", authorization: "close-grant" },
-    ).success,
+    )).success,
     true,
   );
 
@@ -296,7 +296,7 @@ test("attach authorization is bound to one session and renderer", () => {
   assert.equal(registry.validateAttachPopupAuthorization("grant-1", "session-1", 42), false);
 });
 
-test("failed attach restores retry when a main renderer becomes ready", () => {
+test("failed attach restores retry when a main renderer becomes ready", async () => {
   const registry = require("./terminalAttachRestore.cjs");
   let available = false;
   let calls = 0;
@@ -307,15 +307,15 @@ test("failed attach restores retry when a main renderer becomes ready", () => {
       : { success: false, restored: false, error: "Home renderer unavailable" };
   });
 
-  assert.equal(registry.restoreAttachedSessionOutput("session-retry").success, false);
+  assert.equal((await registry.restoreAttachedSessionOutput("session-retry")).success, false);
   available = true;
-  registry.retryPendingAttachedSessionOutputs();
-  registry.retryPendingAttachedSessionOutputs();
+  await registry.retryPendingAttachedSessionOutputs();
+  await registry.retryPendingAttachedSessionOutputs();
 
   assert.equal(calls, 2, "successful retry clears the pending restore");
 });
 
-test("a ready replacement main renderer becomes the explicit restore target", () => {
+test("a ready replacement main renderer becomes the explicit restore target", async () => {
   const registry = require("./terminalAttachRestore.cjs");
   const targets = [];
   registry.setRestoreAttachedSessionOutput((_sessionId, preferredHomeWebContentsId) => {
@@ -325,8 +325,8 @@ test("a ready replacement main renderer becomes the explicit restore target", ()
       : { success: true, restored: true };
   });
 
-  registry.restoreAttachedSessionOutput("session-replacement");
-  registry.retryPendingAttachedSessionOutput("session-replacement", 99);
+  await registry.restoreAttachedSessionOutput("session-replacement");
+  await registry.retryPendingAttachedSessionOutput("session-replacement", 99);
 
   assert.deepEqual(targets, [null, 99]);
 });

@@ -129,6 +129,20 @@ test("original output protects password input even when a plugin could hide the 
   pipeline.shutdown();
 });
 
+test("a confirmed shell prompt clears sensitive mode when authentication is abandoned", async () => {
+  const pipeline = createTerminalDataPipeline({ inputDeadlineMs: 100 });
+  const { seen } = attachTransform(pipeline);
+
+  assert.equal(pipeline.observeOutput("session-1", "Password: "), true);
+  assert.equal(await pipeline.interceptInput("session-1", "secret"), "secret");
+  assert.deepEqual(seen, []);
+
+  assert.equal(pipeline.observeOutput("session-1", "\r\nAccess denied\r\n$ "), false);
+  assert.equal(await pipeline.interceptInput("session-1", "next"), "NEXT");
+  assert.deepEqual(seen, [{ sequence: 1, data: "next" }]);
+  pipeline.shutdown();
+});
+
 test("output-only interception classifies sensitive prompts without retaining stale input state", () => {
   const pipeline = createTerminalDataPipeline();
   attachTransform(pipeline, { direction: "output" });

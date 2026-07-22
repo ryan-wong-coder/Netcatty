@@ -50,12 +50,13 @@ function setRestoreAttachedSessionOutput(fn) {
   restoreImpl = typeof fn === "function" ? fn : null;
 }
 
-function restoreAttachedSessionOutput(sessionId, preferredHomeWebContentsId = null) {
+async function restoreAttachedSessionOutput(sessionId, preferredHomeWebContentsId = null) {
   if (!sessionId || typeof restoreImpl !== "function") {
     return { success: false, restored: false };
   }
   try {
-    const result = restoreImpl(sessionId, preferredHomeWebContentsId) || { success: true, restored: false };
+    const result = await restoreImpl(sessionId, preferredHomeWebContentsId)
+      || { success: true, restored: false };
     if (result.success) pendingAttachRestores.delete(sessionId);
     else pendingAttachRestores.add(sessionId);
     return result;
@@ -65,15 +66,15 @@ function restoreAttachedSessionOutput(sessionId, preferredHomeWebContentsId = nu
   }
 }
 
-function retryPendingAttachedSessionOutputs() {
-  for (const sessionId of Array.from(pendingAttachRestores)) {
-    restoreAttachedSessionOutput(sessionId);
-  }
+async function retryPendingAttachedSessionOutputs() {
+  await Promise.all(Array.from(pendingAttachRestores, (sessionId) => (
+    restoreAttachedSessionOutput(sessionId)
+  )));
 }
 
-function retryPendingAttachedSessionOutput(sessionId, preferredHomeWebContentsId = null) {
+async function retryPendingAttachedSessionOutput(sessionId, preferredHomeWebContentsId = null) {
   if (!pendingAttachRestores.has(sessionId)) return { success: true, restored: false };
-  return restoreAttachedSessionOutput(sessionId, preferredHomeWebContentsId);
+  return await restoreAttachedSessionOutput(sessionId, preferredHomeWebContentsId);
 }
 
 function setAttachHomeLookup(fn) {

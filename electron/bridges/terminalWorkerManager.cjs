@@ -325,8 +325,16 @@ function createTerminalWorkerManager(options = {}) {
 
       const droppedText = data.slice(0, bytesToDrop);
       const retainedText = data.slice(bytesToDrop);
-      chunks[0] = getOutputChunkMeta(chunk)
-        ? { data: retainedText, meta: getOutputChunkMeta(chunk) }
+      const retainedMeta = getOutputChunkMeta(chunk);
+      const adjustedRetainedMeta = retainedMeta?.pluginPipelineProcessed !== true
+        && Number.isFinite(retainedMeta?.pluginPipelineIngressBytes)
+        ? mergeTerminalOutputMeta(
+          { pluginPipelineIngressBytes: bytesToDrop },
+          retainedMeta,
+        )
+        : retainedMeta;
+      chunks[0] = adjustedRetainedMeta
+        ? { data: retainedText, meta: adjustedRetainedMeta }
         : retainedText;
       totalBytes = Math.max(0, totalBytes - bytesToDrop);
       droppedBytes += bytesToDrop;
@@ -434,23 +442,24 @@ function createTerminalWorkerManager(options = {}) {
     if (!contents || contents.isDestroyed?.()) {
       return false;
     }
-    const openToken = Symbol("terminal-output-route");
-    sessionWebContentsIds.set(sessionId, webContentsId);
+    const previousWebContentsId = sessionWebContentsIds.get(sessionId) ?? null;
+    const openToken = Object.freeze({ webContentsId });
     outputRoutePending.set(sessionId, openToken);
     await Promise.allSettled([...sessionOwnedListeners].map((listener) => (
       Promise.resolve().then(() => listener(Object.freeze({ sessionId, webContentsId })))
     )));
-    if (closedSessions.has(sessionId)
-      || sessionWebContentsIds.get(sessionId) !== webContentsId
-      || outputRoutePending.get(sessionId) !== openToken) {
-      return false;
+    if (closedSessions.has(sessionId)) return false;
+    if (outputRoutePending.get(sessionId) !== openToken) {
+      return outputRoutePending.get(sessionId)?.webContentsId === webContentsId;
     }
     if (contents.isDestroyed?.()) {
-      if (outputRoutePending.get(sessionId) === openToken) {
-        outputRoutePending.delete(sessionId);
+      outputRoutePending.delete(sessionId);
+      if (previousWebContentsId == null) {
+        send("netcatty:close", { sessionId }, { webContentsId });
       }
       return false;
     }
+    sessionWebContentsIds.set(sessionId, webContentsId);
     openUrgentInputPort(webContentsId, contents);
     const outputPort = terminalOutputChannel?.openSession?.(sessionId, contents, {
       transferToWorker: true,
@@ -481,7 +490,7 @@ function createTerminalWorkerManager(options = {}) {
   /** sessionId -> home webContentsId while an attach/observe popup owns display */
   const attachHomeWebContentsIds = new Map();
 
-  function rebindOutputSession(sessionId, webContentsId) {
+  async function rebindOutputSession(sessionId, webContentsId) {
     if (!sessionId || !webContentsId) {
       return { success: false, error: "Missing sessionId or webContentsId" };
     }
@@ -498,7 +507,7 @@ function createTerminalWorkerManager(options = {}) {
     ) {
       attachHomeWebContentsIds.set(sessionId, previousWebContentsId);
     }
-    const ok = openOutputSession(sessionId, webContentsId);
+    const ok = await openOutputSession(sessionId, webContentsId);
     if (!ok) {
       return { success: false, error: "Failed to rebind session output" };
     }
@@ -529,7 +538,7 @@ function createTerminalWorkerManager(options = {}) {
     return null;
   }
 
-  function restoreAttachHome(sessionId, preferredHomeWebContentsId = null) {
+  async function restoreAttachHome(sessionId, preferredHomeWebContentsId = null) {
     if (!sessionId) return { success: false, restored: false };
     const savedHomeId = attachHomeWebContentsIds.get(sessionId);
     if (savedHomeId == null) {
@@ -548,7 +557,7 @@ function createTerminalWorkerManager(options = {}) {
         error: "Home renderer unavailable",
       };
     }
-    const ok = openOutputSession(sessionId, homeId);
+    const ok = await openOutputSession(sessionId, homeId);
     if (ok) {
       attachHomeWebContentsIds.delete(sessionId);
     }
@@ -704,15 +713,29 @@ function createTerminalWorkerManager(options = {}) {
     if (message.kind === "response") {
       const entry = pending.get(message.requestId);
       if (!entry) return;
-      pending.delete(message.requestId);
       if (message.error) {
+        pending.delete(message.requestId);
         entry.reject(new Error(message.error));
       } else {
         const sessionId = message.result?.sessionId;
-        void openOutputSession(sessionId, entry.webContentsId).then(
-          () => entry.resolve(message.result),
-          (error) => entry.reject(error),
-        );
+        if (!entry.opensOutputSession || !sessionId) {
+          pending.delete(message.requestId);
+          entry.resolve(message.result);
+          return;
+        }
+        void openOutputSession(sessionId, entry.webContentsId).then((opened) => {
+          if (pending.get(message.requestId) !== entry) return;
+          pending.delete(message.requestId);
+          if (!opened) {
+            entry.reject(new Error("Terminal session closed before its output route opened"));
+            return;
+          }
+          entry.resolve(message.result);
+        }, (error) => {
+          if (pending.get(message.requestId) !== entry) return;
+          pending.delete(message.requestId);
+          entry.reject(error);
+        });
       }
       return;
     }
@@ -921,7 +944,14 @@ function createTerminalWorkerManager(options = {}) {
     const requestId = randomUUID();
     const worker = ensureStarted();
     const promise = new Promise((resolve, reject) => {
-      pending.set(requestId, { resolve, reject, webContentsId: optionsForRequest.webContentsId });
+      pending.set(requestId, {
+        resolve,
+        reject,
+        webContentsId: optionsForRequest.webContentsId,
+        opensOutputSession: channel === "netcatty:start"
+          || channel === "netcatty:local:reconnect"
+          || /^(?:netcatty:)(?:local|telnet|mosh|et|serial):start$/u.test(channel),
+      });
     });
     if (channel === "netcatty:close:await" && payload?.sessionId) {
       notifyExplicitSessionClose(payload.sessionId);
@@ -1033,10 +1063,14 @@ function createTerminalWorkerManager(options = {}) {
       return sessionWebContentsIds.get(sessionId) ?? null;
     },
     ownsSession(sessionId, webContentsId) {
+      const pendingWebContentsId = outputRoutePending.get(sessionId)?.webContentsId;
       return Boolean(
         sessionId
         && Number.isSafeInteger(webContentsId)
-        && sessionWebContentsIds.get(sessionId) === webContentsId
+        && (
+          sessionWebContentsIds.get(sessionId) === webContentsId
+          || pendingWebContentsId === webContentsId
+        )
         && !closedSessions.has(sessionId),
       );
     },

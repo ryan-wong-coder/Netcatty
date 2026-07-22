@@ -22,6 +22,7 @@ const SENSITIVE_PROMPT = new RegExp(
   `(?:${SENSITIVE_LABELS})[^\\r\\n]{0,160}[:：?>›»]?\\s*$`,
   "iu",
 );
+const CONFIRMED_SHELL_PROMPT = /^(?:(?:~)?[#$%]|(?:[^\r\n]{1,120}@[^\r\n]{1,120}:[^\r\n]{0,120}[#$%])|(?:PS(?:\s+\S.*)?>))\s*$/u;
 
 function messageData(value) {
   return value && typeof value === "object" && "data" in value ? value.data : value;
@@ -247,7 +248,10 @@ function createTerminalDataPipeline(options = {}) {
       const tail = visibleTerminalTail(rawTail);
       const lastLine = tail.split(/[\r\n]/u).at(-1) ?? "";
       sensitivePrompt = SENSITIVE_PROMPT.test(lastLine);
-      if ((mode & 1) !== 0 && sensitivePrompt) sensitiveInputSessions.add(sessionId);
+      if ((mode & 1) !== 0) {
+        if (sensitivePrompt) sensitiveInputSessions.add(sessionId);
+        else if (CONFIRMED_SHELL_PROMPT.test(lastLine)) sensitiveInputSessions.delete(sessionId);
+      }
     }
     return (mode & 1) !== 0 ? sensitiveInputSessions.has(sessionId) : sensitivePrompt;
   }

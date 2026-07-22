@@ -374,7 +374,7 @@ function handleTerminalSessionApplySnapshotResponse(event, payload) {
  * by terminalWorkerManager (sessionWebContentsIds + output ports).
  * In-process mode: sessions Map in this bridge owns webContentsId.
  */
-function rebindTerminalSessionOutput(event, payload, terminalWorkerManager = null) {
+async function rebindTerminalSessionOutput(event, payload, terminalWorkerManager = null) {
   const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
   if (!sessionId) {
     return { success: false, error: "Missing sessionId" };
@@ -389,9 +389,9 @@ function rebindTerminalSessionOutput(event, payload, terminalWorkerManager = nul
 
   if (terminalWorkerManager) {
     try {
-      const result = terminalWorkerManager.rebindOutputSession(sessionId, sender.id);
+      const result = await terminalWorkerManager.rebindOutputSession(sessionId, sender.id);
       if (result?.success && sender.isDestroyed?.()) {
-        restoreAttachedSessionOutput(sessionId, terminalWorkerManager);
+        await restoreAttachedSessionOutput(sessionId, terminalWorkerManager);
         return { success: false, error: "Attach window closed during rebind" };
       }
       return result;
@@ -417,7 +417,7 @@ function rebindTerminalSessionOutput(event, payload, terminalWorkerManager = nul
     openTerminalOutputSession(sessionId, sender);
     session.webContentsId = sender.id;
     if (sender.isDestroyed?.()) {
-      restoreAttachedSessionOutput(sessionId, terminalWorkerManager);
+      await restoreAttachedSessionOutput(sessionId, terminalWorkerManager);
       return { success: false, error: "Attach window closed during rebind" };
     }
     return {
@@ -499,7 +499,7 @@ function findRegisteredMainWebContents(preferredId) {
   return null;
 }
 
-function restoreAttachedSessionOutput(
+async function restoreAttachedSessionOutput(
   sessionId,
   terminalWorkerManager = null,
   preferredHomeWebContentsId = null,
@@ -508,7 +508,7 @@ function restoreAttachedSessionOutput(
   pauseSessionOutputFlow(sessionId, terminalWorkerManager);
   let result;
   if (terminalWorkerManager?.restoreAttachHome) {
-    result = terminalWorkerManager.restoreAttachHome(sessionId, preferredHomeWebContentsId);
+    result = await terminalWorkerManager.restoreAttachHome(sessionId, preferredHomeWebContentsId);
   } else {
     const homeId = attachHomeWebContentsIds.get(sessionId);
     if (homeId == null) {
@@ -549,7 +549,7 @@ function restoreAttachedSessionOutput(
  * Restore output to a previous renderer after an attach popup closes.
  * Falls back to the first live main-ish window if the home webContents is gone.
  */
-function restoreTerminalSessionOutput(event, payload, terminalWorkerManager = null) {
+async function restoreTerminalSessionOutput(event, payload, terminalWorkerManager = null) {
   const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
   if (!sessionId) {
     return { success: false, error: "Missing sessionId" };
@@ -570,7 +570,7 @@ function restoreTerminalSessionOutput(event, payload, terminalWorkerManager = nu
       return { success: true, restored: false };
     }
     try {
-      const result = terminalWorkerManager.rebindOutputSession(sessionId, target.id);
+      const result = await terminalWorkerManager.rebindOutputSession(sessionId, target.id);
       if (!result?.success) {
         return { success: false, error: result?.error || "Failed to restore session output" };
       }
