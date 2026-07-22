@@ -362,21 +362,35 @@ test("session disposal invalidates an in-flight lazy activation before port tran
   assert.equal(h.attached.length, 0);
 });
 
-test("runtime exit and session disposal detach both directions", async () => {
-  const h = harness({
-    providers: [
-      provider("com.example", "com.example.input", "input"),
-      provider("com.example", "com.example.output", "output"),
-    ],
-  });
-  await h.service.handleSessionEvent({ type: "connected", session });
-  h.runtimeListeners[0]({
-    status: "error",
-    pluginId: "com.example",
-    runtimeId: "runtime-1",
-  });
-  assert.deepEqual(h.detached.map((entry) => entry.direction).sort(), ["input", "output"]);
-  await h.service.handleSessionEvent({ type: "disposed", session: { ...session, status: "disconnected" } });
+test("runtime failure statuses quarantine both directions before detaching", async () => {
+  for (const status of ["error", "quarantined"]) {
+    const h = harness({
+      providers: [
+        provider("com.example", "com.example.input", "input"),
+        provider("com.example", "com.example.output", "output"),
+      ],
+    });
+    await h.service.handleSessionEvent({ type: "connected", session });
+    h.runtimeListeners[0]({
+      status,
+      pluginId: "com.example",
+      runtimeId: "runtime-1",
+      error: "utility runtime crashed",
+    });
+    assert.deepEqual(h.detached.map((entry) => entry.direction).sort(), ["input", "output"]);
+    assert.deepEqual(h.warnings.map((warning) => warning.code).sort(), [
+      `runtime-${status}`,
+      `runtime-${status}`,
+    ]);
+    const reconnect = await h.service.handleSessionEvent({ type: "connected", session });
+    assert.deepEqual(reconnect.map((result) => result.status), ["declined", "declined"]);
+    assert.equal(h.authorized.length, 4, "a crashed runtime must not be authorized again");
+    assert.equal(h.attached.length, 4, "a crashed runtime must not be reattached");
+    await h.service.handleSessionEvent({
+      type: "disposed",
+      session: { ...session, status: "disconnected" },
+    });
+  }
 });
 
 test("runtime exit clears the cached provider choice but ordinary reconnect preserves it", async () => {
@@ -393,7 +407,7 @@ test("runtime exit clears the cached provider choice but ordinary reconnect pres
 
   const withdrawn = providers.splice(0);
   h.runtimeListeners[0]({
-    status: "error",
+    status: "stopped",
     pluginId: "com.example",
     runtimeId: "runtime-1",
   });

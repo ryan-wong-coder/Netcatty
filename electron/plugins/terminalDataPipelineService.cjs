@@ -60,6 +60,7 @@ class PluginTerminalDataPipelineService {
     this.closed = false;
     this.runtimeSupervisor.onDidChangeRuntime?.((event) => {
       if (event.status === "running") return;
+      const failed = event.status === "error" || event.status === "quarantined";
       for (const [key, selection] of this.selectedProviders) {
         if (selection.pluginId === event.pluginId) {
           this.selectedProviders.delete(key);
@@ -68,7 +69,19 @@ class PluginTerminalDataPipelineService {
       for (const [key, binding] of this.active) {
         if (binding.identity.pluginId === event.pluginId
           && (event.runtimeId == null || binding.identity.runtimeId === event.runtimeId)) {
-          this.#detachKey(key, "runtime-stopped");
+          if (failed) {
+            this.declined.add(key);
+            this.quarantined.add(key);
+            this.showWarning(Object.freeze({
+              sessionId: binding.sessionId,
+              direction: binding.direction,
+              providerId: binding.providerId,
+              code: `runtime-${event.status}`,
+              message: event.error
+                ?? `Terminal interceptor runtime ${event.status}`,
+            }));
+          }
+          this.#detachKey(key, failed ? `runtime-${event.status}` : "runtime-stopped");
         }
       }
     });

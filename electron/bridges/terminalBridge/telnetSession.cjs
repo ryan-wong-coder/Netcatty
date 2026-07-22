@@ -296,10 +296,10 @@ function createTelnetSessionApi(ctx) {
             return getCurrentTelnetWebContents();
           },
           selectUploadFiles: selectZmodemUploadFiles
-            ? () => selectZmodemUploadFiles(getCurrentTelnetWebContentsId())
+            ? () => selectZmodemUploadFiles(getCurrentTelnetWebContentsId(), sessionId)
             : undefined,
           selectDownloadDirectory: selectZmodemDownloadDirectory
-            ? () => selectZmodemDownloadDirectory(getCurrentTelnetWebContentsId())
+            ? () => selectZmodemDownloadDirectory(getCurrentTelnetWebContentsId(), sessionId)
             : undefined,
           label: "Telnet",
         });

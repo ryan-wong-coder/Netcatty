@@ -612,7 +612,16 @@ function createTerminalWorkerManager(options = {}) {
     };
   }
 
-  function resolveDialogWebContentsId(webContentsId) {
+  function resolveDialogWebContentsId(webContentsId, sessionId) {
+    // Dialog requests are interactive session work. During attach/rebind the
+    // pending renderer already owns that interaction even though the committed
+    // output mapping is intentionally not published until port transfer.
+    if (typeof sessionId === "string") {
+      const pending = outputRoutePending.get(sessionId)?.webContentsId;
+      if (isLiveWebContentsId(pending)) return pending;
+      const current = sessionWebContentsIds.get(sessionId);
+      if (isLiveWebContentsId(current)) return current;
+    }
     // Worker dialogs often still carry the original home id after rebind.
     // Prefer the current display route when this id is a remembered attach home.
     if (typeof webContentsId !== "number") return webContentsId;
@@ -884,7 +893,7 @@ function createTerminalWorkerManager(options = {}) {
 
   async function handleZmodemUploadDialogRequest(message) {
     try {
-      const webContentsId = resolveDialogWebContentsId(message.webContentsId);
+      const webContentsId = resolveDialogWebContentsId(message.webContentsId, message.sessionId);
       const contents = electronModule?.webContents?.fromId?.(webContentsId);
       const win = contents && electronModule?.BrowserWindow?.fromWebContents
         ? electronModule.BrowserWindow.fromWebContents(contents)
@@ -909,7 +918,7 @@ function createTerminalWorkerManager(options = {}) {
 
   async function handleZmodemDownloadDialogRequest(message) {
     try {
-      const webContentsId = resolveDialogWebContentsId(message.webContentsId);
+      const webContentsId = resolveDialogWebContentsId(message.webContentsId, message.sessionId);
       const contents = electronModule?.webContents?.fromId?.(webContentsId);
       const win = contents && electronModule?.BrowserWindow?.fromWebContents
         ? electronModule.BrowserWindow.fromWebContents(contents)

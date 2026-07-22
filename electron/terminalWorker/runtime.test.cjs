@@ -721,6 +721,39 @@ test("runtime adds retained raw bytes after manager partial-trim accounting", as
   }]);
 });
 
+test("runtime counts retained raw bytes when replay continues without an interceptor", async () => {
+  const parentPort = createParentPort();
+  const outputPort = new FakePort();
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode: () => 0,
+      observeOutput: () => false,
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  parentPort.emitMessage({
+    data: {
+      kind: "output-port",
+      sessionId: "s1",
+      bufferedOutput: [{
+        data: "raw",
+        meta: { pluginPipelineIngressBytes: 9 },
+      }],
+    },
+    ports: [outputPort],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(outputPort.messages, [{
+    sessionId: "s1",
+    data: "raw",
+    meta: { pluginPipelineIngressBytes: 12 },
+  }]);
+});
+
 test("runtime.createSender uses the transferred output port", () => {
   const parentPort = createParentPort();
   const outputPort = new FakePort();

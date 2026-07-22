@@ -194,8 +194,17 @@ function createSender(
     }
     const deliver = (data, transformed = false) => {
       if ((sessionOutputGenerations.get(sessionId) ?? 0) !== outputGeneration) return;
+      const inheritedIngressBytes = payload?.meta?.pluginPipelineIngressBytes;
+      const replayedRawIngressBytes = !transformed
+        && !pipelineProcessed
+        && Number.isFinite(inheritedIngressBytes)
+        ? Math.max(0, Number(inheritedIngressBytes)) + String(payload?.data ?? "").length
+        : null;
       const pipelineMeta = {
         ...(payload?.meta ?? {}),
+        ...(replayedRawIngressBytes == null
+          ? {}
+          : { pluginPipelineIngressBytes: replayedRawIngressBytes }),
         ...(transformed
           ? {
             pluginPipelineIngressBytes:

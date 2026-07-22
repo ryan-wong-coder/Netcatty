@@ -61,7 +61,7 @@ function createZmodemUploadFileSelector(parentPort, options = {}) {
     }
   });
 
-  return function selectZmodemUploadFiles(webContentsId) {
+  return function selectZmodemUploadFiles(webContentsId, sessionId) {
     const requestId = randomUUIDFn();
     const promise = new Promise((resolve, reject) => {
       pendingRequests.set(requestId, { resolve, reject });
@@ -70,6 +70,7 @@ function createZmodemUploadFileSelector(parentPort, options = {}) {
       kind: "zmodem-upload-dialog",
       requestId,
       webContentsId,
+      sessionId,
     });
     return promise;
   };
@@ -92,7 +93,7 @@ function createZmodemDownloadDirectorySelector(parentPort, options = {}) {
     }
   });
 
-  return function selectZmodemDownloadDirectory(webContentsId) {
+  return function selectZmodemDownloadDirectory(webContentsId, sessionId) {
     const requestId = randomUUIDFn();
     const promise = new Promise((resolve, reject) => {
       pendingRequests.set(requestId, { resolve, reject });
@@ -101,6 +102,7 @@ function createZmodemDownloadDirectorySelector(parentPort, options = {}) {
       kind: "zmodem-download-dialog",
       requestId,
       webContentsId,
+      sessionId,
     });
     return promise;
   };

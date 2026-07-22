@@ -1426,6 +1426,7 @@ test("rebound interactive events target only the popup while exit also reaches h
 test("rebind waits for ownership and routes interactive events to the pending renderer", async () => {
   const child = new FakeChild();
   const forwarded = [];
+  const dialogOwners = [];
   let releaseRebind;
   const manager = createTerminalWorkerManager({
     utilityProcess: { fork() { return child; } },
@@ -1438,6 +1439,15 @@ test("rebind waits for ownership and routes interactive events to the pending re
             isDestroyed() { return false; },
             send(channel, payload) { forwarded.push({ id, channel, payload }); },
           };
+        },
+      },
+      BrowserWindow: {
+        fromWebContents(contents) { return { webContentsId: contents.id }; },
+      },
+      dialog: {
+        async showOpenDialog(owner) {
+          dialogOwners.push(owner?.webContentsId ?? null);
+          return { canceled: true, filePaths: [] };
         },
       },
     },
@@ -1477,6 +1487,21 @@ test("rebind waits for ownership and routes interactive events to the pending re
     channel: "netcatty:zmodem:overwrite-request",
     payload: { sessionId: "session-1", requestId: "request-1" },
   }]);
+
+  child.emit("message", {
+    kind: "zmodem-upload-dialog",
+    requestId: "upload-dialog-1",
+    sessionId: "session-1",
+    webContentsId: 7,
+  });
+  child.emit("message", {
+    kind: "zmodem-download-dialog",
+    requestId: "download-dialog-1",
+    sessionId: "session-1",
+    webContentsId: 7,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(dialogOwners, [9, 9]);
 
   releaseRebind();
   assert.equal((await rebound).success, true);

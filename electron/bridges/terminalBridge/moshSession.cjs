@@ -752,10 +752,10 @@ function createMoshSessionApi(ctx) {
           },
           getWebContents() { return electronModule.webContents.fromId(session.webContentsId); },
           selectUploadFiles: selectZmodemUploadFiles
-            ? () => selectZmodemUploadFiles(session.webContentsId)
+            ? () => selectZmodemUploadFiles(session.webContentsId, sessionId)
             : undefined,
           selectDownloadDirectory: selectZmodemDownloadDirectory
-            ? () => selectZmodemDownloadDirectory(session.webContentsId)
+            ? () => selectZmodemDownloadDirectory(session.webContentsId, sessionId)
             : undefined,
           protocolLabel: "Mosh",
         });

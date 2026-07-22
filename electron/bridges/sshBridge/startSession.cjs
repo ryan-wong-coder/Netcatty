@@ -432,10 +432,10 @@ printf '%s\n' '${scanCompleteMarker}'`;
           return getCurrentSessionWebContents();
         },
         selectUploadFiles: selectZmodemUploadFiles
-          ? () => selectZmodemUploadFiles(getCurrentSessionWebContentsId())
+          ? () => selectZmodemUploadFiles(getCurrentSessionWebContentsId(), sessionId)
           : undefined,
         selectDownloadDirectory: selectZmodemDownloadDirectory
-          ? () => selectZmodemDownloadDirectory(getCurrentSessionWebContentsId())
+          ? () => selectZmodemDownloadDirectory(getCurrentSessionWebContentsId(), sessionId)
           : undefined,
         label: "SSH",
       });

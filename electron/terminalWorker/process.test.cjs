@@ -46,11 +46,12 @@ test("ZMODEM upload selector resolves dialog results delivered as MessageEvent d
     randomUUID: () => "dialog-1",
   });
 
-  const promise = selectUploadFiles(7);
+  const promise = selectUploadFiles(7, "session-1");
   assert.deepEqual(parentPort.messages, [{
     kind: "zmodem-upload-dialog",
     requestId: "dialog-1",
     webContentsId: 7,
+    sessionId: "session-1",
   }]);
 
   parentPort.emitMessage({
@@ -73,11 +74,12 @@ test("ZMODEM download selector resolves directory dialog results delivered as Me
     randomUUID: () => "download-dialog-1",
   });
 
-  const promise = selectDownloadDirectory(7);
+  const promise = selectDownloadDirectory(7, "session-1");
   assert.deepEqual(parentPort.messages, [{
     kind: "zmodem-download-dialog",
     requestId: "download-dialog-1",
     webContentsId: 7,
+    sessionId: "session-1",
   }]);
 
   parentPort.emitMessage({

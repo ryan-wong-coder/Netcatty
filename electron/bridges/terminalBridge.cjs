@@ -969,10 +969,10 @@ function startLocalSession(event, payload) {
         return electronModule.webContents.fromId(session.webContentsId);
       },
       selectUploadFiles: selectZmodemUploadFiles
-        ? () => selectZmodemUploadFiles(session.webContentsId)
+        ? () => selectZmodemUploadFiles(session.webContentsId, sessionId)
         : undefined,
       selectDownloadDirectory: selectZmodemDownloadDirectory
-        ? () => selectZmodemDownloadDirectory(session.webContentsId)
+        ? () => selectZmodemDownloadDirectory(session.webContentsId, sessionId)
         : undefined,
       label: "Local",
     });
@@ -1211,10 +1211,10 @@ async function startSerialSession(event, options) {
             return electronModule.webContents.fromId(session.webContentsId);
           },
           selectUploadFiles: selectZmodemUploadFiles
-            ? () => selectZmodemUploadFiles(session.webContentsId)
+            ? () => selectZmodemUploadFiles(session.webContentsId, sessionId)
             : undefined,
           selectDownloadDirectory: selectZmodemDownloadDirectory
-            ? () => selectZmodemDownloadDirectory(session.webContentsId)
+            ? () => selectZmodemDownloadDirectory(session.webContentsId, sessionId)
             : undefined,
           label: "Serial",
         });
