@@ -26,7 +26,9 @@ function createTerminalDataBacklog(options = {}) {
     const previousHasIngress = hasPluginPipelineIngress(previousMeta);
     const nextChunkHasIngress = hasPluginPipelineIngress(nextChunkMeta);
     // Once one merged chunk carries explicit original-ingress accounting, the
-    // metadata must cover every raw byte in the same replay entry. Otherwise a
+    // metadata must cover every raw flow unit in the same replay entry. Flow
+    // control is intentionally charged in JavaScript string length, not UTF-8
+    // bytes, throughout the terminal renderer/worker path. Otherwise a
     // processed chunk followed or preceded by ordinary output would cause the
     // renderer to acknowledge only the annotated subset.
     if (previousHasIngress && !nextChunkHasIngress && data) {

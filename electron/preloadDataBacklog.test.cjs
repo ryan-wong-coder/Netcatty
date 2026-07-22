@@ -417,6 +417,29 @@ test("legacy terminal data delivery preserves metadata-only plugin output", () =
   }
 });
 
+test("legacy MCP-filtered plugin output returns ingress credit immediately", () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    preload.api.onSessionData("session-1", (chunk, meta) => received.push({ chunk, meta }));
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "__NCMCP_TEST",
+      meta: { pluginPipelineIngressBytes: 13 },
+    });
+    preload.handlers.get("netcatty:data")?.({}, {
+      sessionId: "session-1",
+      data: "\nREADY\n",
+    });
+    assert.deepEqual(received, [
+      { chunk: "", meta: { pluginPipelineIngressBytes: 13 } },
+      { chunk: "READY\n", meta: undefined },
+    ]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
 test("terminal output port delivery preserves terminal perf metadata", () => {
   const preload = loadPreloadWithFakeElectron();
   try {
@@ -479,12 +502,12 @@ test("MCP-filtered metadata-only plugin output is not applied to the next visibl
     );
     port.emit({
       sessionId: "session-1",
-      data: "__NCMCP_TEST\n",
+      data: "__NCMCP_TEST",
       meta: { pluginPipelineIngressBytes: 13 },
     });
     port.emit({
       sessionId: "session-1",
-      data: "READY\n",
+      data: "\nREADY\n",
     });
     assert.deepEqual(received, [
       { chunk: "", meta: { pluginPipelineIngressBytes: 13 } },

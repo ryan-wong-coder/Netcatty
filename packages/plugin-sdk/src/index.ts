@@ -102,6 +102,16 @@ export type PluginProviderHandler<
   TResult extends JsonValue = JsonValue,
 > = (invocation: PluginProviderInvocation<TPayload>) => TResult | void | Promise<TResult | void>;
 
+type ProviderHandlerForKind<
+  K extends ProviderKind,
+  TPayload extends JsonValue,
+  TResult extends JsonValue,
+> = K extends TerminalInterceptorKind
+  ? TerminalInterceptorHandler
+  : K extends OrdinaryTerminalProviderKind
+    ? OrdinaryTerminalProviderHandler<K>
+    : PluginProviderHandler<TPayload, TResult>;
+
 export interface PluginProviders {
   register<K extends OrdinaryTerminalProviderKind>(
     providerId: string,
@@ -117,6 +127,15 @@ export interface PluginProviders {
     providerId: string,
     kind: Exclude<ProviderKind, TerminalInterceptorKind>,
     handler: PluginProviderHandler<TPayload, TResult>,
+  ): Disposable;
+  register<
+    K extends ProviderKind,
+    TPayload extends JsonValue = JsonValue,
+    TResult extends JsonValue = JsonValue,
+  >(
+    providerId: string,
+    kind: K,
+    handler: ProviderHandlerForKind<NoInfer<K>, TPayload, TResult>,
   ): Disposable;
 }
 

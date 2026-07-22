@@ -80,11 +80,19 @@ test("PluginSecretStore exposes opaque references instead of plaintext reads", a
   assert.equal(testSecretRef.key, "token");
 });
 
-test("terminal interceptors cannot fall back to the JSON Provider overload", async () => {
+test("terminal interceptor typing stays specialized while broad ProviderKind helpers remain compatible", async () => {
   const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(
     source,
     /kind: Exclude<ProviderKind, TerminalInterceptorKind>,\s*handler: PluginProviderHandler/u,
+  );
+  assert.match(
+    source,
+    /type ProviderHandlerForKind<[\s\S]*K extends TerminalInterceptorKind[\s\S]*TerminalInterceptorHandler/u,
+  );
+  assert.match(
+    source,
+    /kind: K,\s*handler: ProviderHandlerForKind<NoInfer<K>, TPayload, TResult>/u,
   );
 });
 

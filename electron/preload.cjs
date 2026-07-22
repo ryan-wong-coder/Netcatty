@@ -152,6 +152,18 @@ function filterMcpChunk(sessionId, chunk, meta) {
   return { data: result, meta: !held && result === chunk ? sameChunkMeta : stateMeta };
 }
 
+function consumeBufferedMcpIngress(sessionId) {
+  const heldMeta = _mcpLineMetas.get(sessionId);
+  if (!hasPluginPipelineIngress(heldMeta)) return;
+  const remainingMeta = { ...heldMeta };
+  delete remainingMeta.pluginPipelineIngressBytes;
+  if (Object.keys(remainingMeta).length > 0) {
+    _mcpLineMetas.set(sessionId, remainingMeta);
+  } else {
+    _mcpLineMetas.delete(sessionId);
+  }
+}
+
 /**
  * Deliver data to session listeners.  Used both by the normal data path
  * and by the delayed-flush timer.
@@ -203,8 +215,17 @@ function deliverTerminalData(sessionId, data, options = {}) {
   const filtered = filterMcpChunk(sessionId, data, options.meta);
   if (filtered?.data) {
     _deliverToListeners(sessionId, filtered.data, filtered.meta);
+    if (hasPluginPipelineIngress(filtered.meta)) consumeBufferedMcpIngress(sessionId);
   } else if (filtered?.meta) {
-    _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), filtered.meta));
+    if (hasPluginPipelineIngress(filtered.meta)) {
+      // The legacy path must return flow credit even when MCP marker filtering
+      // removes every display byte. Waiting for unrelated visible output can
+      // otherwise leave a fully suppressed stream paused indefinitely.
+      _deliverToListeners(sessionId, "", filtered.meta);
+      consumeBufferedMcpIngress(sessionId);
+    } else {
+      _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), filtered.meta));
+    }
   }
   // If there is buffered content waiting for more data (e.g. a prompt
   // right after a dropped marker line), schedule a delayed flush so it
@@ -223,7 +244,9 @@ const terminalOutputPorts = createTerminalOutputPortRegistry({
     // registry so renderer flow credit can be returned. Do not retain the same
     // ingress metadata for the next visible chunk or it would be acknowledged
     // twice. Non-ingress terminal-state metadata still follows the next output.
-    if (!filtered?.data && filtered?.meta && !hasPluginPipelineIngress(filtered.meta)) {
+    if (hasPluginPipelineIngress(filtered?.meta)) {
+      consumeBufferedMcpIngress(sessionId);
+    } else if (!filtered?.data && filtered?.meta) {
       _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), filtered.meta));
     }
     scheduleMcpBufferedFlush(sessionId);
