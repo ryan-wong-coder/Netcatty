@@ -8,12 +8,14 @@ const { PLUGIN_RPC_MAX_JSON_BYTES } = require("./constants.cjs");
 
 function createRouter(options = {}) {
   const sent = [];
+  const transfers = [];
   const protocolErrors = [];
   const router = new PluginRpcRouter({
     pluginId: "com.example.test",
-    send(message) {
-      options.send?.(message);
+    send(message, transfer = []) {
+      options.send?.(message, transfer);
       sent.push(message);
+      transfers.push(transfer);
     },
     handlers: options.handlers,
     requestHandlers: options.requestHandlers,
@@ -24,7 +26,7 @@ function createRouter(options = {}) {
     onIncomingStream: options.onIncomingStream,
     onProtocolError(error) { protocolErrors.push(error); },
   });
-  return { router, sent, protocolErrors };
+  return { router, sent, transfers, protocolErrors };
 }
 
 test("raw message guards run before schema work and can contain every transport message class", async () => {
@@ -369,6 +371,31 @@ test("outgoing requests validate method-specific plugin results before resolving
   await assert.rejects(
     fixture.router.request("provider.invoke", {}, { validateResult: true }),
     /validator must be a function/,
+  );
+});
+
+test("outgoing requests keep transferable setup under router correlation and validation", async () => {
+  const fixture = createRouter();
+  const port = { postMessage() {} };
+  const response = fixture.router.request("plugin.terminal.interceptor.attach", {
+    descriptor: { providerId: "com.example.input", direction: "input" },
+  }, {
+    transfer: [port],
+    validateResult(result) {
+      if (result?.accepted !== true) throw new TypeError("Invalid attachment result");
+      return undefined;
+    },
+  });
+  assert.deepEqual(fixture.transfers[0], [port]);
+  await fixture.router.accept({
+    jsonrpc: "2.0",
+    id: fixture.sent[0].id,
+    result: { accepted: true },
+  });
+  assert.equal(await response, undefined);
+  await assert.rejects(
+    fixture.router.request("plugin.terminal.interceptor.attach", {}, { transfer: port }),
+    /transfer list must be an array/,
   );
 });
 

@@ -68,18 +68,23 @@ test("utility runtime dispatches dedicated terminal ports to the exact registere
 
   const dataPort = new FakePort();
   control.emit({
-    type: "netcatty-plugin:terminal-interceptor:attach",
-    attachmentId: 1,
-    descriptor: {
-      providerId: "com.example.input",
-      direction: "input",
-      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    jsonrpc: "2.0",
+    id: 3,
+    method: "plugin.terminal.interceptor.attach",
+    params: {
+      descriptor: {
+        providerId: "com.example.input",
+        direction: "input",
+        session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+      },
     },
   }, [dataPort]);
+  await tick();
   assert.equal(
     control.messages.some(({ message }) => (
-      message.type === "netcatty-plugin:terminal-interceptor:attached"
-      && message.attachmentId === 1
+      message.jsonrpc === "2.0"
+      && message.id === 3
+      && message.result?.accepted === true
     )),
     true,
   );
@@ -128,22 +133,54 @@ test("utility runtime closes a terminal port when provider ownership or kind is 
   await tick();
   const dataPort = new FakePort();
   control.emit({
-    type: "netcatty-plugin:terminal-interceptor:attach",
-    attachmentId: 2,
-    descriptor: {
-      providerId: "com.example.missing",
-      direction: "input",
-      session: { sessionId: "session-1" },
+    jsonrpc: "2.0",
+    id: 3,
+    method: "plugin.terminal.interceptor.attach",
+    params: {
+      descriptor: {
+        providerId: "com.example.missing",
+        direction: "input",
+        session: { sessionId: "session-1" },
+      },
     },
   }, [dataPort]);
+  await tick();
   assert.equal(dataPort.closed, true);
   assert.equal(
     control.messages.some(({ message }) => (
-      message.type === "netcatty-plugin:terminal-interceptor:rejected"
-      && message.attachmentId === 2
+      message.jsonrpc === "2.0"
+      && message.id === 3
+      && message.error?.code === -32009
     )),
     true,
   );
+  await runtime.dispose();
+});
+
+test("utility runtime rejects the retired private terminal attachment protocol", async () => {
+  const { startPluginRuntime } = await import("./runtimePeer.mjs");
+  const control = new FakePort();
+  const runtime = await startPluginRuntime({
+    port: control,
+    config: {
+      pluginId: "com.example",
+      pluginVersion: "1.0.0",
+      netcattyVersion: "1.0.0",
+      apiVersion: "1.0.0",
+      enabledFeatures: [],
+      environment: {},
+      entryUrl: "file:///plugin.js",
+    },
+    loadPlugin: async () => ({ default: { activate() {} } }),
+  });
+  const dataPort = new FakePort();
+  control.emit({
+    type: "netcatty-plugin:terminal-interceptor:attach",
+    attachmentId: 1,
+    descriptor: { providerId: "com.example.input", direction: "input" },
+  }, [dataPort]);
+  assert.equal(dataPort.closed, true);
+  assert.equal(control.messages.length, 0);
   await runtime.dispose();
 });
 
@@ -185,14 +222,18 @@ test("terminal ports convert synchronous throws to failures and stop using dispo
 
   const dataPort = new FakePort();
   control.emit({
-    type: "netcatty-plugin:terminal-interceptor:attach",
-    attachmentId: 3,
-    descriptor: {
-      providerId: "com.example.input",
-      direction: "input",
-      session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+    jsonrpc: "2.0",
+    id: 3,
+    method: "plugin.terminal.interceptor.attach",
+    params: {
+      descriptor: {
+        providerId: "com.example.input",
+        direction: "input",
+        session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+      },
     },
   }, [dataPort]);
+  await tick();
   const send = (sequence) => dataPort.emit({
     type: "netcatty:terminal-interceptor:chunk",
     sequence,

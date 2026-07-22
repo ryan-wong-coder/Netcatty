@@ -97,8 +97,6 @@ class UtilityPluginRuntime {
     this.terminationRequested = false;
     this.terminationPromise = null;
     this.exitReported = false;
-    this.nextTerminalInterceptorAttachmentId = 1;
-    this.pendingTerminalInterceptorAttachments = new Map();
   }
 
   #assertStarting(signal) {
@@ -157,16 +155,6 @@ class UtilityPluginRuntime {
     this.child.on("message", (event) => {
       const message = event?.data ?? event;
       if (message?.type === "netcatty-plugin:ready") return;
-      if (message?.type === "netcatty-plugin:terminal-interceptor:attached"
-        || message?.type === "netcatty-plugin:terminal-interceptor:rejected") {
-        const pending = this.pendingTerminalInterceptorAttachments.get(message.attachmentId);
-        if (!pending) return;
-        this.pendingTerminalInterceptorAttachments.delete(message.attachmentId);
-        clearTimeout(pending.timer);
-        if (message.type === "netcatty-plugin:terminal-interceptor:attached") pending.resolve();
-        else pending.reject(new Error("Plugin utility runtime rejected the Terminal interceptor port"));
-        return;
-      }
       this.router?.accept(message);
     });
     const ready = waitForUtilityReady(this.child, PLUGIN_ACTIVATION_TIMEOUT_MS);
@@ -201,7 +189,6 @@ class UtilityPluginRuntime {
     } finally {
       const router = this.router;
       this.router = null;
-      this.#rejectTerminalInterceptorAttachments(new Error("Plugin utility runtime is stopping"));
       router?.close();
       await this.#terminateAndWait();
     }
@@ -223,26 +210,17 @@ class UtilityPluginRuntime {
   }
 
   attachTerminalInterceptor(descriptor, port) {
-    if (!this.router || !this.child) throw new Error("Plugin utility runtime is not connected");
+    if (!this.router) throw new Error("Plugin utility runtime is not connected");
     if (!port) throw new TypeError("Terminal interceptor port is required");
-    const attachmentId = this.nextTerminalInterceptorAttachmentId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingTerminalInterceptorAttachments.delete(attachmentId);
-        reject(new Error("Plugin utility runtime did not accept the Terminal interceptor port"));
-      }, PLUGIN_ACTIVATION_TIMEOUT_MS);
-      this.pendingTerminalInterceptorAttachments.set(attachmentId, { resolve, reject, timer });
-      try {
-        this.child.postMessage({
-          type: "netcatty-plugin:terminal-interceptor:attach",
-          attachmentId,
-          descriptor,
-        }, [port]);
-      } catch (error) {
-        clearTimeout(timer);
-        this.pendingTerminalInterceptorAttachments.delete(attachmentId);
-        reject(error);
-      }
+    return this.router.request("plugin.terminal.interceptor.attach", { descriptor }, {
+      timeoutMs: PLUGIN_ACTIVATION_TIMEOUT_MS,
+      transfer: [port],
+      validateResult(result) {
+        if (result?.accepted !== true || Reflect.ownKeys(result).length !== 1) {
+          throw new TypeError("Plugin utility runtime returned an invalid Terminal interceptor attachment result");
+        }
+        return undefined;
+      },
     });
   }
 
@@ -252,7 +230,6 @@ class UtilityPluginRuntime {
 
   #beginTermination(error) {
     this.terminationError ??= error;
-    this.#rejectTerminalInterceptorAttachments(error);
     const router = this.router;
     this.router = null;
     router?.close(error);
@@ -308,20 +285,12 @@ class UtilityPluginRuntime {
     if (this.stopping || this.exitReported) return;
     this.exitReported = true;
     const error = this.terminationError ?? new Error(`Plugin utility exited (${code})`);
-    this.#rejectTerminalInterceptorAttachments(error);
     const router = this.router;
     this.router = null;
     router?.close(error);
     this.onExit({ expected: false, error });
   }
 
-  #rejectTerminalInterceptorAttachments(error) {
-    for (const pending of this.pendingTerminalInterceptorAttachments.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(error);
-    }
-    this.pendingTerminalInterceptorAttachments.clear();
-  }
 }
 
 module.exports = {

@@ -103,7 +103,11 @@ quarantine. The requesting renderer must own the terminal session before any
 authorization or activation work occurs.
 
 The main process transfers the two ends of one `MessageChannelMain` directly
-to the terminal worker and selected plugin utility process. Data messages
+to the terminal worker and selected plugin utility process. The utility-side
+attachment is established by a transfer-aware `PluginRpcRouter` request, so
+the existing router owns correlation, deadline, cancellation, validation,
+late-response retirement, close cleanup, and protocol-failure containment.
+Only the accepted long-lived byte path leaves the control plane. Data messages
 contain a monotonic sequence, direction, bounded credit information, and one
 transferable `ArrayBuffer`; the main process never copies terminal payloads.
 The worker serializes chunks, caps each transfer at 64 KiB, and limits queued
@@ -121,6 +125,12 @@ the interceptor is disabled for that session/direction, and Netcatty displays
 a host-owned warning. An interceptor cannot suppress that warning or re-enable
 itself without a fresh host authorization path.
 
+These budgets are containment limits, not production performance acceptance
+evidence. PR 9 owns the reproducible benchmark harness, supported hardware and
+operating-system matrix, and release gate proving no more than 1% no-plugin
+throughput regression plus approximately 4 ms p95 / 8 ms p99 added input
+latency before the development gate can be removed.
+
 Credential protection is outside plugin control. Input that the host marks as
 sensitive/no-echo bypasses the port before buffer creation, including every
 character entered while the password-prompt state is active and confirmed
@@ -131,7 +141,12 @@ challenges from bounded original-output tails before output interception, so an
 output plugin cannot expose a password by hiding or rewriting its prompt.
 Sensitive input is also excluded from terminal broadcast. Terminal protocol replies, urgent interrupts, transfer input gates,
 transport encoding, Telnet IAC escaping, host logs, renderer flow accounting,
-and marker/safety filtering remain host-owned. With no active interceptor, the
+and marker/safety parsing remain host-owned. Output interceptors may create or
+suppress visible byte sequences that affect output-derived lifecycle signals
+such as OSC 133. Netcatty owns the parser, marker objects, validation, and
+cleanup, but deliberately derives those signals from the transformed visible
+stream; credential-prompt classification remains based on bounded original
+host output before interception. With no active interceptor, the
 worker uses the existing synchronous output path and performs no interceptor
 Promise, transfer, or payload allocation.
 

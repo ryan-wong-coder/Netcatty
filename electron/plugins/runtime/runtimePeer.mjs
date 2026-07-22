@@ -493,7 +493,7 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
     throw new Error("Plugin entrypoint must default-export a plugin with activate(context)");
   }
 
-  async function handleRequest(message, cancellationToken) {
+  async function handleRequest(message, cancellationToken, ports = []) {
     if (message.method === "plugin.initialize") {
       if (context) throw new PluginError("failed_precondition", "Plugin is already initialized");
       context = createPluginContext(config, client, runtimeApi);
@@ -525,6 +525,15 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
       }
       return null;
     }
+    if (message.method === "plugin.terminal.interceptor.attach") {
+      if (ports.length !== 1) {
+        for (const port of ports) port?.close?.();
+        throw new PluginError("invalid_argument", "Terminal interceptor attachment requires exactly one port");
+      }
+      attachTerminalInterceptor(message.params, ports);
+      return { accepted: true };
+    }
+    for (const port of ports) port?.close?.();
     if (message.method === "plugin.command.execute") {
       if (!activated || !context) throw new PluginError("failed_precondition", "Plugin is not activated");
       const command = assertOwnedContributionId(config.pluginId, message.params?.command, "Plugin command");
@@ -689,44 +698,34 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
   };
 
   const dispose = transport.onMessage((message, ports) => {
-    if (message?.type === "netcatty-plugin:terminal-interceptor:attach") {
-      try {
-        if (!Number.isSafeInteger(message.attachmentId) || message.attachmentId < 1) {
-          throw new PluginError("invalid_argument", "Terminal interceptor attachment ID is invalid");
-        }
-        attachTerminalInterceptor(message, ports);
-        transport.post({
-          type: "netcatty-plugin:terminal-interceptor:attached",
-          attachmentId: message.attachmentId,
-        });
-      } catch {
-        ports?.[0]?.close?.();
-        transport.post({
-          type: "netcatty-plugin:terminal-interceptor:rejected",
-          attachmentId: message?.attachmentId,
-        });
-      }
-      return;
-    }
     if (message && typeof message === "object" && Object.hasOwn(message, "frame")) {
+      for (const port of ports) port?.close?.();
       try { cancelUnhandledStream(transport, message); }
       catch { transport.close(); }
       return;
     }
-    if (client.accept(message)) return;
-    if (!message || message.jsonrpc !== "2.0") return;
+    if (client.accept(message)) {
+      for (const port of ports) port?.close?.();
+      return;
+    }
+    if (!message || message.jsonrpc !== "2.0") {
+      for (const port of ports) port?.close?.();
+      return;
+    }
     if (message.method === "$/cancelRequest") {
+      for (const port of ports) port?.close?.();
       cancellation.get(message.params?.cancellationId)?.cancel();
       return;
     }
     if (!Object.hasOwn(message, "id")) {
+      for (const port of ports) port?.close?.();
       try { handleNotification(message); } catch { transport.close(); }
       return;
     }
     const cancellationId = message.cancellationId;
     const source = new CancellationTokenSource();
     if (cancellationId) cancellation.set(cancellationId, source);
-    void handleRequest(message, source.token).then(
+    void handleRequest(message, source.token, ports).then(
       (result) => transport.post({
         jsonrpc: "2.0",
         id: message.id,

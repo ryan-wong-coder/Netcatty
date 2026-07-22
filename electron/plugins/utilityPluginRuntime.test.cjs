@@ -10,7 +10,7 @@ const { EventEmitter } = require("node:events");
 const { UtilityPluginRuntime, resolveUtilityEntrypoint } = require("./utilityPluginRuntime.cjs");
 
 test("utility runtime waits for acceptance of a dedicated terminal interceptor port", async () => {
-  const posts = [];
+  const requests = [];
   const runtime = new UtilityPluginRuntime({
     utilityProcess: {},
     plugin: { id: "com.example", manifest: { main: { node: "dist/index.js" } } },
@@ -18,21 +18,23 @@ test("utility runtime waits for acceptance of a dedicated terminal interceptor p
     bootstrapPath: "/runtime.mjs",
     moduleMappings: {},
   });
-  runtime.router = {};
-  runtime.child = { postMessage(message, transfer) { posts.push({ message, transfer }); } };
+  runtime.router = {
+    request(method, params, options) {
+      requests.push({ method, params, options });
+      return Promise.resolve(options.validateResult({ accepted: true }));
+    },
+  };
   const port = { close() {} };
-  const attached = runtime.attachTerminalInterceptor(
+  await runtime.attachTerminalInterceptor(
     { providerId: "com.example.input", direction: "input" },
     port,
   );
-  assert.equal(posts[0].message.type, "netcatty-plugin:terminal-interceptor:attach");
-  assert.equal(posts[0].message.attachmentId, 1);
-  assert.deepEqual(posts[0].transfer, [port]);
-  const pending = runtime.pendingTerminalInterceptorAttachments.get(1);
-  clearTimeout(pending.timer);
-  runtime.pendingTerminalInterceptorAttachments.delete(1);
-  pending.resolve();
-  await attached;
+  assert.equal(requests[0].method, "plugin.terminal.interceptor.attach");
+  assert.deepEqual(requests[0].params, {
+    descriptor: { providerId: "com.example.input", direction: "input" },
+  });
+  assert.deepEqual(requests[0].options.transfer, [port]);
+  assert.equal(requests[0].options.timeoutMs > 0, true);
 });
 
 test("utility entrypoint is realpath-contained at the moment of launch", async (context) => {
@@ -89,10 +91,11 @@ test("utility runtime launches without a shell using a minimal environment", asy
         }));
       } else if (message.method === "plugin.activate") {
         queueMicrotask(() => this.emit("message", { jsonrpc: "2.0", id: message.id, result: null }));
-      } else if (message.type === "netcatty-plugin:terminal-interceptor:attach") {
+      } else if (message.method === "plugin.terminal.interceptor.attach") {
         queueMicrotask(() => this.emit("message", {
-          type: "netcatty-plugin:terminal-interceptor:attached",
-          attachmentId: message.attachmentId,
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { accepted: true },
         }));
       }
     }
