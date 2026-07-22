@@ -5,7 +5,10 @@ import { useSettingsState } from '../application/state/useSettingsState';
 import { useTerminalPopupWindow } from '../application/state/useTerminalPopupWindow';
 import { useVaultState } from '../application/state/useVaultState';
 import { useWindowControls } from '../application/state/useWindowControls';
-import { shouldCloseTerminalPopupOnExit } from '../application/state/resolveTerminalSessionExitIntent';
+import {
+  shouldCloseTerminalPopupOnExit,
+  shouldRevealTerminalPopupOnExit,
+} from '../application/state/resolveTerminalSessionExitIntent';
 import { upsertKnownHost } from '../domain/knownHosts';
 import { resolveTerminalChainHosts, resolveTerminalSessionHost } from '../domain/terminalHostResolution';
 import type { TerminalPopupPayload } from '../domain/systemManager/types';
@@ -465,12 +468,18 @@ function TerminalPopupPageInner() {
                 void handleClose();
               }}
               onSessionExit={(_closedSessionId, evt) => {
-                if (isAttachMode) {
+                if (shouldCloseTerminalPopupOnExit(evt, {
+                  autoCloseOnExit: settings.terminalSettings.autoCloseOnExit,
+                  isAttachMode,
+                })) {
                   void handleClose();
                   return;
                 }
-                if (shouldCloseTerminalPopupOnExit(evt)) {
-                  void handleClose();
+                if (shouldRevealTerminalPopupOnExit(evt, {
+                  autoCloseOnExit: settings.terminalSettings.autoCloseOnExit,
+                  isAttachMode,
+                })) {
+                  revealTerminal();
                   return;
                 }
                 if (!terminalReady && config.startupCommand && !isAttachMode) {
