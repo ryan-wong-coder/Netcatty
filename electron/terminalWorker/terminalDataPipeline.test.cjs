@@ -7,10 +7,28 @@ const test = require("node:test");
 const {
   createTerminalDataPipeline,
 } = require("./terminalDataPipeline.cjs");
+const {
+  createTerminalInterceptorEnvelope,
+} = require("../plugins/terminalInterceptorTransport.cjs");
 
 function listen(port, listener) {
   port.on("message", listener);
   port.start?.();
+}
+
+function readFrame(message) {
+  return createTerminalInterceptorEnvelope(message?.frame, message?.transfer);
+}
+
+function postResult(port, sequence, creditBytes, data) {
+  const envelope = createTerminalInterceptorEnvelope({
+    type: "netcatty:terminal-interceptor:result",
+    sequence,
+    status: "ok",
+    creditBytes,
+    byteLength: data.byteLength,
+  }, data);
+  port.postMessage(envelope, [data]);
 }
 
 function attachTransform(pipeline, options = {}) {
@@ -19,19 +37,15 @@ function attachTransform(pipeline, options = {}) {
   channel.port2.unref?.();
   const seen = [];
   listen(channel.port2, (message) => {
-    if (message.type !== "netcatty:terminal-interceptor:chunk") return;
-    seen.push({ sequence: message.sequence, data: Buffer.from(message.data).toString("utf8") });
+    const envelope = readFrame(message);
+    const frame = envelope.frame;
+    if (frame.type !== "netcatty:terminal-interceptor:chunk") return;
+    seen.push({ sequence: frame.sequence, data: Buffer.from(envelope.transfer).toString("utf8") });
     if (options.hold) return;
-    const transformed = Buffer.from(options.transform?.(Buffer.from(message.data).toString("utf8"))
-      ?? Buffer.from(message.data).toString("utf8").toUpperCase());
+    const transformed = Buffer.from(options.transform?.(Buffer.from(envelope.transfer).toString("utf8"))
+      ?? Buffer.from(envelope.transfer).toString("utf8").toUpperCase());
     const data = Uint8Array.from(transformed).buffer;
-    channel.port2.postMessage({
-      type: "netcatty:terminal-interceptor:result",
-      sequence: message.sequence,
-      status: "ok",
-      creditBytes: Buffer.from(message.data).byteLength,
-      data,
-    }, [data]);
+    postResult(channel.port2, frame.sequence, frame.byteLength, data);
   });
   pipeline.attach({
     sessionId: options.sessionId ?? "session-1",
@@ -75,7 +89,8 @@ test("sensitive passthrough stays ordered behind earlier intercepted input", asy
   channel.port2.unref?.();
   let firstChunk;
   listen(channel.port2, (message) => {
-    if (message.type === "netcatty:terminal-interceptor:chunk") firstChunk = message;
+    const envelope = readFrame(message);
+    if (envelope.frame.type === "netcatty:terminal-interceptor:chunk") firstChunk = envelope.frame;
   });
   pipeline.attach({
     sessionId: "session-1",
@@ -95,13 +110,7 @@ test("sensitive passthrough stays ordered behind earlier intercepted input", asy
   assert.ok(firstChunk);
   assert.deepEqual(order, []);
   const result = Uint8Array.from(Buffer.from("A")).buffer;
-  channel.port2.postMessage({
-    type: "netcatty:terminal-interceptor:result",
-    sequence: firstChunk.sequence,
-    status: "ok",
-    creditBytes: 1,
-    data: result,
-  }, [result]);
+  postResult(channel.port2, firstChunk.sequence, 1, result);
   await Promise.all([ordinary, sensitive]);
   assert.deepEqual(order, ["A", "secret"]);
   pipeline.shutdown();
@@ -192,16 +201,11 @@ test("an elapsed deadline rejects a late response before its delayed timer callb
   channel.port1.unref?.();
   channel.port2.unref?.();
   listen(channel.port2, (message) => {
-    if (message.type !== "netcatty:terminal-interceptor:chunk") return;
+    const envelope = readFrame(message);
+    if (envelope.frame.type !== "netcatty:terminal-interceptor:chunk") return;
     now += 100;
     const data = Uint8Array.from(Buffer.from("LATE")).buffer;
-    channel.port2.postMessage({
-      type: "netcatty:terminal-interceptor:result",
-      sequence: message.sequence,
-      status: "ok",
-      creditBytes: Buffer.from(message.data).byteLength,
-      data,
-    }, [data]);
+    postResult(channel.port2, envelope.frame.sequence, envelope.frame.byteLength, data);
   });
   pipeline.attach({
     sessionId: "session-1",
@@ -252,7 +256,8 @@ test("queued output keeps the deadline from its arrival time", async () => {
   channel.port2.unref?.();
   const chunks = [];
   listen(channel.port2, (message) => {
-    if (message.type === "netcatty:terminal-interceptor:chunk") chunks.push(message);
+    const envelope = readFrame(message);
+    if (envelope.frame.type === "netcatty:terminal-interceptor:chunk") chunks.push(envelope.frame);
   });
   pipeline.attach({
     sessionId: "session-1",
@@ -273,26 +278,14 @@ test("queued output keeps the deadline from its arrival time", async () => {
   assert.equal(chunks.length, 1);
   now = 90;
   const firstData = Uint8Array.from(Buffer.from("FIRST")).buffer;
-  channel.port2.postMessage({
-    type: "netcatty:terminal-interceptor:result",
-    sequence: chunks[0].sequence,
-    status: "ok",
-    creditBytes: 5,
-    data: firstData,
-  }, [firstData]);
+  postResult(channel.port2, chunks[0].sequence, 5, firstData);
   for (let attempt = 0; attempt < 10 && chunks.length < 2; attempt += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(chunks.length, 2);
   now = 101;
   const secondData = Uint8Array.from(Buffer.from("SECOND")).buffer;
-  channel.port2.postMessage({
-    type: "netcatty:terminal-interceptor:result",
-    sequence: chunks[1].sequence,
-    status: "ok",
-    creditBytes: 6,
-    data: secondData,
-  }, [secondData]);
+  postResult(channel.port2, chunks[1].sequence, 6, secondData);
 
   assert.deepEqual(await Promise.all([first, second]), ["FIRST", "second"]);
   assert.equal(warnings.at(-1).code, "timeout");
@@ -306,15 +299,10 @@ test("invalid interceptor UTF-8 fails open and permanently trips the circuit bre
   channel.port1.unref?.();
   channel.port2.unref?.();
   listen(channel.port2, (message) => {
-    if (message.type !== "netcatty:terminal-interceptor:chunk") return;
+    const envelope = readFrame(message);
+    if (envelope.frame.type !== "netcatty:terminal-interceptor:chunk") return;
     const data = Uint8Array.from([0xff]).buffer;
-    channel.port2.postMessage({
-      type: "netcatty:terminal-interceptor:result",
-      sequence: message.sequence,
-      status: "ok",
-      creditBytes: 4,
-      data,
-    }, [data]);
+    postResult(channel.port2, envelope.frame.sequence, 4, data);
   });
   pipeline.attach({
     sessionId: "session-1",
@@ -329,4 +317,45 @@ test("invalid interceptor UTF-8 fails open and permanently trips the circuit bre
   assert.equal(await pipeline.interceptInput("session-1", "safe"), "safe");
   assert.equal(warnings[0].code, "encoding");
   assert.equal(pipeline.has("session-1", "input"), false);
+});
+
+test("the worker rejects a result that bypasses the canonical terminal frame schema", async () => {
+  const warnings = [];
+  const pipeline = createTerminalDataPipeline({
+    inputDeadlineMs: 100,
+    onWarning: (value) => warnings.push(value),
+  });
+  const channel = new MessageChannel();
+  channel.port1.unref?.();
+  channel.port2.unref?.();
+  listen(channel.port2, (message) => {
+    const envelope = readFrame(message);
+    if (envelope.frame.type !== "netcatty:terminal-interceptor:chunk") return;
+    const data = Uint8Array.from(Buffer.from("UNSAFE")).buffer;
+    channel.port2.postMessage({
+      frame: {
+        type: "netcatty:terminal-interceptor:result",
+        sequence: envelope.frame.sequence,
+        status: "ok",
+        creditBytes: envelope.frame.byteLength,
+        byteLength: data.byteLength,
+        extra: true,
+      },
+      transfer: data,
+    }, [data]);
+  });
+  pipeline.attach({
+    sessionId: "session-1",
+    direction: "input",
+    providerId: "com.example.interceptor",
+    pluginId: "com.example",
+    pluginVersion: "1.0.0",
+    runtimeId: "runtime-1",
+    runtimeKind: "utility",
+    securityPrincipal: "principal-1",
+  }, channel.port1);
+
+  assert.equal(await pipeline.interceptInput("session-1", "safe"), "safe");
+  assert.equal(pipeline.has("session-1", "input"), false);
+  assert.equal(warnings.at(-1).code, "protocol");
 });

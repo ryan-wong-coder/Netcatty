@@ -63,6 +63,13 @@
         "maxCreditBytes": 16777216
       }
     },
+    "TerminalInterceptorLimits": {
+      "description": "Host-enforced byte and receive-window limits for the privileged direct terminal interceptor MessagePort.",
+      "const": {
+        "maxChunkBytes": 65536,
+        "maxWindowBytes": 262144
+      }
+    },
     "StreamId": {
       "type": "string",
       "minLength": 1,
@@ -1000,6 +1007,78 @@
           },
           "additionalProperties": false
         }
+      ]
+    },
+    "TerminalInterceptorDirection": {
+      "type": "string",
+      "enum": ["input", "output"]
+    },
+    "TerminalInterceptorChunkByteLength": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "TerminalInterceptorWindowBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 262144
+    },
+    "TerminalInterceptorCreditBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 262144
+    },
+    "TerminalInterceptorReadyFrame": {
+      "type": "object",
+      "required": ["type", "sessionId", "direction", "windowBytes"],
+      "properties": {
+        "type": { "const": "netcatty:terminal-interceptor:ready" },
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000]+$" },
+        "direction": { "$ref": "#/$defs/TerminalInterceptorDirection" },
+        "windowBytes": { "$ref": "#/$defs/TerminalInterceptorWindowBytes" }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorChunkFrame": {
+      "type": "object",
+      "required": ["type", "sequence", "direction", "creditBytes", "byteLength"],
+      "properties": {
+        "type": { "const": "netcatty:terminal-interceptor:chunk" },
+        "sequence": { "$ref": "#/$defs/SafePositiveInteger" },
+        "direction": { "$ref": "#/$defs/TerminalInterceptorDirection" },
+        "creditBytes": { "$ref": "#/$defs/TerminalInterceptorCreditBytes" },
+        "byteLength": { "$ref": "#/$defs/TerminalInterceptorChunkByteLength" }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorOkResultFrame": {
+      "type": "object",
+      "required": ["type", "sequence", "status", "creditBytes", "byteLength"],
+      "properties": {
+        "type": { "const": "netcatty:terminal-interceptor:result" },
+        "sequence": { "$ref": "#/$defs/SafePositiveInteger" },
+        "status": { "const": "ok" },
+        "creditBytes": { "$ref": "#/$defs/TerminalInterceptorChunkByteLength" },
+        "byteLength": { "$ref": "#/$defs/TerminalInterceptorChunkByteLength" }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorFailedResultFrame": {
+      "type": "object",
+      "required": ["type", "sequence", "status"],
+      "properties": {
+        "type": { "const": "netcatty:terminal-interceptor:result" },
+        "sequence": { "$ref": "#/$defs/SafePositiveInteger" },
+        "status": { "const": "failed" }
+      },
+      "additionalProperties": false
+    },
+    "TerminalInterceptorFrame": {
+      "oneOf": [
+        { "$ref": "#/$defs/TerminalInterceptorReadyFrame" },
+        { "$ref": "#/$defs/TerminalInterceptorChunkFrame" },
+        { "$ref": "#/$defs/TerminalInterceptorOkResultFrame" },
+        { "$ref": "#/$defs/TerminalInterceptorFailedResultFrame" }
       ]
     },
     "RuntimeInitializeParams": {

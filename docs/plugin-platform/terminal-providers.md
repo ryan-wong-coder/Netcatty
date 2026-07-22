@@ -110,6 +110,10 @@ late-response retirement, close cleanup, and protocol-failure containment.
 Only the accepted long-lived byte path leaves the control plane. Data messages
 contain a monotonic sequence, direction, bounded credit information, and one
 transferable `ArrayBuffer`; the main process never copies terminal payloads.
+Ready, chunk, successful-result, and failed-result metadata use the canonical
+`TerminalInterceptorFrame` union. Both worker and utility peers validate it
+from the generated contract bundle, and the shared MessagePort envelope rejects
+missing, unexpected, detached, oversized, or byte-length-mismatched transfers.
 The worker serializes chunks, caps each transfer at 64 KiB, and limits queued
 output to a 256 KiB credit window. Output remains ordered and host output taps
 retain the original data. Renderer flow acknowledgements use the original

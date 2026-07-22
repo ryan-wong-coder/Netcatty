@@ -370,6 +370,11 @@ validates the canonical Provider result plus the terminal operation's bounded
 result shape before application use. Phase 6 reuses the same declarations and
 registration ownership but moves raw terminal bytes onto a dedicated
 worker-to-utility MessagePort; they never traverse the JSON-RPC control plane.
+The ready, chunk, successful-result, and failed-result frame metadata is owned
+by `TerminalInterceptorFrame` in the canonical Schema. Both peers validate the
+generated Schema shape and the shared transfer envelope verifies that only
+chunk and successful-result frames carry a real attached `ArrayBuffer` whose
+length exactly matches the declared bounded `byteLength`.
 
 `PluginSecretStore.get()` never returns plaintext. It returns a host-issued
 `SecretRef`. Its random ID stays opaque; its non-secret `key` binds later lease

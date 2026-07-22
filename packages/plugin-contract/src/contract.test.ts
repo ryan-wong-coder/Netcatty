@@ -59,6 +59,55 @@ test("plugin manifest schema accepts the internal contract", () => {
   assert.equal(validate({ ...validManifest, version: "1.0.0-01" }), false);
 });
 
+test("terminal interceptor fast-path frames are owned by the canonical schema", () => {
+  const validate = validator("TerminalInterceptorFrame");
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:ready",
+    sessionId: "session-1",
+    direction: "input",
+    windowBytes: 65_536,
+  }), true, JSON.stringify(validate.errors));
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:chunk",
+    sequence: 1,
+    direction: "output",
+    creditBytes: 262_144,
+    byteLength: 65_536,
+  }), true, JSON.stringify(validate.errors));
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:result",
+    sequence: 1,
+    status: "ok",
+    creditBytes: 65_536,
+    byteLength: 0,
+  }), true, JSON.stringify(validate.errors));
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:result",
+    sequence: 1,
+    status: "failed",
+  }), true, JSON.stringify(validate.errors));
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:chunk",
+    sequence: 0,
+    direction: "input",
+    creditBytes: 1,
+    byteLength: 1,
+  }), false);
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:chunk",
+    sequence: 1,
+    direction: "input",
+    creditBytes: 1,
+    byteLength: 65_537,
+  }), false);
+  assert.equal(validate({
+    type: "netcatty:terminal-interceptor:result",
+    sequence: 1,
+    status: "failed",
+    byteLength: 0,
+  }), false);
+});
+
 test("required resource-scoped permissions declare activation-time bounds", () => {
   const validate = validator("PluginManifest");
   const resourceScoped = [

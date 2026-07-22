@@ -2,11 +2,16 @@
 
 const { TextDecoder, TextEncoder } = require("node:util");
 const { performance } = require("node:perf_hooks");
+const {
+  TERMINAL_INTERCEPTOR_MAX_CHUNK_BYTES,
+  TERMINAL_INTERCEPTOR_MAX_WINDOW_BYTES,
+  createTerminalInterceptorEnvelope,
+} = require("../plugins/terminalInterceptorTransport.cjs");
 
 const INPUT_DEADLINE_MS = 4;
 const OUTPUT_DEADLINE_MS = 50;
-const MAX_CHUNK_BYTES = 64 * 1024;
-const OUTPUT_WINDOW_BYTES = 256 * 1024;
+const MAX_CHUNK_BYTES = TERMINAL_INTERCEPTOR_MAX_CHUNK_BYTES;
+const OUTPUT_WINDOW_BYTES = TERMINAL_INTERCEPTOR_MAX_WINDOW_BYTES;
 const PROMPT_TAIL_CHARS = 2_048;
 const SENSITIVE_LABELS = [
   "pass(?:word|phrase|code)", "passwd", "one[\\s-]?time", "otp", "verification",
@@ -154,8 +159,19 @@ function createTerminalDataPipeline(options = {}) {
       removeListener: null,
     };
     binding.removeListener = addPortListener(port, (event) => {
-      const message = messageData(event);
-      if (!message || message.type !== "netcatty:terminal-interceptor:result") return;
+      let envelope;
+      try {
+        const message = messageData(event);
+        envelope = createTerminalInterceptorEnvelope(message?.frame, message?.transfer);
+      } catch {
+        disable(binding, "protocol", "Terminal interceptor returned an invalid response and was disabled");
+        return;
+      }
+      const message = envelope.frame;
+      if (message.type !== "netcatty:terminal-interceptor:result") {
+        disable(binding, "protocol", "Terminal interceptor returned an invalid response and was disabled");
+        return;
+      }
       const pending = binding.pending.get(message.sequence);
       if (!pending) return;
       binding.pending.delete(message.sequence);
@@ -165,22 +181,20 @@ function createTerminalDataPipeline(options = {}) {
         disable(binding, "timeout", `Terminal ${binding.direction} interceptor exceeded its ${pending.deadlineMs} ms budget`);
         return;
       }
-      if (message.status !== "ok" || message.creditBytes !== pending.sentBytes
-        || !(message.data instanceof ArrayBuffer)
-        || message.data.byteLength > MAX_CHUNK_BYTES) {
+      if (message.status !== "ok" || message.creditBytes !== pending.sentBytes) {
         pending.resolve(null);
         disable(binding, "protocol", "Terminal interceptor returned an invalid response and was disabled");
         return;
       }
-      pending.resolve(new Uint8Array(message.data));
+      pending.resolve(new Uint8Array(envelope.transfer));
     });
     port.on?.("close", () => disable(binding, "closed", "Terminal interceptor stopped and was disabled"));
-    port.postMessage({
+    port.postMessage(createTerminalInterceptorEnvelope({
       type: "netcatty:terminal-interceptor:ready",
       sessionId,
       direction,
       windowBytes: direction === "output" ? outputWindowBytes : MAX_CHUNK_BYTES,
-    });
+    }));
     bindings.set(key, binding);
     refreshOutputMode(sessionId);
   }
@@ -216,15 +230,16 @@ function createTerminalDataPipeline(options = {}) {
         sentBytes: bytes.byteLength,
       });
       try {
-        binding.port.postMessage({
+        const envelope = createTerminalInterceptorEnvelope({
           type: "netcatty:terminal-interceptor:chunk",
           sequence,
           direction: binding.direction,
           creditBytes: binding.direction === "output"
             ? Math.max(0, outputWindowBytes - binding.queuedBytes)
             : MAX_CHUNK_BYTES,
-          data,
-        }, [data]);
+          byteLength: data.byteLength,
+        }, data);
+        binding.port.postMessage(envelope, [data]);
       } catch {
         clearTimeout(timer);
         binding.pending.delete(sequence);

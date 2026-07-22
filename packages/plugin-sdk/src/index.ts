@@ -11,6 +11,7 @@ import type {
   SecretLeaseRef,
   SecretRef,
   SemanticVersion,
+  TerminalSessionSnapshot,
 } from "@netcatty/plugin-contract";
 
 export type * from "@netcatty/plugin-contract";
@@ -117,21 +118,6 @@ export interface PluginProviders {
     kind: Exclude<ProviderKind, TerminalInterceptorKind>,
     handler: PluginProviderHandler<TPayload, TResult>,
   ): Disposable;
-}
-
-export interface TerminalSessionSnapshot {
-  readonly sessionId: string;
-  readonly hostId?: string;
-  readonly workspaceId?: string;
-  /** Built-in or namespaced plugin connection protocol identifier. */
-  readonly protocol: string;
-  readonly status: "connecting" | "connected" | "disconnected";
-  readonly cwd?: string;
-  readonly title?: string;
-  readonly shellType?: "posix" | "fish" | "powershell" | "cmd" | "unknown";
-  readonly cols?: number;
-  readonly rows?: number;
-  readonly alternateScreen?: boolean;
 }
 
 export type TerminalInterceptorKind = "terminal.interceptor.input" | "terminal.interceptor.output";

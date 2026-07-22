@@ -30,6 +30,7 @@ const rpcMessageValidator = createDefinitionValidator("RpcMessage");
 const initializeResultValidator = createDefinitionValidator("RuntimeInitializeResult");
 const terminalInterceptorAttachmentParamsValidator = createDefinitionValidator("TerminalInterceptorAttachmentParams");
 const terminalInterceptorAttachmentResultValidator = createDefinitionValidator("TerminalInterceptorAttachmentResult");
+const terminalInterceptorFrameValidator = createDefinitionValidator("TerminalInterceptorFrame");
 const providerRequestValidator = createDefinitionValidator("ProviderRequest");
 const providerResultValidator = createDefinitionValidator("ProviderResult");
 const streamFrameValidator = createDefinitionValidator("StreamFrame");
@@ -69,6 +70,14 @@ function assertTerminalInterceptorAttachmentResult(value) {
   );
 }
 
+function assertTerminalInterceptorFrameSchema(value) {
+  return assertContractValue(
+    terminalInterceptorFrameValidator,
+    value,
+    "Terminal interceptor frame",
+  );
+}
+
 function assertProviderRequest(value) {
   assertPluginJsonValue(value, { maxBytes: PLUGIN_RPC_MAX_JSON_BYTES });
   return assertContractValue(providerRequestValidator, value, "Provider request");
@@ -92,6 +101,7 @@ module.exports = {
   assertInitializeResult,
   assertTerminalInterceptorAttachmentParams,
   assertTerminalInterceptorAttachmentResult,
+  assertTerminalInterceptorFrameSchema,
   assertProviderRequest,
   assertProviderResult,
   assertRpcMessage,

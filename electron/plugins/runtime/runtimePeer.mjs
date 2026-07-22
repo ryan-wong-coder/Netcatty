@@ -7,6 +7,14 @@ import {
 } from "@netcatty/plugin-sdk";
 import { createMessagePortStreamEnvelope } from "@netcatty/plugin-contract";
 
+let terminalInterceptorTransportPromise;
+
+function loadTerminalInterceptorTransport() {
+  terminalInterceptorTransportPromise ??= import("../terminalInterceptorTransport.cjs")
+    .then((module) => module.default);
+  return terminalInterceptorTransportPromise;
+}
+
 const RPC_ERRORS = {
   methodNotFound: -32601,
   invalidParams: -32602,
@@ -537,7 +545,7 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
         throw new PluginError("invalid_argument", "Terminal interceptor attachment requires exactly one port");
       }
       try {
-        attachTerminalInterceptor(message.params, ports);
+        await attachTerminalInterceptor(message.params, ports);
         return { accepted: true };
       } catch (error) {
         closeTransferredPorts(ports);
@@ -627,7 +635,7 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
     return false;
   }
 
-  const attachTerminalInterceptor = (message, ports) => {
+  const attachTerminalInterceptor = async (message, ports) => {
     const descriptor = message?.descriptor;
     const providerId = assertOwnedContributionId(config.pluginId, descriptor?.providerId, "Terminal interceptor");
     const direction = descriptor?.direction;
@@ -643,14 +651,24 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
       interceptorPort?.close?.();
       throw new PluginError("failed_precondition", "Terminal interceptor provider is not registered");
     }
+    const {
+      TERMINAL_INTERCEPTOR_MAX_CHUNK_BYTES,
+      createTerminalInterceptorEnvelope,
+    } = await loadTerminalInterceptorTransport();
     runtimeApi.terminalInterceptorPorts.add(interceptorPort);
     const handleChunk = (event) => {
-      const chunk = messageData(event);
+      let envelope;
+      try {
+        const message = messageData(event);
+        envelope = createTerminalInterceptorEnvelope(message?.frame, message?.transfer);
+      } catch {
+        interceptorPort.close?.();
+        return;
+      }
+      const chunk = envelope.frame;
       if (chunk?.type === "netcatty:terminal-interceptor:ready") return;
-      if (!chunk || chunk.type !== "netcatty:terminal-interceptor:chunk"
-        || chunk.direction !== direction
-        || !Number.isSafeInteger(chunk.sequence) || chunk.sequence < 1
-        || !(chunk.data instanceof ArrayBuffer) || chunk.data.byteLength > 64 * 1024) {
+      if (chunk.type !== "netcatty:terminal-interceptor:chunk"
+        || chunk.direction !== direction) {
         interceptorPort.close?.();
         return;
       }
@@ -660,7 +678,7 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
         direction,
         sequence: chunk.sequence,
         session: freezeRuntimeJson(descriptor.session),
-        data: new Uint8Array(chunk.data),
+        data: new Uint8Array(envelope.transfer),
       });
       // Resolve the registration for every chunk so disposal/re-registration
       // cannot keep a captured stale handler alive. Starting from a resolved
@@ -678,24 +696,25 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
           if (result instanceof Uint8Array) bytes = result;
           else if (result instanceof ArrayBuffer) bytes = new Uint8Array(result);
           else throw new PluginError("data_loss", "Terminal interceptor must return Uint8Array or ArrayBuffer");
-          if (bytes.byteLength > 64 * 1024) {
+          if (bytes.byteLength > TERMINAL_INTERCEPTOR_MAX_CHUNK_BYTES) {
             throw new PluginError("resource_exhausted", "Terminal interceptor result is too large");
           }
           const copy = new Uint8Array(bytes.byteLength);
           copy.set(bytes);
-          interceptorPort.postMessage({
+          const resultEnvelope = createTerminalInterceptorEnvelope({
             type: "netcatty:terminal-interceptor:result",
             sequence: chunk.sequence,
             status: "ok",
-            creditBytes: chunk.data.byteLength,
-            data: copy.buffer,
-          }, [copy.buffer]);
+            creditBytes: chunk.byteLength,
+            byteLength: copy.byteLength,
+          }, copy.buffer);
+          interceptorPort.postMessage(resultEnvelope, [copy.buffer]);
         },
-        () => interceptorPort.postMessage({
+        () => interceptorPort.postMessage(createTerminalInterceptorEnvelope({
           type: "netcatty:terminal-interceptor:result",
           sequence: chunk.sequence,
           status: "failed",
-        }),
+        })),
       ).catch(() => interceptorPort.close?.());
     };
     if (typeof interceptorPort.addEventListener === "function") {

@@ -82,6 +82,25 @@ if (!Number.isSafeInteger(streamLimits?.maxFrameJsonBytes)
   || streamLimits.maxFrameJsonBytes < streamLimits?.maxChunkBytes) {
   throw new Error("StreamLimits.maxFrameJsonBytes must cover one maximum stream chunk");
 }
+const terminalInterceptorLimits = schema.$defs.TerminalInterceptorLimits?.const;
+if (!Number.isSafeInteger(terminalInterceptorLimits?.maxChunkBytes)
+  || terminalInterceptorLimits.maxChunkBytes < 1
+  || !Number.isSafeInteger(terminalInterceptorLimits?.maxWindowBytes)
+  || terminalInterceptorLimits.maxWindowBytes < terminalInterceptorLimits.maxChunkBytes) {
+  throw new Error("TerminalInterceptorLimits must define bounded chunk and window sizes");
+}
+for (const [name, minimum, maximum] of [
+  ["TerminalInterceptorChunkByteLength", 0, terminalInterceptorLimits.maxChunkBytes],
+  ["TerminalInterceptorWindowBytes", 1, terminalInterceptorLimits.maxWindowBytes],
+  ["TerminalInterceptorCreditBytes", 0, terminalInterceptorLimits.maxWindowBytes],
+]) {
+  const definition = schema.$defs[name];
+  if (definition?.type !== "integer"
+    || definition.minimum !== minimum
+    || definition.maximum !== maximum) {
+    throw new Error(`${name} must match the canonical TerminalInterceptorLimits range`);
+  }
+}
 const streamIdDefinition = schema.$defs.StreamId;
 if (!Number.isSafeInteger(streamLimits?.maxStreamIdLength)
   || streamLimits.maxStreamIdLength < 1
@@ -219,6 +238,8 @@ const generatedLimits = [
   `export const PLUGIN_STREAM_MIN_WINDOW_BYTES = ${streamLimits.minWindowBytes} as const;`,
   `export const PLUGIN_STREAM_MAX_WINDOW_BYTES = ${streamLimits.maxWindowBytes} as const;`,
   `export const PLUGIN_STREAM_MAX_CREDIT_BYTES = ${streamLimits.maxCreditBytes} as const;`,
+  `export const PLUGIN_TERMINAL_INTERCEPTOR_MAX_CHUNK_BYTES = ${terminalInterceptorLimits.maxChunkBytes} as const;`,
+  `export const PLUGIN_TERMINAL_INTERCEPTOR_MAX_WINDOW_BYTES = ${terminalInterceptorLimits.maxWindowBytes} as const;`,
   "",
 ].join("\n");
 const normalizedSchema = `${JSON.stringify(schema, null, 2)}\n`;
