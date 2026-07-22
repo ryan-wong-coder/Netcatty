@@ -117,3 +117,24 @@ test("opening a replacement session closes the stale output port", () => {
   assert.equal(stale.port.closed, true);
   assert.notEqual(channel.getSessionForTest("session-1"), stale);
 });
+
+test("a failed replacement transfer preserves the existing output route", () => {
+  const channel = createTerminalOutputChannel({
+    MessageChannelMain: FakeMessageChannelMain,
+  });
+  channel.openSession("session-1", { id: 42, postMessage() {} });
+  const existing = channel.getSessionForTest("session-1");
+
+  assert.throws(() => {
+    channel.openSession("session-1", {
+      id: 43,
+      postMessage() {
+        throw new Error("renderer transfer failed");
+      },
+    });
+  }, /renderer transfer failed/u);
+
+  assert.equal(channel.getSessionForTest("session-1"), existing);
+  assert.equal(existing.port.closed, false);
+  assert.equal(channel.send("session-1", "still-routed"), true);
+});

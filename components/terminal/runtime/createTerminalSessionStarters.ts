@@ -10,6 +10,7 @@ export type {
 } from "./createTerminalSessionStarters.types";
 export { normalizeStartupCommandDelay, splitStartupCommandLines } from "./terminalStartupCommands";
 import {
+  acknowledgeDroppedTerminalDisplayBytes,
   attachSessionToTerminal,
   buildTermEnv,
   closeOrphanBackendSession,
@@ -1462,7 +1463,11 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
           const pluginPipelineIngressBytes = Number.isFinite(meta?.pluginPipelineIngressBytes)
             ? Math.max(0, Number(meta.pluginPipelineIngressBytes))
             : chunk.length;
-          writeSessionData(ctx, term, chunk, pluginPipelineIngressBytes, meta);
+          if (!chunk && pluginPipelineIngressBytes > 0) {
+            acknowledgeDroppedTerminalDisplayBytes(ctx, pluginPipelineIngressBytes);
+          } else {
+            writeSessionData(ctx, term, chunk, pluginPipelineIngressBytes, meta);
+          }
           ctx.onTerminalOutput?.(chunk, meta);
           if (!ctx.hasConnectedRef.current) {
             ctx.updateStatus("connected");

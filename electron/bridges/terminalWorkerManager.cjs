@@ -459,28 +459,66 @@ function createTerminalWorkerManager(options = {}) {
       }
       return false;
     }
-    sessionWebContentsIds.set(sessionId, webContentsId);
-    openUrgentInputPort(webContentsId, contents);
-    const outputPort = terminalOutputChannel?.openSession?.(sessionId, contents, {
-      transferToWorker: true,
-    });
-    if (outputPort && outputPort !== true && child?.postMessage) {
-      outputPortPending.add(sessionId);
+    let openedUrgentInputPort = false;
+    let replacedOutputChannel = false;
+    let transferringBufferedOutput = [];
+    try {
+      sessionWebContentsIds.set(sessionId, webContentsId);
+      openedUrgentInputPort = openUrgentInputPort(webContentsId, contents);
+      const outputPort = terminalOutputChannel?.openSession?.(sessionId, contents, {
+        transferToWorker: true,
+      });
+      replacedOutputChannel = Boolean(outputPort);
+      if (outputPort && outputPort !== true && child?.postMessage) {
+        outputPortPending.add(sessionId);
+        transferringBufferedOutput = takeBufferedOutput(sessionId);
+        child.postMessage({
+          kind: "output-port",
+          sessionId,
+          bufferedOutput: transferringBufferedOutput,
+        }, [outputPort]);
+        transferringBufferedOutput = [];
+        if (outputRoutePending.get(sessionId) === openToken) {
+          outputRoutePending.delete(sessionId);
+        }
+        return true;
+      }
       if (outputRoutePending.get(sessionId) === openToken) {
         outputRoutePending.delete(sessionId);
       }
-      child.postMessage({
-        kind: "output-port",
-        sessionId,
-        bufferedOutput: takeBufferedOutput(sessionId),
-      }, [outputPort]);
+      flushBufferedOutput(sessionId);
       return true;
+    } catch {
+      for (const chunk of transferringBufferedOutput) {
+        bufferOutput(sessionId, chunk);
+      }
+      outputPortPending.delete(sessionId);
+      outputPortReady.delete(sessionId);
+      if (replacedOutputChannel) {
+        terminalOutputChannel?.closeSession?.(sessionId);
+      }
+      if (
+        openedUrgentInputPort
+        && previousWebContentsId !== webContentsId
+      ) {
+        closeUrgentInputPort(webContentsId);
+      }
+      if (isLiveWebContentsId(previousWebContentsId)) {
+        sessionWebContentsIds.set(sessionId, previousWebContentsId);
+      } else {
+        sessionWebContentsIds.delete(sessionId);
+      }
+      if (outputRoutePending.get(sessionId) === openToken) {
+        outputRoutePending.delete(sessionId);
+      }
+      if (isLiveWebContentsId(previousWebContentsId)) {
+        flushOutputToWorker(sessionId);
+      } else {
+        clearBufferedOutput(sessionId);
+        send("netcatty:close", { sessionId }, { webContentsId });
+      }
+      return false;
     }
-    if (outputRoutePending.get(sessionId) === openToken) {
-      outputRoutePending.delete(sessionId);
-    }
-    flushBufferedOutput(sessionId);
-    return true;
   }
 
   /**
@@ -500,15 +538,20 @@ function createTerminalWorkerManager(options = {}) {
     const previousWebContentsId = sessionWebContentsIds.get(sessionId) ?? null;
     // Remember the first home target so popup destruction / session exit can
     // restore or dual-notify the original owner.
+    let rememberedAttachHome = false;
     if (
       previousWebContentsId != null
       && previousWebContentsId !== webContentsId
       && !attachHomeWebContentsIds.has(sessionId)
     ) {
       attachHomeWebContentsIds.set(sessionId, previousWebContentsId);
+      rememberedAttachHome = true;
     }
     const ok = await openOutputSession(sessionId, webContentsId);
     if (!ok) {
+      if (rememberedAttachHome) {
+        attachHomeWebContentsIds.delete(sessionId);
+      }
       return { success: false, error: "Failed to rebind session output" };
     }
     return {
@@ -787,7 +830,8 @@ function createTerminalWorkerManager(options = {}) {
       // webContentsId is from session start and goes stale after attach/rebind.
       const sessionId = message.payload?.sessionId;
       const displayWebContentsId =
-        (typeof sessionId === "string" && sessionWebContentsIds.get(sessionId))
+        (typeof sessionId === "string" && outputRoutePending.get(sessionId)?.webContentsId)
+        || (typeof sessionId === "string" && sessionWebContentsIds.get(sessionId))
         || message.webContentsId;
       const homeWebContentsId =
         (typeof sessionId === "string" && attachHomeWebContentsIds.get(sessionId))

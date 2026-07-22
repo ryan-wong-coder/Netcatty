@@ -679,6 +679,48 @@ test("runtime re-intercepts raw buffered output that only inherited ingress acco
   assert.deepEqual(parentPort.messages, [{ kind: "output-port-ready", sessionId: "s1" }]);
 });
 
+test("runtime adds retained raw bytes after manager partial-trim accounting", async () => {
+  const parentPort = createParentPort();
+  const outputPort = new FakePort();
+  const intercepted = [];
+  const runtime = createTerminalWorkerRuntime({
+    parentPort,
+    terminalDataPipeline: {
+      getOutputMode: () => 2,
+      observeOutput: () => false,
+      interceptOutput(sessionId, data) {
+        intercepted.push({ sessionId, data });
+        return Promise.resolve(`processed:${data}`);
+      },
+    },
+    registerBridges() {},
+  });
+  runtime.start();
+
+  parentPort.emitMessage({
+    data: {
+      kind: "output-port",
+      sessionId: "s1",
+      bufferedOutput: [{
+        data: "bcde",
+        meta: { pluginPipelineIngressBytes: 11 },
+      }],
+    },
+    ports: [outputPort],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(intercepted, [{ sessionId: "s1", data: "bcde" }]);
+  assert.deepEqual(outputPort.messages, [{
+    sessionId: "s1",
+    data: "processed:bcde",
+    meta: {
+      pluginPipelineIngressBytes: 15,
+      pluginPipelineProcessed: true,
+    },
+  }]);
+});
+
 test("runtime.createSender uses the transferred output port", () => {
   const parentPort = createParentPort();
   const outputPort = new FakePort();

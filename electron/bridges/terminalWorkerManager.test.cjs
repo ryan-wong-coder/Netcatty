@@ -1423,7 +1423,7 @@ test("rebound interactive events target only the popup while exit also reaches h
   ]);
 });
 
-test("rebind waits for ownership and keeps interactive events on the previous renderer", async () => {
+test("rebind waits for ownership and routes interactive events to the pending renderer", async () => {
   const child = new FakeChild();
   const forwarded = [];
   let releaseRebind;
@@ -1473,7 +1473,7 @@ test("rebind waits for ownership and keeps interactive events on the previous re
     payload: { sessionId: "session-1", requestId: "request-1" },
   });
   assert.deepEqual(forwarded, [{
-    id: 7,
+    id: 9,
     channel: "netcatty:zmodem:overwrite-request",
     payload: { sessionId: "session-1", requestId: "request-1" },
   }]);
@@ -1481,6 +1481,75 @@ test("rebind waits for ownership and keeps interactive events on the previous re
   releaseRebind();
   assert.equal((await rebound).success, true);
   assert.equal(manager.getSessionWebContentsId("session-1"), 9);
+});
+
+test("failed output-port transfer clears pending state and restores the previous route", async () => {
+  const child = new FakeChild();
+  const postMessage = child.postMessage.bind(child);
+  child.postMessage = (message, transferList) => {
+    if (message?.kind === "output-port") {
+      throw new Error("worker transfer failed");
+    }
+    postMessage(message, transferList);
+  };
+  const forwarded = [];
+  let openCount = 0;
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork() { return child; } },
+    terminalOutputChannel: {
+      openSession() {
+        openCount += 1;
+        return openCount === 1 ? true : { label: "worker-output-port" };
+      },
+      send() { return false; },
+      closeSession() {},
+    },
+    electronModule: {
+      webContents: {
+        fromId(id) {
+          return {
+            id,
+            isDestroyed() { return false; },
+            send(channel, payload) { forwarded.push({ id, channel, payload }); },
+          };
+        },
+      },
+    },
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const started = manager.request("netcatty:local:start", {}, { webContentsId: 7 });
+  child.emit("message", {
+    kind: "response",
+    requestId: child.messages[0].requestId,
+    result: { sessionId: "session-1" },
+  });
+  await started;
+
+  const rebound = manager.rebindOutputSession("session-1", 9);
+  child.emit("message", { kind: "output", sessionId: "session-1", data: "buffered" });
+  assert.deepEqual(await rebound, {
+    success: false,
+    error: "Failed to rebind session output",
+  });
+  assert.equal(manager.getSessionWebContentsId("session-1"), 7);
+  assert.equal(manager.getAttachHomeWebContentsId("session-1"), null);
+
+  child.emit("message", {
+    kind: "renderer-event",
+    webContentsId: 7,
+    channel: "netcatty:zmodem:overwrite-request",
+    payload: { sessionId: "session-1", requestId: "request-1" },
+  });
+  assert.deepEqual(forwarded, [{
+    id: 7,
+    channel: "netcatty:zmodem:overwrite-request",
+    payload: { sessionId: "session-1", requestId: "request-1" },
+  }]);
+  assert.equal(
+    child.messages.some((message) => message.kind === "output-flush" && message.sessionId === "session-1"),
+    true,
+  );
 });
 
 test("explicit close notifies both a rebound popup and its home renderer", async () => {

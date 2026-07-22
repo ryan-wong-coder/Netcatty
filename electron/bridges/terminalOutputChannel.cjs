@@ -19,15 +19,23 @@ function createTerminalOutputChannel(options = {}) {
       return false;
     }
 
-    closeSession(sessionId);
     const { port1, port2 } = new MessageChannelMain();
     const transferToWorker = openOptions.transferToWorker === true;
-    sessions.set(sessionId, {
+    const replacement = {
       port: port1,
       webContentsId: webContents.id,
       transferToWorker,
-    });
-    webContents.postMessage(TERMINAL_OUTPUT_PORT_CHANNEL, { sessionId }, [port2]);
+    };
+    try {
+      webContents.postMessage(TERMINAL_OUTPUT_PORT_CHANNEL, { sessionId }, [port2]);
+    } catch (error) {
+      closeEntry(replacement);
+      try { port2?.close?.(); } catch {}
+      throw error;
+    }
+    const previous = sessions.get(sessionId);
+    sessions.set(sessionId, replacement);
+    closeEntry(previous);
     return transferToWorker ? port1 : true;
   }
 

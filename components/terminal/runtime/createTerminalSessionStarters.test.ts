@@ -1967,6 +1967,49 @@ test("local session captures paste cleanup writes in terminal log data", async (
   assert.deepEqual(capturedLogData, ["line 3 with enough content", "\x1b[K"]);
 });
 
+test("local session acknowledges metadata-only plugin output immediately", async () => {
+  let onData: ((data: string, meta?: { pluginPipelineIngressBytes?: number }) => void) | null = null;
+  const acknowledgements: Array<{ sessionId: string; bytes: number }> = [];
+  const paused: Array<{ sessionId: string; paused: boolean }> = [];
+  const terminalBackend = {
+    localAvailable: () => true,
+    startLocalSession: async () => "local-session",
+    onSessionData: (
+      _id: string,
+      cb: (data: string, meta?: { pluginPipelineIngressBytes?: number }) => void,
+    ) => {
+      onData = cb;
+      return noop;
+    },
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: noop,
+    resizeSession: noop,
+    ackSessionFlow: (sessionId: string, bytes: number) => {
+      acknowledgements.push({ sessionId, bytes });
+    },
+    setSessionFlowPaused: (sessionId: string, isPaused: boolean) => {
+      paused.push({ sessionId, paused: isPaused });
+    },
+  };
+  const ctx = createStarterContext({
+    host: {
+      id: "local-host",
+      label: "Local",
+      hostname: "local",
+      username: "",
+      protocol: "local",
+    },
+    terminalBackend,
+  });
+
+  await createTerminalSessionStarters(ctx as never).startLocal(createTermStub() as never);
+  onData?.("", { pluginPipelineIngressBytes: 12 });
+
+  assert.deepEqual(acknowledgements, [{ sessionId: "local-session", bytes: 12 }]);
+  assert.deepEqual(paused.at(-1), { sessionId: "local-session", paused: false });
+});
+
 test("local session runs startup command after attaching", async () => {
   const sessionWrites: Array<{ id: string; data: string; automated?: boolean }> = [];
   const attached: string[] = [];

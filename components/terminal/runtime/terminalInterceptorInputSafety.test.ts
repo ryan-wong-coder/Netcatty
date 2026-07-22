@@ -93,7 +93,7 @@ test("renderer flow control acknowledges host ingress rather than transformed di
   );
   assert.match(
     readFileSync(new URL("./createTerminalSessionStarters.ts", import.meta.url), "utf8"),
-    /const pluginPipelineIngressBytes = Number\.isFinite\(meta\?\.pluginPipelineIngressBytes\)[\s\S]*?writeSessionData\(ctx, term, chunk, pluginPipelineIngressBytes, meta\)/u,
+    /const pluginPipelineIngressBytes = Number\.isFinite\(meta\?\.pluginPipelineIngressBytes\)[\s\S]*?!chunk && pluginPipelineIngressBytes > 0[\s\S]*?acknowledgeDroppedTerminalDisplayBytes\(ctx, pluginPipelineIngressBytes\)[\s\S]*?writeSessionData\(ctx, term, chunk, pluginPipelineIngressBytes, meta\)/u,
   );
   assert.match(
     terminalSource,

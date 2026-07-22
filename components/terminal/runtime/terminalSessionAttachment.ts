@@ -347,7 +347,7 @@ export const getFlowController = (
 
 export const resetTerminalLineTimestampState = resetTerminalLineTimestamps;
 
-const acknowledgeDroppedTerminalDisplayBytes = (
+export const acknowledgeDroppedTerminalDisplayBytes = (
   ctx: TerminalSessionStartersContext,
   bytes: number,
 ): void => {
