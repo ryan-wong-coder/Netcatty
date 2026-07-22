@@ -49,10 +49,18 @@ test("host-classified sensitive input bypasses interceptors and preserves origin
 
 test("host terminal protocol replies bypass third-party interceptors", async () => {
   const h = createHarness();
-  terminalBridge.writeToSession(null, { sessionId: "session-1", data: "\x1b[1;2R" });
+  const reports = [
+    "\x1b[1;2R",
+    "\x1b[?2004;1$y",
+    "\x1b[8;24;80t",
+    "\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+  ];
+  for (const data of reports) {
+    terminalBridge.writeToSession(null, { sessionId: "session-1", data });
+  }
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(h.intercepted, []);
-  assert.deepEqual(h.writes, ["\x1b[1;2R"]);
+  assert.deepEqual(h.writes, reports);
 });
 
 test("input remains ordered when an interceptor is disabled during an in-flight transform", async () => {

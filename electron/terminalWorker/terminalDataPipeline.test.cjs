@@ -224,6 +224,44 @@ test("an elapsed deadline rejects a late response before its delayed timer callb
   assert.equal(warnings[0].code, "timeout");
 });
 
+test("an unsolicited interceptor result trips the protocol circuit breaker", async () => {
+  const warnings = [];
+  const pipeline = createTerminalDataPipeline({
+    inputDeadlineMs: 100,
+    onWarning: (value) => warnings.push(value),
+  });
+  const { channel } = attachTransform(pipeline, { hold: true });
+  const data = Uint8Array.from(Buffer.from("UNSOLICITED")).buffer;
+  postResult(channel.port2, 999, data.byteLength, data);
+  for (let attempt = 0; attempt < 10 && pipeline.has("session-1", "input"); attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(pipeline.has("session-1", "input"), false);
+  assert.deepEqual(warnings.map((warning) => warning.code), ["protocol"]);
+});
+
+test("a duplicate interceptor result trips the protocol circuit breaker", async () => {
+  const warnings = [];
+  const pipeline = createTerminalDataPipeline({
+    inputDeadlineMs: 100,
+    onWarning: (value) => warnings.push(value),
+  });
+  const { channel, seen } = attachTransform(pipeline, { hold: true });
+  const transformed = pipeline.interceptInput("session-1", "a");
+  for (let attempt = 0; attempt < 10 && seen.length === 0; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(seen.length, 1);
+  const first = Uint8Array.from(Buffer.from("A")).buffer;
+  const duplicate = Uint8Array.from(Buffer.from("A")).buffer;
+  postResult(channel.port2, seen[0].sequence, 1, first);
+  postResult(channel.port2, seen[0].sequence, 1, duplicate);
+  assert.equal(await transformed, "A");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pipeline.has("session-1", "input"), false);
+  assert.deepEqual(warnings.map((warning) => warning.code), ["protocol"]);
+});
+
 test("output interception is credit bounded and fails open under backpressure", async () => {
   const warnings = [];
   const pipeline = createTerminalDataPipeline({

@@ -173,7 +173,10 @@ function createTerminalDataPipeline(options = {}) {
         return;
       }
       const pending = binding.pending.get(message.sequence);
-      if (!pending) return;
+      if (!pending) {
+        disable(binding, "protocol", "Terminal interceptor returned an unsolicited or duplicate response and was disabled");
+        return;
+      }
       binding.pending.delete(message.sequence);
       clearTimeout(pending.timer);
       if (now() >= pending.deadlineAt) {
