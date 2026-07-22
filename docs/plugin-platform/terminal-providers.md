@@ -143,6 +143,13 @@ dialog, remain redacted from script activity/logs, and carry the same sensitive
 marker through the script bridge. The terminal worker also recognizes authentication
 challenges from bounded original-output tails before output interception, so an
 output plugin cannot expose a password by hiding or rewriting its prompt.
+Generic PTY protocols do not expose an authoritative live echo-mode signal.
+Consequently, a custom or promptless program that disables echo may not be
+recognized by the host classifier. The native permission dialog states this
+limit before granting input interception, and public enablement remains blocked
+until PR 9 restricts the capability to explicitly approved signed advanced
+plugins. This is a deliberate limitation of the first terminal data path, not
+an absolute no-echo confidentiality guarantee.
 Sensitive input is also excluded from terminal broadcast. Terminal protocol replies, urgent interrupts, transfer input gates,
 transport encoding, Telnet IAC escaping, host logs, renderer flow accounting,
 and marker/safety parsing remain host-owned. Output interceptors may create or

@@ -136,9 +136,15 @@ than only in UI or command registration.
 ### Secret exfiltration
 
 Secret values are never ordinary settings or JSON-RPC results. The credential
-broker uses operation-bound, single-use leases. Terminal sensitive-input mode
-bypasses third-party hooks unconditionally. Logs, diagnostics, synchronization,
-and crash reports redact secret fields before persistence.
+broker uses operation-bound, single-use leases. Terminal input that Netcatty
+marks sensitive through host-owned state or recognized original-output
+credential challenges bypasses third-party hooks unconditionally. Generic PTYs
+do not expose a trustworthy live echo-mode signal, so an arbitrary custom or
+promptless no-echo program cannot be identified in every protocol. The native
+input-interception permission warning discloses this limit, and public use stays
+restricted to explicitly approved signed advanced plugins in the final rollout
+stage. Logs, diagnostics, synchronization, and crash reports redact secret
+fields before persistence.
 The SDK secret store returns an opaque `SecretRef`, never stored plaintext.
 Netcatty-owned Vault material uses a distinct opaque `CredentialRef`; its
 main-process resolver validates availability without materializing plaintext,
@@ -192,7 +198,11 @@ The platform is not ready for public enablement unless all of these hold:
 2. A declaration is not a grant, and a grant is limited to its declared
    resource and lifetime.
 3. No renderer means interactive permission requests fail closed.
-4. Password and no-echo input never reaches plugin hooks.
+4. Input marked sensitive by host-owned state or recognized credential-prompt
+   detection never reaches plugin hooks. Generic input interception warns that
+   arbitrary custom or promptless no-echo input cannot be detected reliably by
+   a remote PTY, and remains unavailable to public plugins until the signed
+   advanced-plugin rollout gate is enforced.
 5. The package installed is the package validated and, later, signed.
 6. A plugin cannot address another plugin's storage or runtime by changing an
    identifier in its request.

@@ -207,7 +207,7 @@ test("first-party placement selects utility for dual-entrypoint terminal interce
   const service = createPluginHostService({
     ...createOptions(root),
     requestPermissionDecision: async (request) => {
-      requested.push(request.permission);
+      requested.push(request);
       return { requestId: request.requestId, decision: "allow", scope: "application" };
     },
   });
@@ -237,11 +237,15 @@ test("first-party placement selects utility for dual-entrypoint terminal interce
     securityPrincipal: "unsigned-package:interceptor-placement",
     signal: new AbortController().signal,
   }), "utility");
-  assert.deepEqual(requested, [
+  assert.deepEqual(requested.map((request) => request.permission), [
     "provider.terminal",
     "terminal.intercept.input",
     "runtime.advanced",
   ]);
+  assert.match(
+    requested.find((request) => request.permission === "terminal.intercept.input")?.reason ?? "",
+    /arbitrary no-echo input may not be detectable/u,
+  );
 });
 
 test("secure host methods fail closed without an approver while public logging remains available", async (context) => {

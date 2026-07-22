@@ -1,6 +1,5 @@
 "use strict";
 
-const { Buffer } = require("node:buffer");
 const { mergeTerminalDataMeta } = require("./terminalDataMeta.cjs");
 
 function hasPluginPipelineIngress(meta) {
@@ -33,12 +32,12 @@ function createTerminalDataBacklog(options = {}) {
     if (previousHasIngress && !nextChunkHasIngress && data) {
       nextChunkMeta = {
         ...(nextChunkMeta || {}),
-        pluginPipelineIngressBytes: Buffer.byteLength(data, "utf8"),
+        pluginPipelineIngressBytes: data.length,
       };
     } else if (!previousHasIngress && nextChunkHasIngress && previous.data) {
       previousMeta = {
         ...(previousMeta || {}),
-        pluginPipelineIngressBytes: Buffer.byteLength(previous.data, "utf8"),
+        pluginPipelineIngressBytes: previous.data.length,
       };
     }
     const nextMeta = mergeTerminalDataMeta(previousMeta, nextChunkMeta, { preserveTerminalPerf });

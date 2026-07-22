@@ -173,13 +173,13 @@ test("sums original plugin-pipeline ingress counts when display chunks are merge
   });
 });
 
-test("mixed processed and raw backlog accounts for every replayed UTF-8 byte", () => {
+test("mixed processed and raw backlog uses the renderer flow-control unit", () => {
   const processedThenRaw = createTerminalDataBacklog({ maxBytesPerSession: 64 });
   processedThenRaw.append("session-1", "expanded", { pluginPipelineIngressBytes: 3 });
   processedThenRaw.append("session-1", "普通");
   assert.deepEqual(processedThenRaw.takeEntry("session-1"), {
     data: "expanded普通",
-    meta: { pluginPipelineIngressBytes: 9 },
+    meta: { pluginPipelineIngressBytes: 5 },
   });
 
   const rawThenProcessed = createTerminalDataBacklog({ maxBytesPerSession: 64 });
@@ -187,7 +187,7 @@ test("mixed processed and raw backlog accounts for every replayed UTF-8 byte", (
   rawThenProcessed.append("session-1", "expanded", { pluginPipelineIngressBytes: 3 });
   assert.deepEqual(rawThenProcessed.takeEntry("session-1"), {
     data: "普通expanded",
-    meta: { pluginPipelineIngressBytes: 9 },
+    meta: { pluginPipelineIngressBytes: 5 },
   });
 });
 

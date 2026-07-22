@@ -27,6 +27,9 @@ const AUDITED_PERMISSION_USES = new Set([
   "terminal.intercept.output",
 ]);
 const PROMPT_TIMEOUT_MS = 30_000;
+const HOST_PERMISSION_REASONS = Object.freeze({
+  "terminal.intercept.input": "This plugin can inspect and rewrite Terminal input. Netcatty bypasses host-recognized credential input, but arbitrary no-echo input may not be detectable.",
+});
 
 function normalizePermissionOperationId(value) {
   if (value === undefined || value === null) return undefined;
@@ -298,7 +301,10 @@ class PluginPermissionEngine {
     ) throw permissionDenied("Plugin permission resource kinds are invalid");
     descriptor = Object.freeze({
       ...descriptor,
-      reason: normalizePermissionReason(descriptor.reason, permission),
+      reason: normalizePermissionReason(
+        HOST_PERMISSION_REASONS[permission] ?? descriptor.reason,
+        permission,
+      ),
       operationId: normalizePermissionOperationId(descriptor.operationId),
       sessionId: normalizePermissionSessionId(descriptor.sessionId),
     });

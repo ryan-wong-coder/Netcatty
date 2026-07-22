@@ -410,3 +410,67 @@ test("the utility peer closes a port whose chunk bypasses the canonical terminal
   assert.equal(dataPort.messages.length, 0);
   await runtime.dispose();
 });
+
+test("utility runtime disposal closes a terminal port while its transport helper is loading", async () => {
+  const { startPluginRuntime } = await import("./runtimePeer.mjs");
+  const control = new FakePort();
+  let resolveTransport;
+  const transportLoading = new Promise((resolve) => { resolveTransport = resolve; });
+  const runtime = await startPluginRuntime({
+    port: control,
+    config: {
+      pluginId: "com.example",
+      pluginVersion: "1.0.0",
+      netcattyVersion: "1.0.0",
+      apiVersion: "1.0.0",
+      enabledFeatures: [],
+      environment: {},
+      entryUrl: "file:///plugin.js",
+    },
+    loadPlugin: async () => ({
+      default: {
+        activate(context) {
+          context.providers.register(
+            "com.example.input",
+            "terminal.interceptor.input",
+            ({ data }) => data,
+          );
+        },
+      },
+    }),
+    loadTerminalInterceptorTransport: () => transportLoading,
+  });
+  control.emit({ jsonrpc: "2.0", id: 1, method: "plugin.initialize", params: {} });
+  await tick();
+  control.emit({ jsonrpc: "2.0", id: 2, method: "plugin.activate", params: {} });
+  await tick();
+
+  const dataPort = new FakePort();
+  control.emit({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "plugin.terminal.interceptor.attach",
+    params: {
+      descriptor: {
+        providerId: "com.example.input",
+        direction: "input",
+        session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
+      },
+    },
+  }, [dataPort]);
+  await tick();
+  assert.equal(dataPort.closed, false);
+
+  await runtime.dispose();
+  assert.equal(dataPort.closed, true);
+  resolveTransport({
+    TERMINAL_INTERCEPTOR_MAX_CHUNK_BYTES: 64 * 1024,
+    createTerminalInterceptorEnvelope,
+  });
+  await tick();
+  assert.equal(
+    control.messages.some(({ message }) => message.id === 3 && message.result?.accepted === true),
+    false,
+  );
+  assert.equal(dataPort.closed, true);
+});
