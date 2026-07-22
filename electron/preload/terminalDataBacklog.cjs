@@ -23,8 +23,8 @@ function createTerminalDataBacklog(options = {}) {
     const preserveTerminalPerf = previous.data.length === 0 && nextData === data;
     let previousMeta = previous.meta;
     let nextChunkMeta = meta;
-    const previousHasIngress = hasPluginPipelineIngress(previousMeta);
-    const nextChunkHasIngress = hasPluginPipelineIngress(nextChunkMeta);
+    const previousHasIngress = Number.isFinite(previousMeta?.pluginPipelineIngressBytes);
+    const nextChunkHasIngress = Number.isFinite(nextChunkMeta?.pluginPipelineIngressBytes);
     // Once one merged chunk carries explicit original-ingress accounting, the
     // metadata must cover every raw flow unit in the same replay entry. Flow
     // control is intentionally charged in JavaScript string length, not UTF-8

@@ -17,6 +17,8 @@ test("recognizes terminal-generated report families without classifying ordinary
     "\x1b[4;1080;1920t",
     "\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
     "\x1b]4;255;rgb:ffff/0000/ffff\x1b\\",
+    "\x1b]11;rgb:0000/0000/0000\x07",
+    "\x1b]4;7;rgb:1111/2222/3333\x07",
     "\x1bP1$r0m\x1b\\",
   ]) {
     assert.equal(isTerminalReportSequence(report), true, JSON.stringify(report));

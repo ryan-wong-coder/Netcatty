@@ -101,6 +101,7 @@ function filterMcpChunk(sessionId, chunk, meta) {
   // Prepend any buffered fragment from the previous chunk
   const held = _mcpLineBufs.get(sessionId) || "";
   const heldMeta = _mcpLineMetas.get(sessionId);
+  const heldIngressAlreadyAcknowledged = heldMeta?.pluginPipelineIngressBytes === 0;
   const pendingMeta = _mcpPendingMetas.get(sessionId);
   const stateMeta = mergeTerminalDataMeta(mergeTerminalDataMeta(pendingMeta, heldMeta), meta);
   const sameChunkMeta = mergeTerminalDataMeta(mergeTerminalDataMeta(pendingMeta, heldMeta), meta, {
@@ -113,7 +114,18 @@ function filterMcpChunk(sessionId, chunk, meta) {
 
   // Fast path: nothing suspicious in the combined data
   if (!_mcpDroppingWrappedLine.has(sessionId) && !data.includes("__NCMCP_") && !_endsWithMarkerPrefix(data)) {
-    return { data, meta: held ? stateMeta : sameChunkMeta };
+    const deliveryMeta = held ? stateMeta : sameChunkMeta;
+    return {
+      data,
+      meta: heldIngressAlreadyAcknowledged
+        ? {
+            ...(deliveryMeta || {}),
+            pluginPipelineIngressBytes: Number.isFinite(meta?.pluginPipelineIngressBytes)
+              ? Math.max(0, Number(meta.pluginPipelineIngressBytes))
+              : chunk.length,
+          }
+        : deliveryMeta,
+    };
   }
 
   // Slow path: scan line by line
@@ -131,7 +143,10 @@ function filterMcpChunk(sessionId, chunk, meta) {
       const tail = data.slice(pos);
       if (droppedAny || tail.includes("__NCMCP_") || _endsWithMarkerPrefix(tail)) {
         _mcpLineBufs.set(sessionId, tail);
-        const tailMeta = !held && tail === chunk ? sameChunkMeta : stateMeta;
+        let tailMeta = !held && tail === chunk ? sameChunkMeta : stateMeta;
+        if (heldIngressAlreadyAcknowledged && !hasPluginPipelineIngress(tailMeta)) {
+          tailMeta = { ...(tailMeta || {}), pluginPipelineIngressBytes: 0 };
+        }
         if (tailMeta) _mcpLineMetas.set(sessionId, tailMeta);
         if (droppedAny) _mcpDroppingWrappedLine.add(sessionId);
       } else {
@@ -149,19 +164,26 @@ function filterMcpChunk(sessionId, chunk, meta) {
     pos = nlIdx + 1;
   }
 
-  return { data: result, meta: !held && result === chunk ? sameChunkMeta : stateMeta };
+  const deliveryMeta = !held && result === chunk ? sameChunkMeta : stateMeta;
+  return {
+    data: result,
+    meta: heldIngressAlreadyAcknowledged
+      ? {
+          ...(deliveryMeta || {}),
+          pluginPipelineIngressBytes: Number.isFinite(meta?.pluginPipelineIngressBytes)
+            ? Math.max(0, Number(meta.pluginPipelineIngressBytes))
+            : chunk.length,
+        }
+      : deliveryMeta,
+  };
 }
 
 function consumeBufferedMcpIngress(sessionId) {
   const heldMeta = _mcpLineMetas.get(sessionId);
   if (!hasPluginPipelineIngress(heldMeta)) return;
-  const remainingMeta = { ...heldMeta };
-  delete remainingMeta.pluginPipelineIngressBytes;
-  if (Object.keys(remainingMeta).length > 0) {
-    _mcpLineMetas.set(sessionId, remainingMeta);
-  } else {
-    _mcpLineMetas.delete(sessionId);
-  }
+  // Retain an explicit zero so a later safe flush does not fall back to the
+  // visible chunk length and acknowledge the already-credited prefix twice.
+  _mcpLineMetas.set(sessionId, { ...heldMeta, pluginPipelineIngressBytes: 0 });
 }
 
 /**
@@ -189,9 +211,13 @@ function flushMcpBufferedOutput(sessionId) {
       return;
     }
     if (held) {
-      _deliverToListeners(sessionId, held, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), heldMeta, {
+      let deliveryMeta = mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), heldMeta, {
         preserveTerminalPerf: true,
-      }));
+      });
+      if (heldMeta?.pluginPipelineIngressBytes === 0 && !hasPluginPipelineIngress(deliveryMeta)) {
+        deliveryMeta = { ...(deliveryMeta || {}), pluginPipelineIngressBytes: 0 };
+      }
+      _deliverToListeners(sessionId, held, deliveryMeta);
       _mcpPendingMetas.delete(sessionId);
     }
 }

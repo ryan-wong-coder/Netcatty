@@ -137,6 +137,22 @@ test("pipeline activation requires exact session permissions and transfers one p
   assert.ok(h.authorized.every((entry) => entry.request.sessionId === "session-1"));
   assert.deepEqual(h.attached.map((entry) => entry.side), ["plugin", "worker"]);
   assert.deepEqual(h.attached[0].attachOptions.expectedIdentity, h.identity);
+  assert.deepEqual(h.attached[0].descriptor, {
+    providerId: "com.example.input",
+    direction: "input",
+    session,
+  });
+  assert.deepEqual(h.attached[1].descriptor, {
+    sessionId: "session-1",
+    direction: "input",
+    providerId: "com.example.input",
+    pluginId: "com.example",
+    pluginVersion: "1.0.0",
+    runtimeId: "runtime-1",
+    runtimeKind: "utility",
+    securityPrincipal: "principal-1",
+    session,
+  });
 });
 
 test("pipeline rejects one-use permission grants before opening a streaming port", async () => {

@@ -26,8 +26,13 @@ function mergeTerminalDataMeta(first, second, options = {}) {
   const droppedOutputAlternateScreenAction = second?.droppedOutputMayAffectTerminalState
     ? second?.droppedOutputAlternateScreenAction
     : (second?.droppedOutputAlternateScreenAction ?? first?.droppedOutputAlternateScreenAction);
-  const pluginPipelineIngressBytes = Number(first?.pluginPipelineIngressBytes ?? 0)
-    + Number(second?.pluginPipelineIngressBytes ?? 0);
+  const firstHasPluginPipelineIngress = Number.isFinite(first?.pluginPipelineIngressBytes);
+  const secondHasPluginPipelineIngress = Number.isFinite(second?.pluginPipelineIngressBytes);
+  const pluginPipelineIngressBytes = Math.max(
+    0,
+    Number(first?.pluginPipelineIngressBytes ?? 0)
+      + Number(second?.pluginPipelineIngressBytes ?? 0),
+  );
 
   if (second?.pluginPipelineSensitiveInput === true) {
     merged.pluginPipelineSensitiveInput = true;
@@ -53,7 +58,7 @@ function mergeTerminalDataMeta(first, second, options = {}) {
     delete merged.droppedOutputAlternateScreenAction;
   }
 
-  if (pluginPipelineIngressBytes > 0) {
+  if (firstHasPluginPipelineIngress || secondHasPluginPipelineIngress) {
     merged.pluginPipelineIngressBytes = pluginPipelineIngressBytes;
   } else {
     delete merged.pluginPipelineIngressBytes;

@@ -348,7 +348,8 @@ class PluginTerminalDataPipelineService {
     if (existing) this.#detachKey(key, "replaced");
 
     const channel = new this.MessageChannelMain();
-    const descriptor = Object.freeze({
+    const utilityDescriptor = Object.freeze({ providerId, direction, session });
+    const workerDescriptor = Object.freeze({
       sessionId: session.sessionId,
       direction,
       providerId,
@@ -363,7 +364,7 @@ class PluginTerminalDataPipelineService {
     try {
       await this.runtimeSupervisor.attachTerminalInterceptor(
         identity.pluginId,
-        { providerId, direction, session },
+        utilityDescriptor,
         channel.port2,
         { expectedIdentity: identity },
       );
@@ -377,7 +378,7 @@ class PluginTerminalDataPipelineService {
         );
       }
       this.#assertAttachmentCurrent(session, direction, providerId, identity, options);
-      this.terminalWorkerManager.attachTerminalInterceptor(descriptor, channel.port1);
+      this.terminalWorkerManager.attachTerminalInterceptor(workerDescriptor, channel.port1);
       workerAttached = true;
     } catch (error) {
       if (workerAttached) {
