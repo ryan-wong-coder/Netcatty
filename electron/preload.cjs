@@ -219,7 +219,11 @@ const terminalOutputPorts = createTerminalOutputPortRegistry({
   filterData(sessionId, data, message) {
     if (message?.syntheticEcho) return data;
     const filtered = filterMcpChunk(sessionId, data, message.meta);
-    if (!filtered?.data && filtered?.meta) {
+    // Metadata-only plugin output is delivered immediately by the output-port
+    // registry so renderer flow credit can be returned. Do not retain the same
+    // ingress metadata for the next visible chunk or it would be acknowledged
+    // twice. Non-ingress terminal-state metadata still follows the next output.
+    if (!filtered?.data && filtered?.meta && !hasPluginPipelineIngress(filtered.meta)) {
       _mcpPendingMetas.set(sessionId, mergeTerminalDataMeta(_mcpPendingMetas.get(sessionId), filtered.meta));
     }
     scheduleMcpBufferedFlush(sessionId);

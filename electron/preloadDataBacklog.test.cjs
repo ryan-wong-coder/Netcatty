@@ -173,6 +173,24 @@ test("sums original plugin-pipeline ingress counts when display chunks are merge
   });
 });
 
+test("mixed processed and raw backlog accounts for every replayed UTF-8 byte", () => {
+  const processedThenRaw = createTerminalDataBacklog({ maxBytesPerSession: 64 });
+  processedThenRaw.append("session-1", "expanded", { pluginPipelineIngressBytes: 3 });
+  processedThenRaw.append("session-1", "普通");
+  assert.deepEqual(processedThenRaw.takeEntry("session-1"), {
+    data: "expanded普通",
+    meta: { pluginPipelineIngressBytes: 9 },
+  });
+
+  const rawThenProcessed = createTerminalDataBacklog({ maxBytesPerSession: 64 });
+  rawThenProcessed.append("session-1", "普通");
+  rawThenProcessed.append("session-1", "expanded", { pluginPipelineIngressBytes: 3 });
+  assert.deepEqual(rawThenProcessed.takeEntry("session-1"), {
+    data: "普通expanded",
+    meta: { pluginPipelineIngressBytes: 9 },
+  });
+});
+
 test("sensitive prompt metadata follows the latest merged output chunk", () => {
   const backlog = createTerminalDataBacklog({ maxBytesPerSession: 64 });
   backlog.append("session-1", "Password: ", {
@@ -444,6 +462,34 @@ test("terminal output port delivers metadata-only plugin output for flow acknowl
       chunk: "",
       meta: { pluginPipelineIngressBytes: 11 },
     }]);
+  } finally {
+    preload.cleanup();
+  }
+});
+
+test("MCP-filtered metadata-only plugin output is not applied to the next visible chunk", () => {
+  const preload = loadPreloadWithFakeElectron();
+  try {
+    const received = [];
+    const port = createFakePort();
+    preload.api.onSessionData("session-1", (chunk, meta) => received.push({ chunk, meta }));
+    preload.handlers.get("netcatty:terminal-output-port")?.(
+      { ports: [port] },
+      { sessionId: "session-1" },
+    );
+    port.emit({
+      sessionId: "session-1",
+      data: "__NCMCP_TEST\n",
+      meta: { pluginPipelineIngressBytes: 13 },
+    });
+    port.emit({
+      sessionId: "session-1",
+      data: "READY\n",
+    });
+    assert.deepEqual(received, [
+      { chunk: "", meta: { pluginPipelineIngressBytes: 13 } },
+      { chunk: "READY\n", meta: undefined },
+    ]);
   } finally {
     preload.cleanup();
   }

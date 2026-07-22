@@ -1,5 +1,6 @@
 "use strict";
 
+const { Buffer } = require("node:buffer");
 const { mergeTerminalDataMeta } = require("./terminalDataMeta.cjs");
 
 function hasPluginPipelineIngress(meta) {
@@ -21,7 +22,26 @@ function createTerminalDataBacklog(options = {}) {
     const previous = pendingBySession.get(sessionId) || { data: "", meta: undefined };
     const nextData = trimToLimit(previous.data + data);
     const preserveTerminalPerf = previous.data.length === 0 && nextData === data;
-    const nextMeta = mergeTerminalDataMeta(previous.meta, meta, { preserveTerminalPerf });
+    let previousMeta = previous.meta;
+    let nextChunkMeta = meta;
+    const previousHasIngress = hasPluginPipelineIngress(previousMeta);
+    const nextChunkHasIngress = hasPluginPipelineIngress(nextChunkMeta);
+    // Once one merged chunk carries explicit original-ingress accounting, the
+    // metadata must cover every raw byte in the same replay entry. Otherwise a
+    // processed chunk followed or preceded by ordinary output would cause the
+    // renderer to acknowledge only the annotated subset.
+    if (previousHasIngress && !nextChunkHasIngress && data) {
+      nextChunkMeta = {
+        ...(nextChunkMeta || {}),
+        pluginPipelineIngressBytes: Buffer.byteLength(data, "utf8"),
+      };
+    } else if (!previousHasIngress && nextChunkHasIngress && previous.data) {
+      previousMeta = {
+        ...(previousMeta || {}),
+        pluginPipelineIngressBytes: Buffer.byteLength(previous.data, "utf8"),
+      };
+    }
+    const nextMeta = mergeTerminalDataMeta(previousMeta, nextChunkMeta, { preserveTerminalPerf });
     pendingBySession.set(sessionId, {
       data: nextData,
       meta: nextMeta,

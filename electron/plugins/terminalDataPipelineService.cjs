@@ -101,6 +101,18 @@ class PluginTerminalDataPipelineService {
           return;
         }
         const key = `${warning?.sessionId}\0${warning?.direction}`;
+        const binding = this.active.get(key);
+        if (!binding) return;
+        if (warning?.code === "closed" && !runtimeIdentityMatches(
+          this.runtimeSupervisor.getRuntimeIdentity(binding.identity.pluginId),
+          binding.identity,
+        )) {
+          // RuntimeSupervisor removes the identity before an expected stop
+          // closes the utility port, then publishes the authoritative stopped,
+          // error, or quarantined state. Defer classification to that event so
+          // planned restarts are not quarantined while crashes still are.
+          return;
+        }
         this.active.delete(key);
         if (!["detached", "replaced", "shutdown"].includes(warning?.code)) {
           // A circuit-breaker or protocol failure quarantines this direction
@@ -146,7 +158,6 @@ class PluginTerminalDataPipelineService {
   }
 
   #pruneContributions() {
-    this.declined.clear();
     for (const [key, selection] of this.selectedProviders) {
       const direction = key.slice(key.lastIndexOf("\0") + 1);
       if (!this.#providers(direction).some((entry) => (
@@ -299,21 +310,29 @@ class PluginTerminalDataPipelineService {
       manifest: activation.plugin.manifest,
       securityPrincipal: identity.securityPrincipal,
     };
-    for (const permission of ["provider.terminal", `terminal.intercept.${direction}`]) {
-      const grant = await this.permissionEngine.authorize(context, {
-        permission,
-        resources: ["*"],
-        sessionId: session.sessionId,
-        reason: `Use ${providerId} to intercept Terminal ${direction} data`,
-        operationId: `terminal.interceptor.${direction}:${providerId}`,
-      });
-      if (!["existing", "session", "application", "always"].includes(grant?.scope)) {
-        throw new PluginRpcError(
-          RPC_ERRORS.permissionDenied,
-          "Terminal interceptor streams require a session, application, or persistent permission grant",
-        );
+    try {
+      for (const permission of ["provider.terminal", `terminal.intercept.${direction}`]) {
+        const grant = await this.permissionEngine.authorize(context, {
+          permission,
+          resources: ["*"],
+          sessionId: session.sessionId,
+          reason: `Use ${providerId} to intercept Terminal ${direction} data`,
+          operationId: `terminal.interceptor.${direction}:${providerId}`,
+        });
+        if (!["existing", "session", "application", "always"].includes(grant?.scope)) {
+          throw new PluginRpcError(
+            RPC_ERRORS.permissionDenied,
+            "Terminal interceptor streams require a session, application, or persistent permission grant",
+          );
+        }
+        this.#assertSessionCurrent(session.sessionId, options.sessionEpoch);
       }
-      this.#assertSessionCurrent(session.sessionId, options.sessionEpoch);
+    } catch (error) {
+      if (error?.code === RPC_ERRORS.permissionDenied) {
+        this.declined.add(key);
+        this.selectedProviders.delete(key);
+      }
+      throw error;
     }
     const currentIdentity = this.runtimeSupervisor.getRuntimeIdentity(activation.plugin.id);
     if (!runtimeIdentityMatches(currentIdentity, identity)) {

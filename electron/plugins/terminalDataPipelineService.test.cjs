@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { MessageChannel } = require("node:worker_threads");
 const test = require("node:test");
 
+const { PluginRpcError, RPC_ERRORS } = require("./rpcRouter.cjs");
 const { PluginTerminalDataPipelineService } = require("./terminalDataPipelineService.cjs");
 
 function provider(pluginId, id, direction) {
@@ -47,7 +48,7 @@ function harness(options = {}) {
     onDidChange(listener) { contributionListeners.push(listener); },
   };
   const runtimeSupervisor = {
-    getRuntimeIdentity() { return options.getRuntimeIdentity?.() ?? identity; },
+    getRuntimeIdentity() { return options.getRuntimeIdentity ? options.getRuntimeIdentity() : identity; },
     onDidChangeRuntime(listener) { runtimeListeners.push(listener); },
     async attachTerminalInterceptor(pluginId, descriptor, port, attachOptions) {
       port.unref?.();
@@ -156,6 +157,22 @@ test("pipeline rejects one-use permission grants before opening a streaming port
   );
   assert.equal(laterOnce.authorized.length, 2);
   assert.equal(laterOnce.attached.length, 0);
+});
+
+test("permission denial is remembered for the session instead of prompting again", async () => {
+  const h = harness({
+    onAuthorize() {
+      throw new PluginRpcError(RPC_ERRORS.permissionDenied, "permission denied");
+    },
+  });
+  await assert.rejects(
+    () => h.service.configureDirection(session, "input"),
+    (error) => error?.code === RPC_ERRORS.permissionDenied,
+  );
+  h.contributionListeners[0]();
+  assert.equal((await h.service.configureDirection(session, "input")).status, "declined");
+  assert.equal(h.authorized.length, 1);
+  assert.equal(h.attached.length, 0);
 });
 
 test("pipeline accepts an existing long-lived permission grant", async () => {
@@ -414,6 +431,60 @@ test("runtime exit clears the cached provider choice but ordinary reconnect pres
   providers.push(...withdrawn);
   await h.service.configureDirection(session, "input");
   assert.equal(h.selections.length, 2, "a stopped runtime must discard its session-local choice");
+});
+
+test("an expected runtime close waits for the stopped event instead of quarantining", async () => {
+  let currentIdentity;
+  const h = harness({ getRuntimeIdentity: () => currentIdentity });
+  currentIdentity = h.identity;
+  assert.equal((await h.service.configureDirection(session, "input")).status, "active");
+
+  currentIdentity = null;
+  h.worker.warningListener({
+    sessionId: session.sessionId,
+    direction: "input",
+    code: "closed",
+    message: "Terminal interceptor stopped and was disabled",
+  });
+  assert.equal(h.warnings.length, 0);
+
+  h.runtimeListeners[0]({
+    status: "stopped",
+    pluginId: "com.example",
+    runtimeId: "runtime-1",
+  });
+  currentIdentity = h.identity;
+  assert.equal((await h.service.configureDirection(session, "input")).status, "active");
+  assert.equal(h.warnings.length, 0);
+  assert.equal(h.authorized.length, 4);
+  assert.equal(h.attached.length, 4);
+});
+
+test("a close during runtime failure is quarantined by the authoritative error event", async () => {
+  let currentIdentity;
+  const h = harness({ getRuntimeIdentity: () => currentIdentity });
+  currentIdentity = h.identity;
+  assert.equal((await h.service.configureDirection(session, "input")).status, "active");
+
+  currentIdentity = null;
+  h.worker.warningListener({
+    sessionId: session.sessionId,
+    direction: "input",
+    code: "closed",
+    message: "Terminal interceptor stopped and was disabled",
+  });
+  h.runtimeListeners[0]({
+    status: "error",
+    pluginId: "com.example",
+    runtimeId: "runtime-1",
+    error: "utility runtime crashed",
+  });
+
+  const [result] = await h.service.handleSessionEvent({ type: "connected", session });
+  assert.equal(result.status, "declined");
+  assert.deepEqual(h.warnings.map((warning) => warning.code), ["runtime-error"]);
+  assert.equal(h.authorized.length, 2);
+  assert.equal(h.attached.length, 2);
 });
 
 test("terminal worker exit invalidates active bindings before worker restart", async () => {
