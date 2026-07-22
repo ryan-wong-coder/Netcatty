@@ -157,7 +157,7 @@ test("utility runtime closes a terminal port when provider ownership or kind is 
   await runtime.dispose();
 });
 
-test("utility runtime closes the transferred terminal port when the attachment descriptor is malformed", async () => {
+test("utility runtime closes the transferred terminal port when the provider belongs to another plugin", async () => {
   const { startPluginRuntime } = await import("./runtimePeer.mjs");
   const control = new FakePort();
   const runtime = await startPluginRuntime({
@@ -184,7 +184,7 @@ test("utility runtime closes the transferred terminal port when the attachment d
     method: "plugin.terminal.interceptor.attach",
     params: {
       descriptor: {
-        providerId: "not-owned.input",
+        providerId: "other.plugin.input",
         direction: "input",
         session: { sessionId: "session-1", protocol: "ssh", status: "connected" },
       },
@@ -200,6 +200,45 @@ test("utility runtime closes the transferred terminal port when the attachment d
     )),
     true,
   );
+  await runtime.dispose();
+});
+
+test("utility runtime closes unexpected transferred ports on every lifecycle request", async () => {
+  const { startPluginRuntime } = await import("./runtimePeer.mjs");
+  const control = new FakePort();
+  const runtime = await startPluginRuntime({
+    port: control,
+    config: {
+      pluginId: "com.example",
+      pluginVersion: "1.0.0",
+      netcattyVersion: "1.0.0",
+      apiVersion: "1.0.0",
+      enabledFeatures: [],
+      environment: {},
+      entryUrl: "file:///plugin.js",
+    },
+    loadPlugin: async () => ({ default: { activate() {} } }),
+  });
+  const lifecycleRequests = [
+    { id: 1, method: "plugin.initialize", params: {} },
+    { id: 2, method: "plugin.activate", params: {} },
+    { id: 3, method: "plugin.deactivate", params: {} },
+  ];
+  for (const request of lifecycleRequests) {
+    const unexpectedPort = new FakePort();
+    control.emit({ jsonrpc: "2.0", ...request }, [unexpectedPort]);
+    await tick();
+    assert.equal(unexpectedPort.closed, true, `${request.method} retained an unexpected port`);
+    assert.equal(
+      control.messages.some(({ message }) => (
+        message.jsonrpc === "2.0"
+        && message.id === request.id
+        && Object.hasOwn(message, "result")
+      )),
+      true,
+      `${request.method} did not complete after closing its unexpected port`,
+    );
+  }
   await runtime.dispose();
 });
 

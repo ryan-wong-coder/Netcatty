@@ -59,6 +59,10 @@ function messageData(value) {
   return value && typeof value === "object" && "data" in value ? value.data : value;
 }
 
+function closeTransferredPorts(ports) {
+  for (const port of ports ?? []) port?.close?.();
+}
+
 function createTransportAdapter(port) {
   const listeners = new Set();
   const handle = (event) => {
@@ -494,6 +498,8 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
   }
 
   async function handleRequest(message, cancellationToken, ports = []) {
+    const isTerminalAttachment = message.method === "plugin.terminal.interceptor.attach";
+    if (!isTerminalAttachment) closeTransferredPorts(ports);
     if (message.method === "plugin.initialize") {
       if (context) throw new PluginError("failed_precondition", "Plugin is already initialized");
       context = createPluginContext(config, client, runtimeApi);
@@ -527,18 +533,17 @@ export async function startPluginRuntime({ port, config, loadPlugin }) {
     }
     if (message.method === "plugin.terminal.interceptor.attach") {
       if (ports.length !== 1) {
-        for (const port of ports) port?.close?.();
+        closeTransferredPorts(ports);
         throw new PluginError("invalid_argument", "Terminal interceptor attachment requires exactly one port");
       }
       try {
         attachTerminalInterceptor(message.params, ports);
         return { accepted: true };
       } catch (error) {
-        for (const port of ports) port?.close?.();
+        closeTransferredPorts(ports);
         throw error;
       }
     }
-    for (const port of ports) port?.close?.();
     if (message.method === "plugin.command.execute") {
       if (!activated || !context) throw new PluginError("failed_precondition", "Plugin is not activated");
       const command = assertOwnedContributionId(config.pluginId, message.params?.command, "Plugin command");
