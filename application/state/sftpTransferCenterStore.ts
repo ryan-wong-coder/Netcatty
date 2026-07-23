@@ -184,6 +184,15 @@ export function createSftpTransferCenterStore(persistence?: StorePersistence): S
     const ownerId = findOwner(taskId);
     let controller = ownerId ? controllers.get(ownerId) : undefined;
     const task = tasks.find((candidate) => candidate.id === taskId);
+    // Intentional resume/retry must clear a pre-start cancel latch left by an
+    // earlier cancel that never hit startTransferNow (same transferId).
+    if (action === "resume" || action === "retry") {
+      try {
+        await netcattyBridge.get()?.clearPendingTransferCancel?.(taskId);
+      } catch {
+        // best-effort
+      }
+    }
     // After app restart (or any reconnectRequired task), a retained panel owner
     // often cannot resume (missing panes / dead sftpId). Prefer a dedicated
     // transfer session instead of failing with "Reconnect the source and target".

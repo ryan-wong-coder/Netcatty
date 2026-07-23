@@ -763,6 +763,9 @@ function createPreloadApi(ctx) {
     cleanupTransferListeners(transferId);
     return ipcRenderer.invoke("netcatty:transfer:cancel", { transferId });
   },
+  clearPendingTransferCancel: async (transferId) => {
+    return ipcRenderer.invoke("netcatty:transfer:clear-pending-cancel", { transferId });
+  },
   pauseTransfer: async (transferId) => {
     return ipcRenderer.invoke("netcatty:transfer:pause", { transferId });
   },

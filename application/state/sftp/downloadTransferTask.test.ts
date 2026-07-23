@@ -54,3 +54,12 @@ test("directory download final status is completed when no child failures", () =
   assert.equal(resolved.status, "completed");
   assert.equal(resolved.error, undefined);
 });
+
+test("cancel wins even when child error count is zero (late cancel race)", () => {
+  // Snapshot may have been non-cancelled; re-check still forces cancelled.
+  const resolved = resolveDirectDirectoryDownloadFinalStatus({
+    parentCancelled: true,
+    childFailureCount: 0,
+  });
+  assert.equal(resolved.status, "cancelled");
+});

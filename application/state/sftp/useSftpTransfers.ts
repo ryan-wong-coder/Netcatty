@@ -580,6 +580,16 @@ export const useSftpTransfers = ({
       setTransfers((prev) => {
         return prev.map((t) => {
           if (t.id !== task.id) return t;
+          // Late cancel must not be overwritten by completed/failed.
+          if (t.status === "cancelled" || cancelledTasksRef.current.has(task.id)) {
+            return {
+              ...t,
+              status: "cancelled" as TransferStatus,
+              error: undefined,
+              endTime: Date.now(),
+              speed: 0,
+            };
+          }
           return {
             ...t,
             status: finalStatus,
@@ -1494,19 +1504,33 @@ export const useSftpTransfers = ({
         // Cancel must win: transferDirectory counts cancelled children as errors,
         // but cancelTransfer already marked the parent cancelled — do not demote
         // it to failed with "Some files failed to transfer".
-        const resolved = resolveDirectDirectoryDownloadFinalStatus({
-          parentCancelled: cancelledTasksRef.current.has(task.id),
-          childFailureCount,
-        });
-        if (resolved.status === "cancelled") {
-          cancelledTasksRef.current.delete(task.id);
-        }
+        // Re-read cancel inside the state update so a cancel that lands after
+        // transferDirectory returns cannot be overwritten by completed/failed.
+        let appliedStatus: TransferStatus = "completed";
         setTransfers((prev) => {
           const completedCount = prev.filter(
             (t) => t.parentTaskId === task.id && t.status === "completed",
           ).length;
           return prev.map((t) => {
             if (t.id !== task.id) return t;
+            const parentCancelled = t.status === "cancelled"
+              || cancelledTasksRef.current.has(task.id);
+            const resolved = resolveDirectDirectoryDownloadFinalStatus({
+              parentCancelled,
+              childFailureCount,
+            });
+            appliedStatus = resolved.status;
+            if (resolved.status === "cancelled") {
+              cancelledTasksRef.current.delete(task.id);
+              return {
+                ...t,
+                status: "cancelled" as TransferStatus,
+                error: undefined,
+                endTime: Date.now(),
+                // Keep partial progress — do not look 100% complete when cancelled.
+                speed: 0,
+              };
+            }
             const finalTotal = t.totalBytes > 0 ? t.totalBytes : completedCount;
             const hasFailures = resolved.status === "failed";
             return {
@@ -1516,11 +1540,12 @@ export const useSftpTransfers = ({
               endTime: Date.now(),
               totalBytes: finalTotal,
               transferredBytes: hasFailures ? completedCount : finalTotal,
+              speed: 0,
             };
           });
         });
         activeChildIdsRef.current.delete(task.id);
-        return resolved.status;
+        return appliedStatus;
       } catch (err) {
         activeChildIdsRef.current.delete(task.id);
         const isCancelled = cancelledTasksRef.current.has(task.id);

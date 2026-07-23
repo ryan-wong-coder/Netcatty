@@ -1747,6 +1747,11 @@ function registerHandlers(ipcMain, options = {}) {
       await terminalWorkerManager.request("netcatty:transfer:set-concurrency", { limit }).catch(() => {});
       return { success: true, limit };
     });
+    // pendingCancel lives in the main process (even with worker transfers).
+    ipcMain.handle("netcatty:transfer:clear-pending-cancel", (_event, payload) => {
+      clearPendingCancel(payload?.transferId);
+      return { success: true };
+    });
     return;
   }
   ipcMain.handle("netcatty:transfer:start", startTransfer);
@@ -1760,6 +1765,10 @@ function registerHandlers(ipcMain, options = {}) {
   }));
   ipcMain.handle("netcatty:transfer:cleanup", cleanupTransferArtifacts);
   ipcMain.handle("netcatty:transfer:same-host-copy-dir", sameHostCopyDirectory);
+  ipcMain.handle("netcatty:transfer:clear-pending-cancel", (_event, payload) => {
+    clearPendingCancel(payload?.transferId);
+    return { success: true };
+  });
 }
 
 module.exports = {

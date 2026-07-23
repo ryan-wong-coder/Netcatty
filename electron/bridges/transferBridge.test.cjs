@@ -874,6 +874,36 @@ test("bridge admission gives different remote sessions independent concurrency",
   assert.equal(bothStarted, true);
 });
 
+test("clearPendingCancel allows intentional same-id start after a pre-start cancel", async (t) => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-clear-pending-"));
+  t.after(async () => { await fs.promises.rm(tempDir, { recursive: true, force: true }); });
+  const source = new PassThrough();
+  const sftp = createFastSftp({
+    createReadStream() {
+      return source;
+    },
+  });
+  transferBridge.init({ sftpClients: new Map([["source", { sftp, stat: async () => ({ size: 1 }) }]]) });
+
+  await transferBridge.cancelTransfer(null, { transferId: "retry-same-id" });
+  transferBridge.clearPendingCancel("retry-same-id");
+  const resultPromise = transferBridge.startTransfer({ sender: createSender() }, {
+    transferId: "retry-same-id",
+    sourcePath: "/remote",
+    targetPath: path.join(tempDir, "out.bin"),
+    sourceType: "sftp",
+    targetType: "local",
+    sourceSftpId: "source",
+    totalBytes: 1,
+    skipAdmission: true,
+  });
+  while (source.listenerCount("data") === 0) await new Promise((resolve) => setImmediate(resolve));
+  source.end(Buffer.from("a"));
+  const result = await resultPromise;
+  assert.equal(result.cancelled, undefined);
+  assert.equal(result.error, undefined);
+});
+
 test("cancel before skipAdmission start rejects the transfer without writing", async (t) => {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-pending-cancel-"));
   t.after(async () => { await fs.promises.rm(tempDir, { recursive: true, force: true }); });

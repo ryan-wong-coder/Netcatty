@@ -37,6 +37,8 @@ declare global {
     uploadFile?(sftpId: string, localPath: string, remotePath: string, transferId: string): Promise<void>;
     downloadFile?(sftpId: string, remotePath: string, localPath: string, transferId: string): Promise<void>;
     cancelTransfer?(transferId: string): Promise<void>;
+    /** Clear a pre-start cancel latch so intentional same-id resume/retry can run. */
+    clearPendingTransferCancel?(transferId: string): Promise<{ success: boolean } | void>;
     sameHostCopyDirectory?(sftpId: string, sourcePath: string, targetPath: string, encoding?: SftpFilenameEncoding, transferId?: string): Promise<{ success: boolean }>;
 
     // Compressed folder upload
