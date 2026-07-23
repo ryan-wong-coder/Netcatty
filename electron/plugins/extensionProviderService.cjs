@@ -1,6 +1,7 @@
 "use strict";
 
 const { randomUUID } = require("node:crypto");
+const { performance } = require("node:perf_hooks");
 
 const {
   assertProviderRequest,
@@ -139,6 +140,18 @@ function waitForStreamOrRequestFailure(streamPromise, requestPromise) {
       (error) => Promise.reject(error),
     ),
   ]);
+}
+
+function waitUntilDeadline(promise, deadlineAt, signal, message) {
+  const operation = signal ? raceWithAbort(Promise.resolve(promise), signal) : Promise.resolve(promise);
+  const remainingMs = Math.max(0, Math.ceil(deadlineAt - performance.now()));
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new PluginRpcError(RPC_ERRORS.deadlineExceeded, message));
+    }, remainingMs);
+  });
+  return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
 }
 
 function validateProviderResult(rawResult, requestId) {
@@ -634,6 +647,8 @@ class PluginExtensionProviderService {
       throw invalidArgument("Importer input stream is unavailable");
     }
     const activation = await this.activate(providerId, "importer", options.signal);
+    const deadlineMs = normalizeDeadlineMs(params?.deadlineMs);
+    const deadlineAt = performance.now() + deadlineMs;
     const operationId = `importer:${randomUUID()}`;
     const inputStreamId = `${operationId}:input`;
     const outputStreamId = `${operationId}:output`;
@@ -685,7 +700,7 @@ class PluginExtensionProviderService {
         },
       });
       return stream;
-    }, options.signal, normalizeDeadlineMs(params?.deadlineMs));
+    }, options.signal, deadlineMs);
     const request = this.invoke({
       providerId,
       kind: "importer",
@@ -699,32 +714,73 @@ class PluginExtensionProviderService {
         windowBytes: STREAM_WINDOW_BYTES,
         ...(params.options === undefined ? {} : { options: assertBoundedJson(params.options, "Importer options") }),
       },
-      deadlineMs: params.deadlineMs,
+      deadlineMs,
     }, { ...options, activation });
+    const waitForImporterIo = (promise, message) => waitUntilDeadline(
+      waitForStreamOrRequestFailure(promise, request),
+      deadlineAt,
+      options.signal,
+      message,
+    );
     let output;
     let input;
+    let sourceIterator;
+    let sourceCompleted = false;
     try {
-      output = await waitForStreamOrRequestFailure(expected.promise, request);
-      input = await this.runtimeSupervisor.openStream(activation.activation.plugin.id, inputStreamId, STREAM_WINDOW_BYTES, {
-        expectedIdentity: activation.identity,
-      });
+      sourceIterator = typeof source[Symbol.asyncIterator] === "function"
+        ? source[Symbol.asyncIterator]()
+        : source[Symbol.iterator]();
+      output = await waitUntilDeadline(
+        waitForStreamOrRequestFailure(expected.promise, request),
+        deadlineAt,
+        options.signal,
+        "Importer output stream exceeded its deadline",
+      );
+      input = await waitForImporterIo(
+        this.runtimeSupervisor.openStream(activation.activation.plugin.id, inputStreamId, STREAM_WINDOW_BYTES, {
+          expectedIdentity: activation.identity,
+        }),
+        "Importer input stream exceeded its deadline",
+      );
       let inputBytes = 0;
-      for await (const rawChunk of source) {
+      while (true) {
+        const next = await waitForImporterIo(
+          Promise.resolve(sourceIterator.next()),
+          "Importer input source exceeded its deadline",
+        );
+        if (next.done) {
+          sourceCompleted = true;
+          break;
+        }
+        const rawChunk = next.value;
         const chunk = rawChunk instanceof Uint8Array ? rawChunk : new Uint8Array(rawChunk);
         inputBytes += chunk.byteLength;
         if (chunk.byteLength < 1 || inputBytes > sourceByteLength) {
           throw new PluginRpcError(RPC_ERRORS.dataLoss, "Importer input stream changed while it was being read");
         }
         for (let offset = 0; offset < chunk.byteLength; offset += STREAM_WINDOW_BYTES) {
-          await input.write(chunk.subarray(offset, Math.min(chunk.byteLength, offset + STREAM_WINDOW_BYTES)));
+          await waitForImporterIo(
+            input.write(chunk.subarray(offset, Math.min(chunk.byteLength, offset + STREAM_WINDOW_BYTES))),
+            "Importer input stream exceeded its deadline",
+          );
         }
       }
       if (inputBytes !== sourceByteLength) {
         throw new PluginRpcError(RPC_ERRORS.dataLoss, "Importer input stream ended at an unexpected size");
       }
-      await input.end();
-      const result = await request;
-      await outputDone;
+      await waitForImporterIo(input.end(), "Importer input stream exceeded its deadline");
+      const result = await waitUntilDeadline(
+        request,
+        deadlineAt,
+        options.signal,
+        "Importer Provider exceeded its deadline",
+      );
+      await waitUntilDeadline(
+        outputDone,
+        deadlineAt,
+        options.signal,
+        "Importer output stream exceeded its deadline",
+      );
       assertDefinition("ImporterParseResult", result, "Importer completion result");
       if (!result || typeof result !== "object" || Array.isArray(result)
         || !Number.isSafeInteger(result.parsed) || result.parsed < 0
@@ -746,6 +802,9 @@ class PluginExtensionProviderService {
       return freezeJson({ providerId, result, records });
     } catch (error) {
       expected.cancel(error);
+      if (!sourceCompleted && typeof sourceIterator?.return === "function") {
+        try { void Promise.resolve(sourceIterator.return()).catch(() => {}); } catch {}
+      }
       try { input?.cancel?.(); } catch {}
       try { output?.cancel?.(); } catch {}
       throw error;

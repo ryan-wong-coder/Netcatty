@@ -462,16 +462,75 @@ test("connection startup reports a provider rejection without waiting for the ou
 });
 
 test("import parsing reports a provider rejection without waiting for the output-stream deadline", async () => {
+  let sourceReturned = false;
   const h = fixture({
     async request() {
       throw new Error("provider rejected parse");
+    },
+  });
+  const source = {
+    [Symbol.asyncIterator]() { return this; },
+    next() { return Promise.resolve({ value: new TextEncoder().encode("source"), done: false }); },
+    return() { sourceReturned = true; return Promise.resolve({ done: true }); },
+  };
+  await assert.rejects(h.service.parseImporter({
+    providerId: "com.example.transport.importer",
+    fileName: "hosts.json",
+    source,
+    sourceByteLength: 6,
+    deadlineMs: 300_000,
+  }), /provider rejected parse/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sourceReturned, true);
+  assert.equal(h.service.expectations.size, 0);
+});
+
+test("import parsing enforces its deadline when a successful provider forgets to end output", async () => {
+  let h;
+  h = fixture({
+    async request({ params, identity, accept }) {
+      const stream = incoming(params.payload.outputStreamId, async () => {});
+      assert.equal(await accept(stream, identity), true);
+      return {
+        requestId: params.requestId,
+        status: "ok",
+        result: { parsed: 0, warnings: 0, errors: 0 },
+      };
     },
   });
   await assert.rejects(h.service.parseImporter({
     providerId: "com.example.transport.importer",
     fileName: "hosts.json",
     data: new TextEncoder().encode("source"),
-    deadlineMs: 300_000,
-  }), /provider rejected parse/);
-  assert.equal(h.service.expectations.size, 0);
+    deadlineMs: 25,
+  }), /output stream exceeded its deadline/i);
+  assert.equal(h.revokedOperations.length, 1);
+  assert.match(h.revokedOperations[0].operationId, /^importer:/u);
+});
+
+test("import parsing enforces its deadline while the selected input source stalls", async () => {
+  let h;
+  let sourceReturned = false;
+  h = fixture({
+    async request({ params, identity, accept }) {
+      const stream = incoming(params.payload.outputStreamId, async () => {});
+      assert.equal(await accept(stream, identity), true);
+      return new Promise(() => {});
+    },
+  });
+  const source = {
+    [Symbol.asyncIterator]() { return this; },
+    next() { return new Promise(() => {}); },
+    return() { sourceReturned = true; return Promise.resolve({ done: true }); },
+  };
+  await assert.rejects(h.service.parseImporter({
+    providerId: "com.example.transport.importer",
+    fileName: "hosts.json",
+    source,
+    sourceByteLength: 6,
+    deadlineMs: 25,
+  }), /input source exceeded its deadline/i);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sourceReturned, true);
+  assert.equal(h.revokedOperations.length, 1);
 });
