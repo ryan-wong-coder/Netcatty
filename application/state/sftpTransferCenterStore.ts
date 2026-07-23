@@ -376,28 +376,27 @@ export function createSftpTransferCenterStore(persistence?: StorePersistence): S
         const restoreOwner = previousOwnerId && previousOwnerId !== "dedicated-resume"
           ? previousOwnerId
           : ownerId;
+        const restoredTask = {
+          ...(tasks.find((candidate) => candidate.id === taskId) ?? task),
+          ownerId: restoreOwner || "dedicated-resume",
+          status: "attention" as const,
+          error: result.error,
+          reconnectRequired: true,
+          speed: 0,
+          phase: undefined,
+        };
         if (restoreOwner) {
-          tasks = tasks.map((candidate) => candidate.id === taskId ? {
-            ...candidate,
-            ownerId: restoreOwner,
-            status: "attention",
-            error: result.error,
-            reconnectRequired: true,
-            speed: 0,
-            phase: undefined,
-          } : candidate);
+          tasks = tasks.map((candidate) => candidate.id === taskId ? restoredTask : candidate);
           emit();
           controller = controllers.get(restoreOwner);
-          if (controller?.canAdopt?.(tasks.find((c) => c.id === taskId) ?? task)) {
-            await controller.resume(taskId);
+          // Re-home via adopt (not resume) — the panel dropped the row while
+          // ownership was dedicated-resume, so resume would no-op.
+          if (controller?.canAdopt?.(restoredTask) && controller.adopt) {
+            await controller.adopt({ ...restoredTask, ownerId: restoreOwner, reconnectRequired: true });
             return;
           }
-          // No usable controller — leave attention + error for the user.
-          if (!controller) {
-            // fall through to prepareAdopter below
-          } else {
-            return;
-          }
+          // Live owner cannot adopt (missing host panes) — clear so prepareAdopter runs.
+          controller = undefined;
         }
       } else if (result.error) {
         // Hard dedicated failure.
@@ -546,8 +545,10 @@ export function createSftpTransferCenterStore(persistence?: StorePersistence): S
       // After restart (or panel unmount) unfinished tasks stay in the store with
       // no owner controller. The global center must still be able to resume,
       // cancel, or dismiss them — otherwise they become dead rows.
-      const terminal = task.status === "completed" || task.status === "failed" || task.status === "cancelled";
-      if (!terminal) return true;
+      const terminal = task.status === "completed" || task.status === "cancelled";
+      // Failed rows stay controllable so orphan Retry/Resume can still run after restart.
+      if (!terminal && task.status !== "failed") return true;
+      if (task.status === "failed") return true;
       return !!(task && [...controllers.values()].some((controls) => (
         controls.adopt && controls.canAdopt?.(task)
       )));
@@ -594,7 +595,36 @@ export function createSftpTransferCenterStore(persistence?: StorePersistence): S
         await controller.retry(taskId);
         return;
       }
-      // Orphaned after restart: retry behaves like resume (checkpoint + dedicated).
+      // Orphaned after restart: clear checkpoint so Retry truly restarts, then
+      // resume (dedicated or adopt) from byte 0.
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (task) {
+        tasks = tasks.map((candidate) => candidate.id === taskId ? {
+          ...candidate,
+          status: "interrupted",
+          error: undefined,
+          checkpointBytes: 0,
+          transferredBytes: 0,
+          downloadCheckpointBytes: undefined,
+          uploadCheckpointBytes: undefined,
+          resumeStage: undefined,
+          sourceFingerprint: undefined,
+          reconnectRequired: true,
+          speed: 0,
+          endTime: undefined,
+        } : candidate);
+        emit();
+        try {
+          await netcattyBridge.get()?.cleanupTransferArtifacts?.({
+            transferId: taskId,
+            sourcePath: task.sourcePath,
+            targetPath: task.targetPath,
+            stagedTargetPath: task.stagedTargetPath,
+          });
+        } catch {
+          // best-effort
+        }
+      }
       await this.resume(taskId);
     },
     prioritize(taskId) {

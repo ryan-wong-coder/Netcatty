@@ -308,6 +308,8 @@ export function GlobalSftpTransferCenter() {
 
   const pauseAll = () => {
     for (const task of snapshot.tasks) {
+      // Only top-level rows — children are driven by their parent directory job.
+      if (task.parentTaskId) continue;
       // Skip dedicated reconnect spinner rows — pause cannot stop open/auth yet
       // and would only demote the UI while the stream continues.
       if (task.ownerId === "dedicated-resume" && task.reconnectRequired) continue;
@@ -318,6 +320,9 @@ export function GlobalSftpTransferCenter() {
   };
   const resumeAll = () => {
     for (const task of snapshot.tasks) {
+      // Resume parents only; child interrupted rows after restart are rebuilt
+      // when the parent directory is re-adopted (avoids dual writers).
+      if (task.parentTaskId) continue;
       if (task.conflict) continue;
       if (task.status === "paused" || task.status === "interrupted" || task.status === "attention") {
         void sftpTransferCenterStore.resume(task.id);
