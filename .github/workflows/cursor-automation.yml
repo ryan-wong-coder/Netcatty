@@ -7,7 +7,13 @@ on:
     types: [created]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # Codex terminal summaries land as PR issue comments; avoid dual-trigger with review events.
+  # Fork PRs get a read-only GITHUB_TOKEN on pull_request. pull_request_target
+  # (default-branch only checkout + comment) can re-@codex after contributor pushes.
+  pull_request_target:
+    types: [synchronize]
+  # Codex often finishes as a submitted PR review (plus optional issue summary).
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -56,11 +62,19 @@ jobs:
       - name: Ensure automation helper present
         env:
           BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [[ -f scripts/cursor-automation.cjs ]]; then
             echo "Helper present on default branch."
             exit 0
+          fi
+          # Never execute untrusted helper code under pull_request_target / fork events.
+          if [[ "$EVENT_NAME" == "pull_request_target" ]] || { [[ -n "$HEAD_REPO" ]] && [[ "$HEAD_REPO" != "$BASE_REPO" ]]; }; then
+            echo "Helper missing on default branch; refusing untrusted bootstrap for ${EVENT_NAME}." >&2
+            exit 1
           fi
           echo "Helper missing on default branch; bootstrapping from ${BOOTSTRAP_SHA}"
           git fetch --depth=1 origin "${BOOTSTRAP_SHA}"
@@ -155,13 +169,58 @@ jobs:
               return set('skip', { reason: 'issue comment no re-triage signal' });
             }
 
+            if (event === 'pull_request_review') {
+              const login = context.payload.review?.user?.login || '';
+              const pr = context.payload.pull_request;
+              if (!auto.isCodexBotLogin(login)) {
+                return set('skip', { reason: 'non-codex review' });
+              }
+              if (
+                !auto.isFixEligiblePr(pr, {
+                  ownActors,
+                  repository: `${context.repo.owner}/${context.repo.repo}`,
+                })
+              ) {
+                return set('skip', {
+                  reason: 'codex review on non-fix-eligible pr',
+                });
+              }
+              return set('codex_loop', {
+                pull_number: String(pr.number),
+                reason: 'codex pull_request_review submitted',
+              });
+            }
+
+            if (event === 'pull_request_target') {
+              // Privileged path for fork comment-only re-@codex. Never implement/fix.
+              const pr = context.payload.pull_request;
+              const sameRepo =
+                pr.head?.repo?.full_name ===
+                `${context.repo.owner}/${context.repo.repo}`;
+              if (sameRepo) {
+                return set('skip', {
+                  reason: 'same-repo uses pull_request event',
+                });
+              }
+              if (context.payload.action === 'synchronize') {
+                return set('external_rerequest_codex', {
+                  pull_number: String(pr.number),
+                  reason: 'fork pr push via pull_request_target — re-@codex',
+                });
+              }
+              return set('skip', { reason: 'pull_request_target non-synchronize' });
+            }
+
             if (event === 'pull_request') {
               const pr = context.payload.pull_request;
+              const sameRepo =
+                pr.head?.repo?.full_name ===
+                `${context.repo.owner}/${context.repo.repo}`;
               const eligible = auto.isFixEligiblePr(pr, {
                 ownActors,
                 repository: `${context.repo.owner}/${context.repo.repo}`,
               });
-              // Own/bot PRs: ensure Codex on open/ready; fixes come from codex events.
+              // Own/bot PRs: ensure Codex on open/ready; human synchronize re-requests.
               if (eligible) {
                 if (['opened', 'ready_for_review', 'reopened'].includes(context.payload.action)) {
                   return set('codex_loop', {
@@ -169,16 +228,37 @@ jobs:
                     reason: 'own pr opened — ensure codex review',
                   });
                 }
+                if (context.payload.action === 'synchronize') {
+                  const sender = String(context.payload.sender?.login || '');
+                  // Bot fix jobs already post @codex after push; skip their synchronize.
+                  if (
+                    sender === 'github-actions[bot]' ||
+                    sender.endsWith('[bot]')
+                  ) {
+                    return set('skip', {
+                      reason: 'own pr bot push already requested codex',
+                    });
+                  }
+                  return set('own_rerequest_codex', {
+                    pull_number: String(pr.number),
+                    reason: 'own pr human push — re-@codex',
+                  });
+                }
                 return set('skip', {
-                  reason: 'own pr synchronize handled after fix job',
+                  reason: 'own pr non-open non-synchronize',
                 });
               }
-              // Third-party/fork: initial Codex review is already auto-configured.
-              // Only re-request Codex after the author pushes fixes (synchronize).
+              // Forks: only pull_request_target may comment (write token).
+              if (!sameRepo) {
+                return set('skip', {
+                  reason: 'fork uses pull_request_target for re-@codex',
+                });
+              }
+              // Same-repo non-eligible (rare) can comment on pull_request.
               if (context.payload.action === 'synchronize') {
                 return set('external_rerequest_codex', {
                   pull_number: String(pr.number),
-                  reason: 'external pr push — re-@codex review',
+                  reason: 'external same-repo push — re-@codex review',
                 });
               }
               return set('skip', {
@@ -194,6 +274,11 @@ jobs:
     if: needs.route.outputs.kind == 'issue_classify'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: read
     outputs:
       category: ${{ steps.apply.outputs.category }}
       should_implement: ${{ steps.apply.outputs.should_implement }}
@@ -204,6 +289,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Prepare issue context
         id: prepare
@@ -245,9 +332,12 @@ jobs:
         if: steps.prepare.outputs.should_run == 'true'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
         run: |
           set -euo pipefail
           mkdir -p .cursor-runtime
+          git config --local --unset-all http.https://github.com/.extraheader || true
           PROMPT="$(cat .github/cursor/prompts/classify.md)
           ----
           Issue payload path: .cursor-runtime/issue.json
@@ -286,6 +376,7 @@ jobs:
 
       - name: Notify Slack
         if: steps.apply.outcome == 'success'
+        continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           STATUS: "Classified as ${{ steps.apply.outputs.category }}"
@@ -304,7 +395,11 @@ jobs:
             workflowUrl: process.env.WORKFLOW_URL,
           });
           auto.sendSlackNotification(process.env.SLACK_WEBHOOK_URL, payload)
-            .then(({ skipped }) => skipped && console.log('Slack skipped'));
+            .then(({ skipped }) => skipped && console.log('Slack skipped'))
+            .catch((err) => {
+              console.error('Slack notification failed (non-blocking):', err);
+              process.exit(0);
+            });
           NODE
 
   implement:
@@ -317,26 +412,45 @@ jobs:
       needs.classify.outputs.should_implement == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # Agent job: no contents write token available to the runner for publish.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+    outputs:
+      should_publish: ${{ steps.patch.outputs.should_publish || 'false' }}
+      branch: ${{ steps.branch.outputs.name }}
+      base_sha: ${{ steps.branch.outputs.base_sha }}
+      issue_number: ${{ needs.classify.outputs.issue_number }}
+      issue_title: ${{ needs.classify.outputs.issue_title }}
     env:
       ISSUE_NUMBER: ${{ needs.classify.outputs.issue_number }}
       ISSUE_URL: ${{ needs.classify.outputs.issue_url }}
       ISSUE_TITLE: ${{ needs.classify.outputs.issue_title }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Ensure automation helper present
         env:
           BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [[ -f scripts/cursor-automation.cjs ]]; then
             echo "Helper present on default branch."
             exit 0
+          fi
+          if [[ "$EVENT_NAME" == "pull_request_target" ]] || { [[ -n "$HEAD_REPO" ]] && [[ "$HEAD_REPO" != "$BASE_REPO" ]]; }; then
+            echo "Helper missing on default branch; refusing untrusted bootstrap for ${EVENT_NAME}." >&2
+            exit 1
           fi
           echo "Helper missing on default branch; bootstrapping from ${BOOTSTRAP_SHA}"
           git fetch --depth=1 origin "${BOOTSTRAP_SHA}"
@@ -428,9 +542,14 @@ jobs:
         if: steps.existing.outputs.exists != 'true'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          # Explicitly strip GitHub credentials from the agent environment.
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
         run: |
           set -euo pipefail
           mkdir -p .cursor-runtime
+          # Drop any accidental git auth helpers for the agent process.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           PROMPT="$(cat .github/cursor/prompts/implement.md)"
           agent -p --force --trust --model auto --output-format text \
             --workspace "$GITHUB_WORKSPACE" \
@@ -452,17 +571,19 @@ jobs:
         run: |
           status="$(git status --porcelain --untracked-files=all -- . ':(exclude).cursor-runtime' ':(exclude).cursor-runtime/**')"
           names="$(git diff --name-only "${{ steps.branch.outputs.base_sha }}" HEAD 2>/dev/null || true)"
+          name_status="$(git diff --name-status -M "${{ steps.branch.outputs.base_sha }}" HEAD 2>/dev/null || true)"
           node -e '
             const auto = require(process.env.RUNNER_TEMP + "/cursor-automation.cjs");
             const hits = auto.hasProtectedChangesInSources({
               gitStatusPorcelain: process.argv[1],
               changedFiles: process.argv[2].split("\n").filter(Boolean),
+              nameStatusText: process.argv[3],
             });
             if (hits.length) {
               console.error("Protected paths modified:", hits.join(", "));
               process.exit(1);
             }
-          ' "$status" "$names"
+          ' "$status" "$names" "$name_status"
 
       - name: Report no changes
         if: steps.existing.outputs.exists != 'true' && steps.changes.outputs.present != 'true'
@@ -495,46 +616,139 @@ jobs:
           fi
           echo "passed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push
+      - name: Prepare patch for isolated publish
         if: steps.existing.outputs.exists != 'true' && steps.changes.outputs.present == 'true' && steps.verify.outputs.passed == 'true'
+        id: patch
         run: |
           set -euo pipefail
-          # Re-check protection immediately before publish (agent may have committed).
           status="$(git status --porcelain --untracked-files=all -- . ':(exclude).cursor-runtime' ':(exclude).cursor-runtime/**')"
-          names="$(git diff --name-only "${{ steps.branch.outputs.base_sha }}" HEAD 2>/dev/null || true)"
+          if [[ -n "$status" ]]; then
+            git add -A
+            git reset -- .cursor-runtime >/dev/null 2>&1 || true
+            git -c user.name="netcatty-cursor-bot" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "fix(#${ISSUE_NUMBER}): automated Cursor CLI fix" || true
+          fi
+          name_status="$(git diff --name-status -M "${{ steps.branch.outputs.base_sha }}" HEAD)"
           node -e '
             const auto = require(process.env.RUNNER_TEMP + "/cursor-automation.cjs");
-            const hits = auto.hasProtectedChangesInSources({
-              gitStatusPorcelain: process.argv[1],
-              changedFiles: process.argv[2].split("\n").filter(Boolean),
-            });
+            const hits = auto.hasProtectedChangesInSources({ nameStatusText: process.argv[1] });
             if (hits.length) {
               console.error("Protected paths modified:", hits.join(", "));
               process.exit(1);
             }
-          ' "$status" "$names"
-          git config user.name "netcatty-cursor-bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [[ -n "$status" ]]; then
-            git add -A
-            git reset -- .cursor-runtime >/dev/null 2>&1 || true
-            git commit -m "fix(#${ISSUE_NUMBER}): automated Cursor CLI fix"
+          ' "$name_status"
+          mkdir -p .cursor-runtime
+          git format-patch --stdout "${{ steps.branch.outputs.base_sha }}" > .cursor-runtime/implement.patch
+          test -s .cursor-runtime/implement.patch
+          if [[ -f .cursor-runtime/implement-status.txt ]]; then
+            cp .cursor-runtime/implement-status.txt .cursor-runtime/implement-status.out.txt
+          else
+            echo "OK: automated fix" > .cursor-runtime/implement-status.out.txt
           fi
-          git push origin "HEAD:${{ steps.branch.outputs.name }}"
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload implement patch
+        if: steps.patch.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: implement-patch-${{ github.run_id }}
+          path: |
+            .cursor-runtime/implement.patch
+            .cursor-runtime/implement-status.out.txt
+          if-no-files-found: error
+
+      - name: Mark needs human on implement failure
+        if: failure() && steps.existing.outputs.exists != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const helper = fs.existsSync(`${process.env.RUNNER_TEMP}/cursor-automation.cjs`)
+              ? `${process.env.RUNNER_TEMP}/cursor-automation.cjs`
+              : `${process.env.GITHUB_WORKSPACE}/scripts/cursor-automation.cjs`;
+            const auto = require(helper);
+            await auto.markNeedsHuman({
+              github,
+              context,
+              issueNumber: process.env.ISSUE_NUMBER,
+              message:
+                'Automatic implementation did not finish cleanly (agent, protected paths, or verification failed). A maintainer needs to take a look.',
+            });
+
+  publish_implement:
+    name: Publish implement PR
+    needs: [implement]
+    if: needs.implement.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+      ISSUE_TITLE: ${{ needs.implement.outputs.issue_title }}
+      BRANCH: ${{ needs.implement.outputs.branch }}
+      BASE_SHA: ${{ needs.implement.outputs.base_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Download implement patch
+        uses: actions/download-artifact@v4
+        with:
+          name: implement-patch-${{ github.run_id }}
+          path: patch-in
+
+      - name: Publish branch from fresh runner
+        run: |
+          set -euo pipefail
+          PUBLISH="$RUNNER_TEMP/publish-tree"
+          rm -rf "$PUBLISH"
+          git clone --no-checkout "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$PUBLISH"
+          cd "$PUBLISH"
+          git -c core.hooksPath=/dev/null fetch --depth=50 origin "${BASE_SHA}"
+          git -c core.hooksPath=/dev/null checkout -B "$BRANCH" "$BASE_SHA"
+          git -c core.hooksPath=/dev/null am --3way "$GITHUB_WORKSPACE/patch-in/implement.patch"
+          git -c core.hooksPath=/dev/null push origin "HEAD:$BRANCH"
+
+      - name: Checkout helper for PR body helpers
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          path: helpers
+
+      - name: Ensure automation helper present
+        working-directory: helpers
+        env:
+          BOOTSTRAP_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ''
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/cursor-automation.cjs ]]; then
+            cp scripts/cursor-automation.cjs "$RUNNER_TEMP/cursor-automation.cjs"
+            exit 0
+          fi
+          git fetch --depth=1 origin "${BOOTSTRAP_SHA}"
+          git show "FETCH_HEAD:scripts/cursor-automation.cjs" > "$RUNNER_TEMP/cursor-automation.cjs"
+          test -s "$RUNNER_TEMP/cursor-automation.cjs"
 
       - name: Open draft PR and request Codex review
-        if: steps.existing.outputs.exists != 'true' && steps.changes.outputs.present == 'true' && steps.verify.outputs.passed == 'true'
         uses: actions/github-script@v7
         env:
-          BRANCH: ${{ steps.branch.outputs.name }}
+          BRANCH: ${{ needs.implement.outputs.branch }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          ISSUE_TITLE: ${{ needs.implement.outputs.issue_title }}
         with:
           script: |
             const auto = require(`${process.env.RUNNER_TEMP}/cursor-automation.cjs`);
             const fs = require('node:fs');
             let summary = '';
             try {
-              summary = fs.readFileSync('.cursor-runtime/implement-status.txt', 'utf8');
+              summary = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/patch-in/implement-status.out.txt`, 'utf8');
             } catch {}
             const title = `fix(#${process.env.ISSUE_NUMBER}): ${process.env.ISSUE_TITLE}`.slice(0, 110);
             const body = auto.buildPullRequestBody({
@@ -570,50 +784,49 @@ jobs:
             });
             core.info(`Opened draft PR ${pr.html_url}`);
 
-      - name: Mark needs human on implement failure
-        if: failure() && steps.existing.outputs.exists != 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const path = require('node:path');
-            const fs = require('node:fs');
-            const helper = fs.existsSync(`${process.env.RUNNER_TEMP}/cursor-automation.cjs`)
-              ? `${process.env.RUNNER_TEMP}/cursor-automation.cjs`
-              : `${process.env.GITHUB_WORKSPACE}/scripts/cursor-automation.cjs`;
-            const auto = require(helper);
-            await auto.markNeedsHuman({
-              github,
-              context,
-              issueNumber: process.env.ISSUE_NUMBER,
-              message:
-                'Automatic implementation did not finish cleanly (agent, protected paths, or verification failed). A maintainer needs to take a look.',
-            });
-
   codex_loop:
     name: Codex review loop
     needs: route
     if: needs.route.outputs.kind == 'codex_loop'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: read
+    outputs:
+      should_publish: ${{ steps.fixpatch.outputs.should_publish || 'false' }}
+      head_ref: ${{ steps.codex.outputs.head_ref }}
+      base_sha: ${{ steps.base.outputs.sha }}
+      pull_number: ${{ needs.route.outputs.pull_number }}
+      prev_round: ${{ steps.codex.outputs.round }}
     env:
       PULL_NUMBER: ${{ needs.route.outputs.pull_number }}
       MAX_ROUNDS: ${{ vars.CURSOR_CODEX_FIX_MAX_ROUNDS || '40' }}
       OWN_ACTORS: ${{ vars.AUTOMATION_OWN_ACTORS || 'binaricat' }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout helpers
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       - name: Ensure automation helper present
         env:
           BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [[ -f scripts/cursor-automation.cjs ]]; then
             echo "Helper present on default branch."
             exit 0
+          fi
+          if [[ "$EVENT_NAME" == "pull_request_target" ]] || { [[ -n "$HEAD_REPO" ]] && [[ "$HEAD_REPO" != "$BASE_REPO" ]]; }; then
+            echo "Helper missing on default branch; refusing untrusted bootstrap for ${EVENT_NAME}." >&2
+            exit 1
           fi
           echo "Helper missing on default branch; bootstrapping from ${BOOTSTRAP_SHA}"
           git fetch --depth=1 origin "${BOOTSTRAP_SHA}"
@@ -644,16 +857,30 @@ jobs:
             core.setOutput('head_ref', pr.head.ref);
             core.setOutput('draft', pr.draft ? 'true' : 'false');
 
-            const { data: issueComments } = await github.rest.issues.listComments({
-              ...context.repo,
-              issue_number: pull_number,
-              per_page: 100,
-            });
-            const { data: reviewComments } = await github.rest.pulls.listReviewComments({
-              ...context.repo,
-              pull_number,
-              per_page: 100,
-            });
+            const issueComments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                ...context.repo,
+                issue_number: pull_number,
+                per_page: 100,
+              },
+            );
+            const reviewComments = await github.paginate(
+              github.rest.pulls.listReviewComments,
+              {
+                ...context.repo,
+                pull_number,
+                per_page: 100,
+              },
+            );
+            const submittedReviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                ...context.repo,
+                pull_number,
+                per_page: 100,
+              },
+            );
             const codexIssue = issueComments
               .filter(
                 (c) =>
@@ -664,7 +891,27 @@ jobs:
             const codexReviews = reviewComments.filter((c) =>
               auto.isCodexBotLogin(c.user?.login),
             );
-            const summaryText = codexIssue[0]?.body || '';
+            const codexSubmitted = submittedReviews
+              .filter(
+                (r) =>
+                  auto.isCodexBotLogin(r.user?.login) &&
+                  auto.isCodexTerminalReviewText(r.body),
+              )
+              .map((r) => ({
+                body: r.body,
+                created_at: r.submitted_at || r.created_at,
+              }));
+            const summaryCandidates = [
+              ...codexIssue.map((c) => ({
+                body: c.body,
+                created_at: c.created_at,
+              })),
+              ...codexSubmitted,
+            ].sort(
+              (a, b) =>
+                new Date(b.created_at || 0) - new Date(a.created_at || 0),
+            );
+            const summaryText = summaryCandidates[0]?.body || '';
             const outcome = auto.parseCodexReviewOutcome({
               summaryText,
               reviewComments: codexReviews,
@@ -676,6 +923,20 @@ jobs:
               Boolean(summaryText) ||
               auto.filterCodexReviewCommentsForHead(codexReviews, pr.head.sha)
                 .length > 0;
+            const lastAutomationRequestAt = auto.getLatestCommentTime(
+              issueComments,
+              (c) =>
+                /<!--\s*cursor-codex-round:\d+\s*-->/.test(String(c.body || '')) ||
+                /<!--\s*cursor-external-codex:/.test(String(c.body || '')),
+            );
+            const latestInlineAt = auto.getLatestCommentTime(
+              auto.filterCodexReviewCommentsForHead(codexReviews, pr.head.sha),
+              () => true,
+            );
+            const lastCodexSummaryAt = Math.max(
+              auto.getLatestCommentTime(summaryCandidates, () => true),
+              latestInlineAt,
+            );
             const decision = auto.decideCodexLoopAction({
               eligible,
               outcome,
@@ -683,6 +944,10 @@ jobs:
               maxRounds: Number(process.env.MAX_ROUNDS || '40'),
               hasAutomationRequest: auto.hasAutomationCodexRequest(issueComments),
               hasCodexActivity,
+              headSha: pr.head.sha,
+              summaryText,
+              lastAutomationRequestAt,
+              lastCodexSummaryAt,
             });
             core.setOutput('round', String(round));
             core.setOutput('clean', outcome.clean ? 'true' : 'false');
@@ -726,11 +991,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh pr ready "$PULL_NUMBER" --repo "$GITHUB_REPOSITORY" || true
+          # Tolerate already-ready; fail on other errors.
+          ready_out="$(gh pr ready "$PULL_NUMBER" --repo "$GITHUB_REPOSITORY" 2>&1)" || {
+            if ! echo "$ready_out" | grep -qiE 'already ready|not a draft|is not a draft'; then
+              echo "$ready_out" >&2
+              exit 1
+            fi
+            echo "PR already ready (ok)."
+          }
           gh pr edit "$PULL_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --add-label "automation:codex-clean" \
-            --add-label "automation:bot-pr" \
+            --add-label "automation:bot-pr" || true
+          gh pr edit "$PULL_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --remove-label "automation:codex-loop" || true
+          # Confirm draft=false before claiming success.
+          draft="$(gh pr view "$PULL_NUMBER" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)"
+          if [[ "$draft" == "true" ]]; then
+            echo "Failed to convert PR out of draft." >&2
+            exit 1
+          fi
           gh pr comment "$PULL_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<'EOF'
           <!-- cursor-automation -->
           > *This was generated by Cursor automation.*
@@ -768,6 +1047,7 @@ jobs:
         with:
           ref: ${{ steps.codex.outputs.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Restore findings file
         if: steps.codex.outputs.action == 'fix'
@@ -780,16 +1060,30 @@ jobs:
               ...context.repo,
               pull_number,
             });
-            const { data: issueComments } = await github.rest.issues.listComments({
-              ...context.repo,
-              issue_number: pull_number,
-              per_page: 100,
-            });
-            const { data: reviewComments } = await github.rest.pulls.listReviewComments({
-              ...context.repo,
-              pull_number,
-              per_page: 100,
-            });
+            const issueComments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                ...context.repo,
+                issue_number: pull_number,
+                per_page: 100,
+              },
+            );
+            const reviewComments = await github.paginate(
+              github.rest.pulls.listReviewComments,
+              {
+                ...context.repo,
+                pull_number,
+                per_page: 100,
+              },
+            );
+            const submittedReviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                ...context.repo,
+                pull_number,
+                per_page: 100,
+              },
+            );
             const codexIssue = issueComments.filter(
               (c) =>
                 auto.isCodexBotLogin(c.user?.login) &&
@@ -798,11 +1092,26 @@ jobs:
             const codexReviews = reviewComments.filter((c) =>
               auto.isCodexBotLogin(c.user?.login),
             );
+            const codexSubmitted = submittedReviews.filter(
+              (r) =>
+                auto.isCodexBotLogin(r.user?.login) &&
+                auto.isCodexTerminalReviewText(r.body),
+            );
+            const summaryCandidates = [
+              ...codexIssue.map((c) => ({
+                body: c.body,
+                created_at: c.created_at,
+              })),
+              ...codexSubmitted.map((r) => ({
+                body: r.body,
+                created_at: r.submitted_at || r.created_at,
+              })),
+            ].sort(
+              (a, b) =>
+                new Date(b.created_at || 0) - new Date(a.created_at || 0),
+            );
             const findings = auto.formatCodexFindingsMarkdown({
-              summaryText:
-                codexIssue.sort(
-                  (a, b) => new Date(b.created_at) - new Date(a.created_at),
-                )[0]?.body || '',
+              summaryText: summaryCandidates[0]?.body || '',
               reviewComments: codexReviews,
               issueComments: codexIssue,
               pullNumber: pull_number,
@@ -846,8 +1155,11 @@ jobs:
         if: steps.codex.outputs.action == 'fix'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
         run: |
           set -euo pipefail
+          git config --local --unset-all http.https://github.com/.extraheader || true
           PROMPT="$(cat .github/cursor/prompts/fix-from-codex.md)"
           # Prefer prompt from default branch if PR tree overwrote it.
           if git cat-file -e "origin/${{ github.event.repository.default_branch }}:.github/cursor/prompts/fix-from-codex.md" 2>/dev/null; then
@@ -863,17 +1175,19 @@ jobs:
           set -euo pipefail
           status="$(git status --porcelain --untracked-files=all -- . ':(exclude).cursor-runtime' ':(exclude).cursor-runtime/**' || true)"
           names="$(git diff --name-only "${{ steps.base.outputs.sha }}" HEAD 2>/dev/null || true)"
+          name_status="$(git diff --name-status -M "${{ steps.base.outputs.sha }}" HEAD 2>/dev/null || true)"
           node -e '
             const auto = require(process.env.RUNNER_TEMP + "/cursor-automation.cjs");
             const hits = auto.hasProtectedChangesInSources({
               gitStatusPorcelain: process.argv[1],
               changedFiles: process.argv[2].split("\n").filter(Boolean),
+              nameStatusText: process.argv[3],
             });
             if (hits.length) {
               console.error("Protected paths modified:", hits.join(", "));
               process.exit(1);
             }
-          ' "$status" "$names"
+          ' "$status" "$names" "$name_status"
 
       - name: Verify fix
         if: steps.codex.outputs.action == 'fix'
@@ -883,62 +1197,133 @@ jobs:
           npm test || exit 1
           npm run build || exit 1
 
-      - name: Commit push and re-request Codex
+      - name: Prepare fix patch for isolated publish
         if: steps.codex.outputs.action == 'fix'
-        uses: actions/github-script@v7
+        id: fixpatch
         env:
-          HEAD_REF: ${{ steps.codex.outputs.head_ref }}
-          PREV_ROUND: ${{ steps.codex.outputs.round }}
           BASE_SHA: ${{ steps.base.outputs.sha }}
+          PULL_NUMBER: ${{ needs.route.outputs.pull_number }}
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain --untracked-files=all -- . ':(exclude).cursor-runtime' ':(exclude).cursor-runtime/**' || true)"
+          if [[ -n "$status" ]]; then
+            git add -A
+            git reset -- .cursor-runtime >/dev/null 2>&1 || true
+            git -c user.name="netcatty-cursor-bot" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "fix: address Codex review on PR #${PULL_NUMBER}" || true
+          fi
+          name_status="$(git diff --name-status -M "${BASE_SHA}" HEAD 2>/dev/null || true)"
+          node -e '
+            const auto = require(process.env.RUNNER_TEMP + "/cursor-automation.cjs");
+            const hits = auto.hasProtectedChangesInSources({ nameStatusText: process.argv[1] });
+            if (hits.length) {
+              console.error("Protected paths modified:", hits.join(", "));
+              process.exit(1);
+            }
+          ' "$name_status"
+          if [[ "$(git rev-list --count "${BASE_SHA}..HEAD")" == "0" ]]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p .cursor-runtime
+          git format-patch --stdout "${BASE_SHA}" > .cursor-runtime/fix.patch
+          test -s .cursor-runtime/fix.patch
+          echo "empty=false" >> "$GITHUB_OUTPUT"
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload fix patch
+        if: steps.codex.outputs.action == 'fix' && steps.fixpatch.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-fix-patch-${{ github.run_id }}
+          path: .cursor-runtime/fix.patch
+          if-no-files-found: error
+
+      - name: Mark needs human when no fix produced
+        if: steps.codex.outputs.action == 'fix' && steps.fixpatch.outputs.empty == 'true'
+        uses: actions/github-script@v7
         with:
           script: |
-            const { execSync } = require('node:child_process');
             const auto = require(`${process.env.RUNNER_TEMP}/cursor-automation.cjs`);
-            const status = execSync(
-              "git status --porcelain --untracked-files=all -- . ':(exclude).cursor-runtime' ':(exclude).cursor-runtime/**'",
-              { encoding: 'utf8' },
-            ).trim();
-            const base = process.env.BASE_SHA || 'HEAD';
-            let committedNames = '';
-            try {
-              committedNames = execSync(`git diff --name-only ${base} HEAD`, {
-                encoding: 'utf8',
-              });
-            } catch {}
-            const hits = auto.hasProtectedChangesInSources({
-              gitStatusPorcelain: status,
-              changedFiles: committedNames.split('\n').filter(Boolean),
-            });
             const pull_number = Number(process.env.PULL_NUMBER);
-            if (hits.length) {
-              throw new Error(`Protected paths modified: ${hits.join(', ')}`);
-            }
-            if (!status && !committedNames.trim()) {
-              await github.rest.issues.createComment({
-                ...context.repo,
-                issue_number: pull_number,
-                body: [
-                  auto.TRIAGE_MARKER,
-                  auto.DISCLAIMER,
-                  '',
-                  'Cursor CLI did not produce additional code changes for the latest Codex findings. Marking for human review.',
-                ].join('\n'),
-              });
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: pull_number,
-                labels: ['ready-for-human'],
-              });
-              return;
-            }
-            execSync('git config user.name "netcatty-cursor-bot"');
-            execSync('git config user.email "41898282+github-actions[bot]@users.noreply.github.com"');
-            if (status) {
-              execSync('git add -A');
-              try { execSync('git reset -- .cursor-runtime'); } catch {}
-              execSync(`git commit -m "fix: address Codex review on PR #${pull_number}"`);
-            }
-            execSync(`git push origin HEAD:${process.env.HEAD_REF}`);
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pull_number,
+              body: [
+                auto.TRIAGE_MARKER,
+                auto.DISCLAIMER,
+                '',
+                'Cursor CLI did not produce additional code changes for the latest Codex findings. Marking for human review.',
+              ].join('\n'),
+            });
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: pull_number,
+              labels: ['ready-for-human'],
+            });
+        env:
+          PULL_NUMBER: ${{ needs.route.outputs.pull_number }}
+
+  publish_codex_fix:
+    name: Publish Codex fix
+    needs: [codex_loop]
+    if: needs.codex_loop.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_REF: ${{ needs.codex_loop.outputs.head_ref }}
+      BASE_SHA: ${{ needs.codex_loop.outputs.base_sha }}
+      PULL_NUMBER: ${{ needs.codex_loop.outputs.pull_number }}
+      PREV_ROUND: ${{ needs.codex_loop.outputs.prev_round }}
+    steps:
+      - name: Download fix patch
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-fix-patch-${{ github.run_id }}
+          path: patch-in
+
+      - name: Publish fix from fresh runner
+        run: |
+          set -euo pipefail
+          PUBLISH="$RUNNER_TEMP/publish-fix-tree"
+          rm -rf "$PUBLISH"
+          git clone --no-checkout "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$PUBLISH"
+          cd "$PUBLISH"
+          git -c core.hooksPath=/dev/null fetch --depth=50 origin "$BASE_SHA"
+          git -c core.hooksPath=/dev/null checkout -B "$HEAD_REF" "$BASE_SHA"
+          git -c core.hooksPath=/dev/null am --3way "$GITHUB_WORKSPACE/patch-in/fix.patch"
+          git -c core.hooksPath=/dev/null push origin "HEAD:$HEAD_REF"
+
+      - name: Checkout helper
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          path: helpers
+
+      - name: Load helper
+        run: |
+          set -euo pipefail
+          if [[ -f helpers/scripts/cursor-automation.cjs ]]; then
+            cp helpers/scripts/cursor-automation.cjs "$RUNNER_TEMP/cursor-automation.cjs"
+          else
+            git -C helpers fetch --depth=1 origin "${{ github.sha }}"
+            git -C helpers show "FETCH_HEAD:scripts/cursor-automation.cjs" > "$RUNNER_TEMP/cursor-automation.cjs"
+          fi
+          test -s "$RUNNER_TEMP/cursor-automation.cjs"
+
+      - name: Re-request Codex after fix push
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/cursor-automation.cjs`);
+            const pull_number = Number(process.env.PULL_NUMBER);
             const nextRound = (Number(process.env.PREV_ROUND) || 0) + 1;
             await github.rest.issues.createComment({
               ...context.repo,
@@ -946,10 +1331,10 @@ jobs:
               body: auto.buildCodexReviewRequestComment(nextRound),
             });
 
-  external_rerequest_codex:
-    name: External PR re-request Codex
+  own_rerequest_codex:
+    name: Own PR re-request Codex
     needs: route
-    if: needs.route.outputs.kind == 'external_rerequest_codex'
+    if: needs.route.outputs.kind == 'own_rerequest_codex'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -960,15 +1345,113 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       - name: Ensure automation helper present
         env:
           BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [[ -f scripts/cursor-automation.cjs ]]; then
             echo "Helper present on default branch."
             exit 0
+          fi
+          if [[ "$EVENT_NAME" == "pull_request_target" ]] || { [[ -n "$HEAD_REPO" ]] && [[ "$HEAD_REPO" != "$BASE_REPO" ]]; }; then
+            echo "Helper missing on default branch; refusing untrusted bootstrap for ${EVENT_NAME}." >&2
+            exit 1
+          fi
+          echo "Helper missing on default branch; bootstrapping from ${BOOTSTRAP_SHA}"
+          git fetch --depth=1 origin "${BOOTSTRAP_SHA}"
+          mkdir -p scripts
+          git show "FETCH_HEAD:scripts/cursor-automation.cjs" > scripts/cursor-automation.cjs
+          test -s scripts/cursor-automation.cjs
+
+      - name: Comment @codex review after human push
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.GITHUB_WORKSPACE}/scripts/cursor-automation.cjs`);
+            const pull_number = Number(process.env.PULL_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number,
+            });
+            if (
+              !auto.isFixEligiblePr(pr, {
+                ownActors: process.env.OWN_ACTORS,
+                repository: `${context.repo.owner}/${context.repo.repo}`,
+              })
+            ) {
+              core.info('Not fix-eligible; skip own re-request.');
+              return;
+            }
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                ...context.repo,
+                issue_number: pull_number,
+                per_page: 100,
+              },
+            );
+            if (
+              auto.shouldSkipExternalCodexRerequest({
+                existingComments: comments,
+                headSha: pr.head.sha,
+              })
+            ) {
+              core.info(`Already re-requested Codex for ${pr.head.sha}`);
+              return;
+            }
+            const round = auto.getCodexRoundFromComments(comments);
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pull_number,
+              body: [
+                auto.buildCodexReviewRequestComment(round + 1),
+                auto.buildExternalCodexRerequestComment(pr.head.sha),
+              ].join('\n'),
+            });
+
+  external_rerequest_codex:
+    name: External PR re-request Codex
+    needs: route
+    if: needs.route.outputs.kind == 'external_rerequest_codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Write comments only; never checkout untrusted PR code.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      PULL_NUMBER: ${{ needs.route.outputs.pull_number }}
+      OWN_ACTORS: ${{ vars.AUTOMATION_OWN_ACTORS || 'binaricat' }}
+    steps:
+      - name: Checkout helpers
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Ensure automation helper present
+        env:
+          BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/cursor-automation.cjs ]]; then
+            echo "Helper present on default branch."
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" == "pull_request_target" ]] || { [[ -n "$HEAD_REPO" ]] && [[ "$HEAD_REPO" != "$BASE_REPO" ]]; }; then
+            echo "Helper missing on default branch; refusing untrusted bootstrap for ${EVENT_NAME}." >&2
+            exit 1
           fi
           echo "Helper missing on default branch; bootstrapping from ${BOOTSTRAP_SHA}"
           git fetch --depth=1 origin "${BOOTSTRAP_SHA}"
@@ -979,6 +1462,8 @@ jobs:
       - name: Comment @codex review after contributor push
         uses: actions/github-script@v7
         with:
+          # pull_request_target provides write GITHUB_TOKEN for forks; optional PAT override.
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const auto = require(`${process.env.GITHUB_WORKSPACE}/scripts/cursor-automation.cjs`);
             // External job checks out default branch only; tree is trusted.
@@ -997,11 +1482,14 @@ jobs:
               core.info('PR is fix-eligible; skipping external re-request path.');
               return;
             }
-            const { data: comments } = await github.rest.issues.listComments({
-              ...context.repo,
-              issue_number: pull_number,
-              per_page: 100,
-            });
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                ...context.repo,
+                issue_number: pull_number,
+                per_page: 100,
+              },
+            );
             if (
               auto.shouldSkipExternalCodexRerequest({
                 existingComments: comments,

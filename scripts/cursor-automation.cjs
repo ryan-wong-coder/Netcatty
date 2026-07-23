@@ -181,20 +181,28 @@ function normalizeClassification(raw) {
 
   if (confidence < 0.8 && category === 'bug_ready') {
     category = 'bug_needs_info';
-    reply =
-      'Thanks for the report. We still need a bit more evidence before changing the code. Please share the missing details below so we can reproduce it.';
+    // Keep the model's localized reply when present; only fall back to English.
+    if (!String(raw.reply || '').trim()) {
+      reply =
+        'Thanks for the report. We still need a bit more evidence before changing the code. Please share the missing details below so we can reproduce it.';
+    }
   }
   if (confidence < 0.8 && category === 'feature_quick_win') {
     category = 'feature_defer';
-    reply =
-      'Thanks for the suggestion. The scope or tradeoffs are not clear enough for an automatic change yet, so a maintainer will take a look first.';
+    if (!String(raw.reply || '').trim()) {
+      reply =
+        'Thanks for the suggestion. The scope or tradeoffs are not clear enough for an automatic change yet, so a maintainer will take a look first.';
+    }
   }
   // Never auto-close low-confidence "unclear" issues.
   if (confidence < 0.8 && category === 'unclear') {
     category = 'bug_needs_info';
+    // Always replace "will be closed" style unclear replies with needs-info tone.
     reply =
-      reply ||
-      'Thanks for writing in. We need a bit more detail before we can act on this. Please add the missing context below.';
+      String(raw.reply || '').trim() &&
+      !/clos(e|ing)|关闭|关掉|将关闭/i.test(String(raw.reply || ''))
+        ? sanitizeUntrustedText(raw.reply, 3_000)
+        : 'Thanks for writing in. We need a bit more detail before we can act on this. Please add the missing context below.';
   }
 
   const label_corrections = Array.isArray(raw.label_corrections)
@@ -395,6 +403,32 @@ function isCodexTerminalReviewText(body) {
   );
 }
 
+/** Parse "Reviewed commit: `abc1234`" style markers from Codex summaries. */
+function extractReviewedCommitSha(summaryText) {
+  const text = String(summaryText || '');
+  const match =
+    text.match(/Reviewed commit:\**\s*`([0-9a-f]{7,40})`/i) ||
+    text.match(/Reviewed commit:[^\n0-9a-f]*([0-9a-f]{7,40})/i);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function commitShasMatch(headSha, reviewedSha) {
+  const head = String(headSha || '').toLowerCase();
+  const reviewed = String(reviewedSha || '').toLowerCase();
+  if (!head || !reviewed) return false;
+  return head.startsWith(reviewed) || reviewed.startsWith(head.slice(0, 7));
+}
+
+function getLatestCommentTime(comments = [], predicate) {
+  let latest = 0;
+  for (const comment of comments) {
+    if (!predicate(comment)) continue;
+    const ts = Date.parse(comment.created_at || '') || 0;
+    if (ts > latest) latest = ts;
+  }
+  return latest;
+}
+
 /**
  * Keep review comments that belong to the current head (or lack commit_id).
  * Drops clearly stale comments pinned to older commits when headSha is known.
@@ -492,9 +526,24 @@ function decideCodexLoopAction({
   maxRounds = 40,
   hasAutomationRequest = false,
   hasCodexActivity = false,
+  headSha = '',
+  summaryText = '',
+  lastAutomationRequestAt = 0,
+  lastCodexSummaryAt = 0,
 } = {}) {
   if (!eligible) {
     return { action: 'skip', reason: 'not_fix_eligible' };
+  }
+  // New @codex request after the last summary → still waiting for that review.
+  // Exception: actionable inline-only findings already present for this head.
+  const hasActionableFindings =
+    Boolean(outcome) && outcome.clean === false && outcome.actionable === true;
+  if (
+    lastAutomationRequestAt > 0 &&
+    lastAutomationRequestAt > (lastCodexSummaryAt || 0) &&
+    !hasActionableFindings
+  ) {
+    return { action: 'skip', reason: 'awaiting_codex_for_new_head' };
   }
   if (!hasCodexActivity) {
     if (hasAutomationRequest) {
@@ -503,6 +552,17 @@ function decideCodexLoopAction({
     return { action: 'request_review', reason: 'no_codex_yet' };
   }
   if (outcome?.clean) {
+    const reviewed = extractReviewedCommitSha(summaryText);
+    if (reviewed && headSha && !commitShasMatch(headSha, reviewed)) {
+      return { action: 'skip', reason: 'stale_clean_summary' };
+    }
+    // Fresh request still pending and no commit pin → don't mark ready early.
+    if (
+      lastAutomationRequestAt > 0 &&
+      lastAutomationRequestAt > (lastCodexSummaryAt || 0)
+    ) {
+      return { action: 'skip', reason: 'awaiting_codex_for_new_head' };
+    }
     return { action: 'mark_ready', reason: outcome.reason || 'codex_clean' };
   }
   if (outcome && outcome.actionable === false) {
@@ -543,6 +603,27 @@ function pathsFromGitStatusPorcelain(gitStatusPorcelain) {
     }
   }
   return paths;
+}
+
+/**
+ * Parse `git diff --name-status -M` output so renames include both sides.
+ * Examples: "M\tfile", "A\tfile", "D\tfile", "R100\told\tnew"
+ */
+function pathsFromGitDiffNameStatus(nameStatusText) {
+  const paths = [];
+  for (const line of String(nameStatusText || '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\t/);
+    if (parts.length >= 3 && /^R\d*/.test(parts[0])) {
+      paths.push(parts[1], parts[2]);
+    } else if (parts.length >= 2) {
+      paths.push(parts[1]);
+    } else {
+      paths.push(trimmed.replace(/^[A-Z]\d*\s+/, ''));
+    }
+  }
+  return paths.filter(Boolean);
 }
 
 function formatCodexFindingsMarkdown({
@@ -614,10 +695,16 @@ function hasProtectedChanges(gitStatusPorcelain) {
 function hasProtectedChangesInSources({
   gitStatusPorcelain = '',
   changedFiles = [],
+  nameStatusText = '',
 } = {}) {
   const fromStatus = pathsFromGitStatusPorcelain(gitStatusPorcelain);
   const fromCommits = (changedFiles || []).map(String);
-  return listProtectedPathHits([...fromStatus, ...fromCommits]);
+  const fromNameStatus = pathsFromGitDiffNameStatus(nameStatusText);
+  return listProtectedPathHits([
+    ...fromStatus,
+    ...fromCommits,
+    ...fromNameStatus,
+  ]);
 }
 
 function getCodexRoundFromComments(comments = []) {
@@ -691,8 +778,19 @@ async function prepareIssueContext({
     return { shouldRun: false, issue };
   }
 
+  // Daily limit only gates first admission. Follow-ups on already-admitted or
+  // needs-info issues must still re-classify when the author replies.
+  const alreadyAdmitted =
+    labelNames.includes('triage:admitted') ||
+    labelNames.includes('needs-info') ||
+    labelNames.includes('triage:bug-needs-info') ||
+    labelNames.includes('triage') ||
+    labelNames.includes('ready-for-agent') ||
+    labelNames.includes('ready-for-human');
+
   if (
     !manual &&
+    !alreadyAdmitted &&
     !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(issue.author_association)
   ) {
     const startOfDay = new Date();
@@ -748,11 +846,11 @@ async function prepareIssueContext({
     });
   }
 
-  const { data: comments } = await github.rest.issues.listComments({
+  const comments = await github.paginate(github.rest.issues.listComments, {
     owner,
     repo,
     issue_number: issue.number,
-    per_page: 50,
+    per_page: 100,
   });
 
   const input = {
@@ -900,9 +998,30 @@ function isBotPrForIssue(pull, issueNumber) {
 }
 
 async function findOpenBotPrForIssue({ github, context, issueNumber }) {
+  const n = String(issueNumber);
+  // Targeted search is far more reliable than scanning the latest 100 PRs.
+  try {
+    const q = `repo:${context.repo.owner}/${context.repo.repo} is:pr ("Fixes #${n}" OR "fixes #${n}" OR head:cursor/issue-${n}-)`;
+    const items = await github.paginate(
+      github.rest.search.issuesAndPullRequests,
+      { q, per_page: 20 },
+      (response) => response.data.items,
+    );
+    for (const item of items) {
+      if (!item.pull_request || !item.number) continue;
+      const { data: pull } = await github.rest.pulls.get({
+        ...context.repo,
+        pull_number: item.number,
+      });
+      if (isBotPrForIssue(pull, issueNumber)) return pull;
+    }
+  } catch {
+    // fall through to list scan
+  }
+
   const states = ['open', 'closed'];
   for (const state of states) {
-    const { data: pulls } = await github.rest.pulls.list({
+    const pulls = await github.paginate(github.rest.pulls.list, {
       ...context.repo,
       state,
       per_page: 100,
@@ -945,6 +1064,9 @@ module.exports = {
   parseClassificationText,
   parseClassificationFile,
   isCodexTerminalReviewText,
+  extractReviewedCommitSha,
+  commitShasMatch,
+  getLatestCommentTime,
   filterCodexReviewCommentsForHead,
   parseCodexReviewOutcome,
   hasAutomationCodexRequest,
@@ -953,6 +1075,7 @@ module.exports = {
   formatCodexFindingsMarkdown,
   listProtectedPathHits,
   pathsFromGitStatusPorcelain,
+  pathsFromGitDiffNameStatus,
   hasProtectedChanges,
   hasProtectedChangesInSources,
   getCodexRoundFromComments,

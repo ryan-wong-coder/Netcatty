@@ -179,6 +179,53 @@ test('decideCodexLoopAction skips when awaiting existing @codex request', () => 
   assert.equal(d.reason, 'awaiting_codex');
 });
 
+test('decideCodexLoopAction ignores stale clean summary for other head', () => {
+  const d = auto.decideCodexLoopAction({
+    eligible: true,
+    hasCodexActivity: true,
+    headSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    summaryText:
+      "Codex Review: Didn't find any major issues. Swish!\n**Reviewed commit:** `bbbbbbb`",
+    outcome: { clean: true, actionable: false, reason: 'codex_clean_summary' },
+  });
+  assert.equal(d.action, 'skip');
+  assert.equal(d.reason, 'stale_clean_summary');
+});
+
+test('decideCodexLoopAction awaits when request is newer than summary', () => {
+  const d = auto.decideCodexLoopAction({
+    eligible: true,
+    hasCodexActivity: true,
+    lastAutomationRequestAt: 2000,
+    lastCodexSummaryAt: 1000,
+    outcome: { clean: true, actionable: false, reason: 'codex_clean_summary' },
+    summaryText: "Didn't find any major issues. Swish!",
+  });
+  assert.equal(d.action, 'skip');
+  assert.equal(d.reason, 'awaiting_codex_for_new_head');
+});
+
+test('decideCodexLoopAction still fixes inline-only findings after request', () => {
+  const d = auto.decideCodexLoopAction({
+    eligible: true,
+    hasCodexActivity: true,
+    lastAutomationRequestAt: 2000,
+    lastCodexSummaryAt: 0,
+    round: 1,
+    maxRounds: 40,
+    outcome: { clean: false, actionable: true, reason: 'codex_inline_findings' },
+  });
+  assert.equal(d.action, 'fix');
+});
+test('extractReviewedCommitSha parses Codex marker', () => {
+  assert.equal(
+    auto.extractReviewedCommitSha(
+      'Codex Review\n**Reviewed commit:** `fd871e86f1`\n',
+    ),
+    'fd871e86f1',
+  );
+});
+
 test('decideCodexLoopAction requests review when no activity', () => {
   const d = auto.decideCodexLoopAction({
     eligible: true,
@@ -236,8 +283,32 @@ test('normalizeClassification does not auto-close low-confidence unclear', () =>
   });
   assert.equal(result.category, 'bug_needs_info');
   assert.equal(result.should_implement, false);
+  assert.match(result.reply, /Please clarify|more detail/i);
 });
 
+test('normalizeClassification replaces closing-language unclear replies', () => {
+  const result = auto.normalizeClassification({
+    category: 'unclear',
+    confidence: 0.2,
+    summary: 'vague',
+    reasoning: 'no detail',
+    reply: 'This issue will be closed as unclear.',
+  });
+  assert.equal(result.category, 'bug_needs_info');
+  assert.doesNotMatch(result.reply, /will be closed/i);
+});
+
+test('normalizeClassification keeps localized low-confidence bug reply', () => {
+  const result = auto.normalizeClassification({
+    category: 'bug_ready',
+    confidence: 0.5,
+    summary: 'maybe',
+    reasoning: 'unclear',
+    reply: '请补充复现步骤和日志。',
+  });
+  assert.equal(result.category, 'bug_needs_info');
+  assert.equal(result.reply, '请补充复现步骤和日志。');
+});
 test('isBotPrForIssue matches marker + Fixes', () => {
   assert.equal(
     auto.isBotPrForIssue(
@@ -269,6 +340,18 @@ test('pathsFromGitStatusPorcelain keeps both rename sides', () => {
   assert.ok(paths.includes('scripts/evil.cjs'));
 });
 
+test('pathsFromGitDiffNameStatus keeps rename source and dest', () => {
+  const paths = auto.pathsFromGitDiffNameStatus(
+    'R100\t.github/workflows/x.yml\tunprotected.yml\nM\tsrc/a.ts\n',
+  );
+  assert.ok(paths.includes('.github/workflows/x.yml'));
+  assert.ok(paths.includes('unprotected.yml'));
+  assert.ok(paths.includes('src/a.ts'));
+  const hits = auto.hasProtectedChangesInSources({
+    nameStatusText: 'R100\t.github/workflows/x.yml\tunprotected.yml\n',
+  });
+  assert.deepEqual(hits, ['.github/workflows/x.yml']);
+});
 test('extractJsonObject reads fenced blocks', () => {
   const obj = auto.extractJsonObject(
     'Here you go:\n```json\n{"category":"unclear","confidence":0.9,"summary":"x","reasoning":"y","reply":"please clarify the steps"}\n```\n',

@@ -15,9 +15,15 @@ re-comments `@codex review` after the author pushes more commits
 |---|---|
 | `CURSOR_API_KEY` | Cursor CLI authentication (issue classify/implement + own PR fix loop) |
 
-Optional: `TRIAGE_GITHUB_TOKEN` (PAT with contents + PR + issues) if
-`github-actions[bot]` comments are ignored by Codex; `SLACK_WEBHOOK_URL` for
-status pings.
+Optional:
+
+- `TRIAGE_GITHUB_TOKEN` — optional PAT for PR comments / fork re-`@codex`.
+- `SLACK_WEBHOOK_URL` — status pings.
+
+Fork re-`@codex` uses `pull_request_target` (default-branch checkout only) so
+`GITHUB_TOKEN` can write comments. Write tokens are step-scoped only (never
+workflow-wide). Agent steps run without git credentials; publish uses a fresh
+clone.
 
 ## Variables
 
