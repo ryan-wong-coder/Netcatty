@@ -219,6 +219,53 @@ test("counts apply-to-all upload conflicts by incoming and existing type", async
   ]);
 });
 
+test("folder drag-drop creates a bundle task with a resolved local source path", async () => {
+  const created: Array<{ fileName: string; sourcePath?: string; isDirectory?: boolean }> = [];
+  const fileA = { size: 10, path: "/Users/me/Desktop/docs/a.txt" } as File & { path?: string };
+  const fileB = { size: 20, path: "/Users/me/Desktop/docs/b.txt" } as File & { path?: string };
+
+  const results = await uploadEntriesDirect(
+    [
+      {
+        file: fileA,
+        relativePath: "docs/a.txt",
+        isDirectory: false,
+      },
+      {
+        file: fileB,
+        relativePath: "docs/b.txt",
+        isDirectory: false,
+      },
+    ],
+    {
+      targetPath: "/remote",
+      sftpId: "sftp-1",
+      isLocal: false,
+      bridge: {
+        mkdirSftp: async () => {},
+        startStreamTransfer: async (payload) => ({ transferId: payload.transferId }),
+        writeSftpBinaryWithProgress: async () => ({ success: true, transferId: "x" }),
+      },
+      joinPath: (base, name) => `${base}/${name}`,
+      callbacks: {
+        onTaskCreated: (task) => {
+          created.push({
+            fileName: task.fileName,
+            sourcePath: task.sourcePath,
+            isDirectory: task.isDirectory,
+          });
+        },
+      },
+    },
+  );
+
+  assert.equal(results.every((result) => result.success), true);
+  assert.ok(
+    created.some((task) => task.fileName === "docs" && task.isDirectory === true && task.sourcePath === "/Users/me/Desktop/docs"),
+    `expected folder bundle task with local source path, got ${JSON.stringify(created)}`,
+  );
+});
+
 test("uploads path-backed clipboard files through stream transfer", async () => {
   const transfers: Array<{ sourcePath: string; targetPath: string; totalBytes?: number }> = [];
   const taskTotals: number[] = [];

@@ -129,6 +129,7 @@ export async function uploadFoldersCompressed(
           speed: 0,
           fileCount: entries.length,
           completedCount: 0,
+          sourcePath: folderPath,
         });
       }
       

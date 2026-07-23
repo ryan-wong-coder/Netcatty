@@ -355,6 +355,7 @@ function createBridgeRegistrar(context) {
       terminalOutputChannel,
       terminalWorkerManager,
       reportOpenedSessionActivity,
+      transferBridge,
     };
   
     sshBridge.init(deps);
@@ -1019,9 +1020,19 @@ function createBridgeRegistrar(context) {
 
       try {
         const result = terminalWorkerManager
-          ? await terminalWorkerManager.request("netcatty:transfer:start", payload, {
+          ? await (transferBridge.runAdmittedTransfer ? transferBridge.runAdmittedTransfer(
+              event,
+              payload,
+              undefined,
+              () => terminalWorkerManager.request("netcatty:transfer:start", {
+                ...payload,
+                skipAdmission: true,
+              }, {
+                webContentsId: event?.sender?.id,
+              }),
+            ) : terminalWorkerManager.request("netcatty:transfer:start", payload, {
               webContentsId: event?.sender?.id,
-            })
+            }))
           : await transferBridge.startTransfer(event, payload);
         if (result?.error) throw new Error(result.error);
         console.log(`[Main]   File downloaded successfully`);
@@ -1060,9 +1071,19 @@ function createBridgeRegistrar(context) {
         };
   
         const result = terminalWorkerManager
-          ? await terminalWorkerManager.request("netcatty:transfer:start", payload, {
+          ? await (transferBridge.runAdmittedTransfer ? transferBridge.runAdmittedTransfer(
+              event,
+              payload,
+              undefined,
+              () => terminalWorkerManager.request("netcatty:transfer:start", {
+                ...payload,
+                skipAdmission: true,
+              }, {
+                webContentsId: event?.sender?.id,
+              }),
+            ) : terminalWorkerManager.request("netcatty:transfer:start", payload, {
               webContentsId: event?.sender?.id,
-            })
+            }))
           : await transferBridge.startTransfer(event, payload);
   
         if (result.error) {

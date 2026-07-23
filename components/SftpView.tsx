@@ -117,12 +117,16 @@ const SftpViewInner: React.FC<SftpViewProps> = ({
 
   const sftpOptions = useMemo(() => ({
     ...fileWatchHandlers,
+    transferOwnerId: "main-sftp-view",
+    // Leaving the main SFTP page parks browse channels; transfers continue
+    // on dedicated pool sessions (and any leased browse sockets).
+    interactive: isActive,
     useCompressedUpload: sftpUseCompressedUpload,
     defaultShowHiddenFiles: sftpShowHiddenFiles,
     terminalSettings,
     knownHosts,
     onAddKnownHost,
-  }), [fileWatchHandlers, sftpUseCompressedUpload, sftpShowHiddenFiles, terminalSettings, knownHosts, onAddKnownHost]);
+  }), [fileWatchHandlers, isActive, sftpUseCompressedUpload, sftpShowHiddenFiles, terminalSettings, knownHosts, onAddKnownHost]);
 
   // Pre-resolve group defaults so SFTP connections inherit group config
   const effectiveHosts = useMemo(() => {

@@ -5,11 +5,26 @@ import type { DropEntry } from "../../../lib/sftpFileUtils";
 import type { SftpPane } from "./types";
 
 export interface UseSftpExternalOperationsParams {
+  ownerId: string;
   getActivePane: (side: "left" | "right") => SftpPane | null;
   getPaneByConnectionId: (connectionId: string) => SftpPane | null;
   refresh: (side: "left" | "right", options?: { tabId?: string }) => Promise<void>;
   sftpSessionsRef: React.MutableRefObject<Map<string, string>>;
   connectionCacheKeyMapRef: React.MutableRefObject<Map<string, string>>;
+  /**
+   * Ensure a live remote SFTP session for the pane (reconnect when missing/dead).
+   * Required for uploads/downloads that must not fail with "SFTP session not found".
+   */
+  ensureRemoteSftpId?: (side: "left" | "right", options?: { forceReconnect?: boolean }) => Promise<string>;
+  /**
+   * FileZilla-style dedicated transfer sessions for bulk uploads.
+   * When set, remote stream uploads prefer pool connections (1–2/host)
+   * over the browse session so interactive listing stays responsive.
+   */
+  acquireTransferSession?: (
+    hostId: string,
+    transferId: string,
+  ) => Promise<{ sftpId: string; release: () => void; discard: () => void }>;
   clearDirCacheEntry?: (connectionId: string, path: string) => void;
   useCompressedUpload?: boolean;
   addExternalUpload?: (task: TransferTask) => void;

@@ -2,13 +2,23 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
 import { terminalLayoutSuppressStore } from '../../application/state/terminalLayoutSuppressStore';
+import { useSftpBackend } from '../../application/state/useSftpBackend';
+import {
+  isTransferNavigationTerminalTabId,
+  pickHostForTransferNavigation,
+  resolveSftpTransferNavigationHostLabel,
+  resolveSftpTransferNavigationPath,
+  resolveSftpTransferNavigationTarget,
+} from '../../domain/sftpTransferNavigation';
 import { AI_PANEL_FORCE_HIDE_SHELL } from '../ai/aiPanelDiagnostics';
+import { toast } from '../ui/toast';
 import { getTerminalSidePanelShellWidth } from './TerminalLayerSidePanelSection';
 
 type TerminalLayerEffectsContext = Record<string, any>;
 
 export function useTerminalLayerEffects(ctx: TerminalLayerEffectsContext) {
-  const { activeSidePanelTab, activeTabId, activeTabIdRef, activeWorkspace, activityTrackedSessions, cancelAnimationFrame, ChunkedEscapeFilter, clearTimeout, clearTopTabsPreviewVars, document, dropHint, filterTabsMap, focusedSessionId, getSessionActivityIdsToClear, handleToggleAiFromTopBar, handleToggleScriptsSidePanel, handleToggleSidePanel, hasNotifiableTerminalOutput, isComposeBarOpen, isFocusMode, isTerminalLayerVisible, lastSidePanelTabRef, Map, onSessionData, onSplitSessionRef, onToggleBroadcastRef, onToggleWorkspaceViewModeRef, prevFocusedSessionIdRef, refocusActiveTerminalSession, requestAnimationFrame, ResizeObserver, sessionActivityStore, sessions, Set, setAiMountedTabIds, setDropHint, setNotesMountedTabIds, setScriptsMountedTabIds, setSystemMountedTabIds, setSftpHostForTab, setSftpInitialLocationForTab, setSftpPendingUploadsForTab, setSidePanelOpenTabs, setThemeMountedTabIds, setTimeout, setWorkspaceArea, shouldMeasureTerminalLayerLayout, sidePanelPosition, sidePanelWidth, sftpActiveHost, sftpHostForTab, shouldMarkSessionActivity, sidePanelOpenTabs, splitHorizontalHandlersRef, splitVerticalHandlersRef, terminalRendererCwdBySessionRef, toggleScriptsSidePanelRef, toggleSidePanelRef, validAIScopeTargetIds, validSessionActivityIds, window, workspaceBroadcastHandlersRef, workspaceFocusHandlersRef, workspaceInnerRef, workspaces } = ctx;
+  const { openPath } = useSftpBackend();
+  const { activeSidePanelTab, activeTabId, activeTabIdRef, activeWorkspace, activityTrackedSessions, cancelAnimationFrame, ChunkedEscapeFilter, clearTimeout, clearTopTabsPreviewVars, document, dropHint, effectiveHosts, filterTabsMap, focusedSessionId, getSessionActivityIdsToClear, handleToggleAiFromTopBar, handleToggleScriptsSidePanel, handleToggleSidePanel, hasNotifiableTerminalOutput, isComposeBarOpen, isFocusMode, isTerminalLayerVisible, lastSidePanelTabRef, Map, onConnectToHost, onSessionData, onSplitSessionRef, onToggleBroadcastRef, onToggleWorkspaceViewModeRef, prevFocusedSessionIdRef, refocusActiveTerminalSession, requestAnimationFrame, ResizeObserver, sessionActivityStore, sessions, Set, setAiMountedTabIds, setDropHint, setNotesMountedTabIds, setScriptsMountedTabIds, setSystemMountedTabIds, setSftpHostForTab, setSftpInitialLocationForTab, setSftpPendingUploadsForTab, setSidePanelOpenTabs, setThemeMountedTabIds, setTimeout, setWorkspaceArea, shouldMeasureTerminalLayerLayout, sidePanelPosition, sidePanelWidth, sftpActiveHost, sftpHostForTab, shouldMarkSessionActivity, sidePanelOpenTabs, splitHorizontalHandlersRef, splitVerticalHandlersRef, terminalRendererCwdBySessionRef, toggleScriptsSidePanelRef, toggleSidePanelRef, validAIScopeTargetIds, validSessionActivityIds, window, workspaceBroadcastHandlersRef, workspaceFocusHandlersRef, workspaceInnerRef, workspaces } = ctx;
 
   const activeWorkspaceId = activeWorkspace?.id;
   const activeWorkspaceViewMode = activeWorkspace?.viewMode;
@@ -257,6 +267,138 @@ export function useTerminalLayerEffects(ctx: TerminalLayerEffectsContext) {
       window.addEventListener('netcatty:toggle-ai-panel', handler);
       return () => window.removeEventListener('netcatty:toggle-ai-panel', handler);
     }, [handleToggleAiFromTopBar]);
+
+  useEffect(() => {
+    const applySftpTargetOnTab = (tabId: string, host: any, targetDirectory: string) => {
+      // Bump initialLocation even when the host is already selected so the
+      // path-navigation effect re-runs after reopen.
+      setSftpHostForTab((prev: Map<string, any>) => new Map(prev).set(tabId, host));
+      setSftpInitialLocationForTab((prev: Map<string, any>) => {
+        const next = new Map(prev);
+        next.delete(tabId);
+        next.set(tabId, {
+          hostId: host.id,
+          path: targetDirectory,
+        });
+        return next;
+      });
+      setSidePanelOpenTabs((prev: Map<string, any>) => new Map(prev).set(tabId, 'sftp'));
+    };
+
+    /** When the user is on vault/editor (or no tab), open the host then attach SFTP. */
+    const openHostThenSftp = (host: any, targetDirectory: string) => {
+      if (typeof onConnectToHost !== 'function') {
+        toast.error('Could not open target folder', 'SFTP');
+        return;
+      }
+      const previousTabId = activeTabIdRef.current;
+      let sessionOrTabId: string | void;
+      try {
+        sessionOrTabId = onConnectToHost(host);
+      } catch {
+        toast.error('Could not open target folder', 'SFTP');
+        return;
+      }
+
+      const tryApply = (tabId: string | null | undefined) => {
+        if (!isTransferNavigationTerminalTabId(tabId)) return false;
+        applySftpTargetOnTab(tabId!, host, targetDirectory);
+        return true;
+      };
+
+      // connectToHost returns the new session id, which is also the top-tab id
+      // for non-workspace connections.
+      if (typeof sessionOrTabId === 'string' && tryApply(sessionOrTabId)) return;
+
+      const openWhenTabReady = (attempt = 0) => {
+        const tabId = activeTabIdRef.current;
+        if (tabId && tabId !== previousTabId && tryApply(tabId)) return;
+        if (attempt >= 12) {
+          // Last chance: use whatever terminal tab is active now.
+          if (!tryApply(activeTabIdRef.current)) {
+            toast.error('Could not open target folder', 'SFTP');
+          }
+          return;
+        }
+        window.setTimeout(() => openWhenTabReady(attempt + 1), 16);
+      };
+      openWhenTabReady();
+    };
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      const task = detail?.task ?? detail;
+      const forResume = detail?.forResume === true;
+      if (!task) return;
+
+      const navigation = resolveSftpTransferNavigationTarget(task, forResume);
+      if (navigation.kind === 'local-path') {
+        const localDir = resolveSftpTransferNavigationPath(task, false);
+        void openPath(localDir).then((result) => {
+          if (!result?.success) {
+            toast.error(result?.error || 'Could not open target folder', 'SFTP');
+          }
+        }).catch(() => {
+          toast.error('Could not open target folder', 'SFTP');
+        });
+        return;
+      }
+
+      const currentTabId = activeTabIdRef.current;
+      if (navigation.kind === 'local-copy-panel') {
+        if (!isTransferNavigationTerminalTabId(currentTabId)) {
+          // Local-copy has no remote host to connect; need an existing terminal tab.
+          if (forResume) return;
+          toast.error('Open a terminal tab first to browse this transfer', 'SFTP');
+          return;
+        }
+        setSidePanelOpenTabs((prev: Map<string, any>) => new Map(prev).set(currentTabId!, 'sftp'));
+        return;
+      }
+
+      // Prefer vault id/label; then live SFTP panel hosts (drag-drop uploads
+      // often lack targetHostLabel, and open-folder should still jump the pane).
+      const hostLabel = resolveSftpTransferNavigationHostLabel(task, navigation.useSourcePath)
+        || task.targetHostLabel
+        || task.sourceHostLabel;
+      const liveHosts: any[] = [];
+      if (currentTabId && sftpHostForTab?.get?.(currentTabId)) liveHosts.push(sftpHostForTab.get(currentTabId));
+      if (sftpActiveHost) liveHosts.push(sftpActiveHost);
+      if (sftpHostForTab && typeof sftpHostForTab.values === 'function') {
+        for (const candidate of sftpHostForTab.values()) liveHosts.push(candidate);
+      }
+      const host = pickHostForTransferNavigation({
+        hostId: navigation.hostId,
+        hostLabel,
+        vaultHosts: effectiveHosts ?? [],
+        liveHosts,
+        // In-progress uploads almost always target the currently open SFTP host.
+        allowLiveUploadFallback: !forResume && task.direction === 'upload',
+      });
+      if (!host) {
+        // Dedicated resume opens its own vault session without the panel.
+        // Opening the destination folder needs a resolvable host.
+        if (!forResume) {
+          toast.error('Could not open target folder', 'SFTP');
+        }
+        return;
+      }
+
+      const targetDirectory = resolveSftpTransferNavigationPath(task, navigation.useSourcePath);
+
+      // Already on a terminal/workspace tab → open SFTP there.
+      if (isTransferNavigationTerminalTabId(currentTabId)) {
+        applySftpTargetOnTab(currentTabId!, host, targetDirectory);
+        return;
+      }
+
+      // No terminal tab (vault / editor / empty): open the target host first,
+      // then land the SFTP panel on the transfer directory.
+      openHostThenSftp(host, targetDirectory);
+    };
+    window.addEventListener('netcatty:open-sftp-transfer-target', handler);
+    return () => window.removeEventListener('netcatty:open-sftp-transfer-target', handler);
+  }, [activeTabIdRef, effectiveHosts, onConnectToHost, openPath, setSftpHostForTab, setSftpInitialLocationForTab, setSidePanelOpenTabs, sftpActiveHost, sftpHostForTab, window]);
   
   useEffect(() => {
       const sessionIdsToClear = getSessionActivityIdsToClear(activeTabId, sessions);

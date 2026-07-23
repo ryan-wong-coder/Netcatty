@@ -373,7 +373,7 @@ function init(deps) {
   terminalWorkerManager = deps.terminalWorkerManager || null;
   cliDiscoveryFilePath = deps.cliDiscoveryFilePath || null;
   userDataDir = deps.userDataDir || null;
-  mcpServerBridge.init({ sessions, sftpClients, electronModule, cliDiscoveryFilePath, terminalWorkerManager });
+  mcpServerBridge.init({ sessions, sftpClients, electronModule, cliDiscoveryFilePath, terminalWorkerManager, transferBridge: deps.transferBridge });
 
   // Wire up main window getter for MCP approval IPC
   mcpServerBridge.setMainWindowGetter(() => {

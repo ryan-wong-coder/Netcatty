@@ -85,7 +85,7 @@ export const zhCNTerminalMessages: Messages = {
   // Settings > SFTP File Associations
   'settings.tab.sftpFileAssociations': 'SFTP',
   'settings.sftp.transferConcurrency': '传输并发数',
-  'settings.sftp.transferConcurrency.desc': '上传或下载文件夹时并行传输的文件数量。较高的值可能提高速度，但可能导致某些服务器过载。',
+  'settings.sftp.transferConcurrency.desc': '每台服务器最多同时传输的文件数量，不同服务器之间互不占用名额。',
   'settings.sftp.defaultOpener': '默认文件打开方式',
   'settings.sftp.defaultOpener.desc': '选择没有特定文件关联时的默认打开方式',
   'settings.sftp.defaultOpener.ask': '每次询问',
@@ -152,6 +152,8 @@ export const zhCNTerminalMessages: Messages = {
   'sftp.upload.compressed': '压缩传输',
   'sftp.upload.currentFile': '当前: {fileName}',
   'sftp.upload.cancelled': '上传已取消',
+  'sftp.upload.noFiles': '没有可上传的文件',
+  'sftp.upload.partialSuccess': '已上传 {success} 个文件，{failed} 个失败',
   'sftp.upload.cancel': '取消',
   'sftp.upload.completedToPath': '已上传至 {path}',
 

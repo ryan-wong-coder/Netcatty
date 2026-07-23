@@ -205,6 +205,7 @@ function createTerminalWorkerManager(options = {}) {
   const suppressedPendingOutputSessions = new Set();
   const workerSessionIds = new Set();
   const sessionWebContentsIds = new Map();
+  const sessionHostIds = new Map();
   const sessionGenerations = new Map();
   const closedSessionGenerations = new Map();
   const supersedingSessionGenerations = new Map();
@@ -785,6 +786,7 @@ function createTerminalWorkerManager(options = {}) {
     outputPortPending.delete(sessionId);
     outputPortReady.delete(sessionId);
     sessionWebContentsIds.delete(sessionId);
+    sessionHostIds.delete(sessionId);
     const activeGeneration = sessionGenerations.get(sessionId);
     recordClosedSessionGeneration(sessionId, activeGeneration);
     sessionGenerations.delete(sessionId);
@@ -1298,6 +1300,7 @@ function createTerminalWorkerManager(options = {}) {
     suppressedPendingOutputSessions.clear();
     workerSessionIds.clear();
     sessionWebContentsIds.clear();
+    sessionHostIds.clear();
     sessionGenerations.clear();
     closedSessionGenerations.clear();
     supersedingSessionGenerations.clear();
@@ -1383,6 +1386,10 @@ function createTerminalWorkerManager(options = {}) {
       }
       pendingSessionStartSequences.set(requestedSessionId, requestSequence);
       latestSessionStartSequences.set(requestedSessionId, requestSequence);
+      // Track host id for SFTP transfer session leases (global transfer center).
+      if (typeof payload?.hostId === "string" && payload.hostId) {
+        sessionHostIds.set(requestedSessionId, payload.hostId);
+      }
     }
     try {
       worker.postMessage({
@@ -1517,6 +1524,7 @@ function createTerminalWorkerManager(options = {}) {
       suppressedPendingOutputSessions.clear();
       workerSessionIds.clear();
       sessionWebContentsIds.clear();
+      sessionHostIds.clear();
       sessionGenerations.clear();
       closedSessionGenerations.clear();
       supersedingSessionGenerations.clear();
@@ -1554,6 +1562,10 @@ function createTerminalWorkerManager(options = {}) {
     getSessionWebContentsId(sessionId) {
       if (!sessionId) return null;
       return sessionWebContentsIds.get(sessionId) ?? null;
+    },
+    getSessionHostId(sessionId) {
+      if (!sessionId) return null;
+      return sessionHostIds.get(sessionId) ?? null;
     },
     getSessionOwnerWebContentsId(sessionId) {
       if (!sessionId || closedSessions.has(sessionId)) return null;

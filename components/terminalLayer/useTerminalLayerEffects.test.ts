@@ -38,3 +38,16 @@ test("side panel layout changes remeasure workspace before paint", () => {
   assert.notEqual(shellWidthDependencyIndex, -1);
   assert.ok(commentIndex < layoutEffectIndex);
 });
+
+test("transfer navigation helper is used for open-target and resume routing", () => {
+  assert.match(source, /resolveSftpTransferNavigationTarget/);
+  assert.match(source, /resolveSftpTransferNavigationPath/);
+  assert.match(source, /pickHostForTransferNavigation/);
+  assert.match(source, /isTransferNavigationTerminalTabId/);
+  assert.match(source, /navigation\.kind === 'local-copy-panel'/);
+  assert.match(source, /navigation\.kind === 'local-path'/);
+  // No terminal tab → connect host then open SFTP at target path.
+  assert.match(source, /onConnectToHost/);
+  assert.match(source, /openHostThenSftp/);
+  assert.match(source, /allowLiveUploadFallback/);
+});

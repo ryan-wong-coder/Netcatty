@@ -1,4 +1,60 @@
+import type { TransferTask } from "../../domain/models";
+
 export const SFTP_TRANSFER_HISTORY_RETENTION_MS = 10 * 60 * 1000;
+
+/** Terminal side-panel transfer owner id for a workspace/session tab. */
+export function terminalSftpTransferOwnerId(tabId: string): string {
+  return `terminal:${tabId}`;
+}
+
+/**
+ * Tasks that must keep the hidden SFTP owner mounted (orchestration lives in
+ * useSftpState / useSftpTransfers). Matches activeTransfersCount semantics:
+ * everything except completed/cancelled top-level rows.
+ */
+export function isTransferRetainingSftpOwner(
+  task: Pick<TransferTask, "status" | "parentTaskId">,
+): boolean {
+  if (task.parentTaskId) return false;
+  return task.status !== "completed" && task.status !== "cancelled";
+}
+
+export function countTransfersRetainingSftpOwner(
+  tasks: readonly Pick<TransferTask, "status" | "parentTaskId" | "ownerId">[],
+  ownerId: string,
+): number {
+  return tasks.filter(
+    (task) => (task.ownerId ?? "") === ownerId && isTransferRetainingSftpOwner(task),
+  ).length;
+}
+
+/**
+ * Prefer the live panel report, but never under-count unfinished work already
+ * published to the global transfer center (avoids close-before-layout-effect races).
+ */
+export function resolveSftpActiveTransfersCount(params: {
+  reportedCount: number;
+  storeTasks: readonly Pick<TransferTask, "status" | "parentTaskId" | "ownerId">[];
+  ownerId: string;
+}): number {
+  const reported = Math.max(0, params.reportedCount);
+  const fromStore = countTransfersRetainingSftpOwner(params.storeTasks, params.ownerId);
+  return Math.max(reported, fromStore);
+}
+
+/** Tab ids whose terminal:* owner still has unfinished work in the store. */
+export function listTerminalTabIdsWithRetainingTransfers(
+  tasks: readonly Pick<TransferTask, "status" | "parentTaskId" | "ownerId">[],
+): string[] {
+  const tabIds = new Set<string>();
+  for (const task of tasks) {
+    if (!isTransferRetainingSftpOwner(task)) continue;
+    const ownerId = task.ownerId ?? "";
+    if (!ownerId.startsWith("terminal:")) continue;
+    tabIds.add(ownerId.slice("terminal:".length));
+  }
+  return [...tabIds];
+}
 
 export function shouldKeepSftpMountedAfterClose(activeTransfersCount: number): boolean {
   return activeTransfersCount > 0;
@@ -30,12 +86,15 @@ export function listInvalidSftpPanelTabIds(params: {
   cleanupTimerTabIds: Iterable<string>;
   validTabIds: ReadonlySet<string>;
 }): string[] {
+  const activeTransferTabIds = new Set(params.activeTransferTabIds);
   const trackedTabIds = new Set([
     ...params.mountedTabIds,
-    ...params.activeTransferTabIds,
+    ...activeTransferTabIds,
     ...params.retainedTabIds,
     ...params.openingTabIds,
     ...params.cleanupTimerTabIds,
   ]);
-  return [...trackedTabIds].filter((tabId) => !params.validTabIds.has(tabId));
+  return [...trackedTabIds].filter((tabId) => (
+    !params.validTabIds.has(tabId) && !activeTransferTabIds.has(tabId)
+  ));
 }

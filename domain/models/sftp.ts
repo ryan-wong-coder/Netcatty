@@ -26,10 +26,23 @@ export interface SftpConnection {
   homeDir?: string;
   /** True when this SFTP connection reuses an existing terminal SSH session */
   reusedConnection?: boolean;
+  fileProtocol?: 'auto' | 'sftp' | 'scp';
 }
 
-export type TransferStatus = 'pending' | 'transferring' | 'completed' | 'failed' | 'cancelled';
+export type TransferStatus =
+  | 'pending'
+  | 'queued'
+  | 'transferring'
+  | 'pausing'
+  | 'paused'
+  | 'attention'
+  | 'interrupted'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 export type TransferDirection = 'upload' | 'download' | 'remote-to-remote' | 'local-copy';
+export type TransferOrigin = 'manual' | 'drag-drop' | 'editor-sync' | 'agent' | 'internal';
+export type TransferPhase = 'scanning' | 'compressing' | 'uploading' | 'transferring' | 'extracting' | 'verifying';
 
 export interface TransferTask {
   id: string;
@@ -60,6 +73,25 @@ export interface TransferTask {
   skipConflictCheck?: boolean; // Skip conflict check for replace operations
   replaceExistingTarget?: boolean; // Delete the existing target before transferring
   retryable?: boolean; // False for task types that cannot be safely replayed through generic retry
+  ownerId?: string;
+  sourceHostId?: string;
+  sourceHostLabel?: string;
+  targetHostLabel?: string;
+  origin?: TransferOrigin;
+  background?: boolean;
+  phase?: TransferPhase;
+  resumable?: boolean;
+  checkpointBytes?: number;
+  resumeStage?: 'direct' | 'download' | 'upload';
+  downloadCheckpointBytes?: number;
+  uploadCheckpointBytes?: number;
+  priority?: number;
+  updatedAt?: number;
+  pauseUnavailableReason?: string;
+  conflict?: FileConflict;
+  stagedTargetPath?: string;
+  sourceFingerprint?: string;
+  reconnectRequired?: boolean;
 }
 
 export type FileConflictAction = 'stop' | 'skip' | 'replace' | 'duplicate' | 'merge';

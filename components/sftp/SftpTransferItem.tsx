@@ -14,6 +14,8 @@ import {
     FolderUp,
     GripVertical,
     Loader2,
+    Pause,
+    Play,
     RefreshCw,
     X,
     XCircle,
@@ -33,6 +35,8 @@ interface SftpTransferItemProps {
     childNameColumnWidth?: number;
     onResizeNameColumn?: (event: React.MouseEvent<HTMLDivElement>) => void;
     onCancel: () => void;
+    onPause?: () => void;
+    onResume?: () => void;
     onRetry: () => void;
     onDismiss: () => void;
     canRevealTarget?: boolean;
@@ -84,6 +88,8 @@ const SftpTransferItemInner: React.FC<SftpTransferItemProps> = ({
     childNameColumnWidth = 260,
     onResizeNameColumn,
     onCancel,
+    onPause,
+    onResume,
     onRetry,
     onDismiss,
     canRevealTarget = false,
@@ -102,7 +108,10 @@ const SftpTransferItemInner: React.FC<SftpTransferItemProps> = ({
 }) => {
     const { t } = useI18n();
 
-    const progressMode = task.progressMode ?? 'bytes';
+    // Align with global transfer center: directory parents default to file-count
+    // progress unless explicitly compressed/byte mode.
+    const progressMode = task.progressMode
+      ?? (task.isDirectory && !task.parentTaskId ? 'files' : 'bytes');
     const isDirParent = task.isDirectory && !task.parentTaskId && progressMode === 'files';
     const hasKnownTotal = task.totalBytes > 0 || (!isDirParent && !!task.sourceLastModified);
     const progress = hasKnownTotal
@@ -154,14 +163,16 @@ const SftpTransferItemInner: React.FC<SftpTransferItemProps> = ({
         ? (task.status === 'pending' || !hasKnownTotal ? '100%' : `${progress}%`)
         : `${progress}%`;
 
-    const statusIcon = task.status === 'transferring'
+    const statusIcon = task.status === 'transferring' || task.status === 'pausing'
         ? <Loader2 size={12} className="animate-spin text-primary" />
-        : task.status === 'pending'
+        : task.status === 'pending' || task.status === 'queued'
             ? (task.isDirectory
                 ? <FolderUp size={12} className="text-muted-foreground animate-pulse" />
                 : <ArrowDown size={12} className="text-muted-foreground animate-bounce" />)
             : task.status === 'completed'
                 ? <CheckCircle2 size={12} className="text-green-500" />
+                : task.status === 'paused' || task.status === 'interrupted' || task.status === 'attention'
+                    ? <Pause size={12} className="text-amber-500" />
                 : <XCircle size={12} className={task.status === 'failed' ? "text-destructive" : "text-muted-foreground"} />;
 
     const childProgressBar = (
@@ -214,6 +225,8 @@ const SftpTransferItemInner: React.FC<SftpTransferItemProps> = ({
     const hasFooterContent = showTransferSizeCalculation || showFailedError;
     const retryActionLabel = t('sftp.transfers.retryAction');
     const cancelActionLabel = t('common.cancel');
+    const pauseActionLabel = t('sftp.transferCenter.pause');
+    const resumeActionLabel = t('sftp.transferCenter.resume');
     const dismissActionLabel = t('sftp.transfers.dismissAction');
     const resizeNameColumnLabel = t('sftp.transfers.resizeNameColumn');
     const toggleChildrenLabel = isExpanded ? t('sftp.transfers.collapseChildList') : t('sftp.transfers.expandChildList');
@@ -269,7 +282,21 @@ const SftpTransferItemInner: React.FC<SftpTransferItemProps> = ({
                     </Button>
                 </IconButtonWithTooltip>
             )}
-            {(task.status === 'pending' || task.status === 'transferring') && (
+            {task.status === 'transferring' && task.resumable !== false && onPause && (
+                <IconButtonWithTooltip label={pauseActionLabel}>
+                    <Button variant="ghost" size="icon" className={actionButtonClass} onClick={onPause} aria-label={actionAriaLabel(pauseActionLabel)}>
+                        <Pause size={12} />
+                    </Button>
+                </IconButtonWithTooltip>
+            )}
+            {(task.status === 'paused' || task.status === 'interrupted') && onResume && (
+                <IconButtonWithTooltip label={resumeActionLabel}>
+                    <Button variant="ghost" size="icon" className={actionButtonClass} onClick={onResume} aria-label={actionAriaLabel(resumeActionLabel)}>
+                        <Play size={12} />
+                    </Button>
+                </IconButtonWithTooltip>
+            )}
+            {(['pending', 'queued', 'transferring', 'pausing', 'paused', 'interrupted', 'attention'] as const).includes(task.status as never) && (
                 <IconButtonWithTooltip label={cancelActionLabel}>
                     <Button variant="ghost" size="icon" className={cn(actionButtonClass, "text-destructive hover:text-destructive")} onClick={onCancel} aria-label={actionAriaLabel(cancelActionLabel)}>
                         <X size={12} />

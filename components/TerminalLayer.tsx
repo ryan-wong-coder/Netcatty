@@ -80,12 +80,16 @@ import { resolveSidePanelToggleIntent } from '../application/state/resolveSidePa
 import { resolveAiSidePanelToggleIntent } from '../application/state/resolveAiSidePanelToggleIntent';
 import { terminalLayerAreEqual } from './terminalLayerMemo';
 import { TerminalLayerTabBridge } from './terminalLayer/TerminalLayerTabBridge';
+import { sftpTransferCenterStore } from '../application/state/sftpTransferCenterStore';
 import {
   SFTP_TRANSFER_HISTORY_RETENTION_MS,
   listInvalidSftpPanelTabIds,
+  listTerminalTabIdsWithRetainingTransfers,
+  resolveSftpActiveTransfersCount,
   shouldClearSftpPanelAfterTransferChange,
   shouldKeepSftpMountedAfterClose,
   shouldScheduleSftpRetainedPanelCleanup,
+  terminalSftpTransferOwnerId,
 } from './terminalLayer/sftpPanelLifecycle';
 import { resolveAiNoteArtifactPanelIntent } from './terminalLayer/aiNoteArtifactPanelIntent';
 import {
@@ -664,8 +668,18 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
     });
   }, []);
 
+  // Panel-reported count can lag a tick; the global store is the authority for
+  // unfinished work under this tab's transfer owner (terminal:<tabId>).
+  const resolveTabActiveTransfersCount = useCallback((tabId: string, reportedCount?: number) => {
+    return resolveSftpActiveTransfersCount({
+      reportedCount: reportedCount ?? sftpActiveTransfersByTabRef.current.get(tabId) ?? 0,
+      storeTasks: sftpTransferCenterStore.getSnapshot().tasks,
+      ownerId: terminalSftpTransferOwnerId(tabId),
+    });
+  }, []);
+
   const handleSftpActiveTransfersChange = useCallback((tabId: string, count: number) => {
-    const activeTransfersCount = Math.max(0, count);
+    const activeTransfersCount = resolveTabActiveTransfersCount(tabId, Math.max(0, count));
     if (activeTransfersCount > 0) {
       const cleanupTimer = sftpRetainedCleanupTimersRef.current.get(tabId);
       if (cleanupTimer !== undefined) {
@@ -694,7 +708,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
     ) {
       const cleanupTimer = window.setTimeout(() => {
         sftpRetainedCleanupTimersRef.current.delete(tabId);
-        const currentCount = sftpActiveTransfersByTabRef.current.get(tabId) ?? 0;
+        const currentCount = resolveTabActiveTransfersCount(tabId);
         if (
           currentCount <= 0
           && !sidePanelOpenTabsRef.current.has(tabId)
@@ -706,7 +720,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
       }, SFTP_TRANSFER_HISTORY_RETENTION_MS);
       sftpRetainedCleanupTimersRef.current.set(tabId, cleanupTimer);
     }
-  }, [clearSftpPanelState]);
+  }, [clearSftpPanelState, resolveTabActiveTransfersCount]);
 
   const handleToggleWorkspaceComposeBar = useCallback(() => {
     setIsComposeBarOpen(prev => !prev);
@@ -743,7 +757,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
       && (currentHost.sftpFileProtocol || "auto") === (host.sftpFileProtocol || "auto");
 
     const isClosing = !shouldKeepOpen && isOpen && isSameEndpoint;
-    const activeTransfersCount = sftpActiveTransfersByTabRef.current.get(tabId) ?? 0;
+    const activeTransfersCount = resolveTabActiveTransfersCount(tabId);
     const keepSftpMounted = isClosing
       && shouldKeepSftpMountedAfterClose(activeTransfersCount);
     if (isClosing) {
@@ -751,6 +765,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
     }
     if (keepSftpMounted) {
       sftpRetainedAfterCloseTabIdsRef.current.add(tabId);
+      sftpActiveTransfersByTabRef.current.set(tabId, activeTransfersCount);
     } else if (!isClosing) {
       sftpOpeningTabIdsRef.current.add(tabId);
       const cleanupTimer = sftpRetainedCleanupTimersRef.current.get(tabId);
@@ -817,7 +832,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
       }
       return next;
     });
-  }, [resolveSftpOpenTarget]);
+  }, [resolveSftpOpenTarget, resolveTabActiveTransfersCount]);
 
   const handlePendingUploadHandled = useCallback((tabId: string, requestId: string) => {
     setSftpPendingUploadsForTab(prev => {
@@ -1075,9 +1090,16 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
   }, [sessions, workspaces]);
 
   useEffect(() => {
+    const storeActiveTransferTabIds = listTerminalTabIdsWithRetainingTransfers(
+      sftpTransferCenterStore.getSnapshot().tasks,
+    );
+    const activeTransferTabIds = new Set([
+      ...sftpActiveTransfersByTabRef.current.keys(),
+      ...storeActiveTransferTabIds,
+    ]);
     const invalidTabIds = listInvalidSftpPanelTabIds({
       mountedTabIds: sftpHostForTab.keys(),
-      activeTransferTabIds: sftpActiveTransfersByTabRef.current.keys(),
+      activeTransferTabIds,
       retainedTabIds: sftpRetainedAfterCloseTabIdsRef.current,
       openingTabIds: sftpOpeningTabIdsRef.current,
       cleanupTimerTabIds: sftpRetainedCleanupTimersRef.current.keys(),
@@ -1210,9 +1232,11 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
       return next;
     });
     sftpOpeningTabIdsRef.current.delete(activeTabId);
-    const activeTransfersCount = sftpActiveTransfersByTabRef.current.get(activeTabId) ?? 0;
+    const activeTransfersCount = resolveTabActiveTransfersCount(activeTabId);
     if (shouldKeepSftpMountedAfterClose(activeTransfersCount)) {
       sftpRetainedAfterCloseTabIdsRef.current.add(activeTabId);
+      // Seed the ref so subsequent zero reports cannot drop a live store owner.
+      sftpActiveTransfersByTabRef.current.set(activeTabId, activeTransfersCount);
     } else {
       clearSftpPanelState(activeTabId);
     }
@@ -1228,7 +1252,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
     });
     notesReturnTabRef.current.delete(activeTabId);
     refocusTerminalSession(sessionIdToRefocus);
-  }, [clearSftpPanelState, getActiveTerminalSessionId, refocusTerminalSession, syncWorkspaceFocusIfNeeded]);
+  }, [clearSftpPanelState, getActiveTerminalSessionId, refocusTerminalSession, resolveTabActiveTransfersCount, syncWorkspaceFocusIfNeeded]);
 
   // Resolve the SFTP host for a tab: a previously-stored host, otherwise the
   // host of the workspace's focused session or the active session. null = none.

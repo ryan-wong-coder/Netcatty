@@ -30,6 +30,7 @@ import type { TransferTask } from "../types";
 import { toast } from "./ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { DistroAvatar } from "./DistroAvatar";
+import { reportSftpUploadResults } from "./sftp/reportSftpUploadResults";
 
 import { SftpPaneView } from "./sftp/SftpPaneView";
 import { SftpOverlays } from "./sftp/SftpOverlays";
@@ -60,6 +61,7 @@ import { listSftpConnectedHosts, sftpPickerSessionsEqual } from "../domain/sftpC
 import type { TerminalSession } from "../domain/models";
 
 interface SftpSidePanelProps {
+  transferOwnerId: string;
   hosts: Host[];
   writableHosts?: Host[];
   sessions?: TerminalSession[];
@@ -108,6 +110,7 @@ interface SftpSidePanelProps {
 }
 
 const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
+  transferOwnerId,
   hosts,
   writableHosts,
   sessions = [],
@@ -166,13 +169,17 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
 
   const sftpOptions = useMemo(() => ({
     ...fileWatchHandlers,
+    transferOwnerId,
+    canPrepareTransferAdoption: isVisible,
+    // Hidden side panel parks browse channels; transfer pool keeps running.
+    interactive: isVisible,
     useCompressedUpload: sftpUseCompressedUpload,
     defaultShowHiddenFiles: sftpShowHiddenFiles,
     autoConnectLocalOnMount: false,
     terminalSettings,
     knownHosts,
     onAddKnownHost,
-  }), [fileWatchHandlers, sftpUseCompressedUpload, sftpShowHiddenFiles, terminalSettings, knownHosts, onAddKnownHost]);
+  }), [fileWatchHandlers, isVisible, transferOwnerId, sftpUseCompressedUpload, sftpShowHiddenFiles, terminalSettings, knownHosts, onAddKnownHost]);
 
   const sftp = useSftpState(hosts, keys, identities, sftpOptions);
   const {
@@ -190,13 +197,123 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
   const sftpRef = useRef(sftp);
   sftpRef.current = sftp;
 
+  useEffect(() => {
+    /** Per-task locks so resume-all can prepare multiple transfers sequentially. */
+    const connectingTaskIds = new Set<string>();
+    const queue: Array<() => Promise<void>> = [];
+    let draining = false;
+
+    const drain = async () => {
+      if (draining) return;
+      draining = true;
+      try {
+        while (queue.length > 0) {
+          const job = queue.shift();
+          if (job) await job();
+        }
+      } finally {
+        draining = false;
+      }
+    };
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        task: TransferTask;
+        targetOwnerId: string;
+        reportFailure?: (error: string) => void;
+      }>).detail;
+      if (detail?.targetOwnerId !== transferOwnerId) return;
+      const task = detail.task;
+      if (!task) return;
+      if (connectingTaskIds.has(task.id)) return;
+
+      queue.push(async () => {
+        connectingTaskIds.add(task.id);
+        try {
+          const resolveHost = (hostId?: string, hostLabel?: string) => {
+            if (!hostId && !hostLabel) return "local" as const;
+            const byId = hostId ? hosts.find((host) => host.id === hostId) : undefined;
+            if (byId) return byId;
+            const needle = (hostLabel || "").trim().toLowerCase();
+            if (!needle) return undefined;
+            return hosts.find((host) => (
+              (host.label || "").trim().toLowerCase() === needle
+              || (host.hostname || "").trim().toLowerCase() === needle
+            ));
+          };
+          const source = resolveHost(task.sourceHostId, task.sourceHostLabel);
+          const target = resolveHost(task.targetHostId, task.targetHostLabel);
+          if (!source || !target) {
+            const missingEndpoint = !source ? "source" : "target";
+            detail.reportFailure?.(
+              `Cannot find the ${missingEndpoint} host in your vault. Resume will try a dedicated connection, or re-add the host.`,
+            );
+            return;
+          }
+          const sourceDirectory = task.isDirectory ? task.sourcePath : getParentPath(task.sourcePath);
+          const targetDirectory = task.isDirectory ? task.targetPath : getParentPath(task.targetPath);
+          // Downloads only need the remote source; still open local on the other
+          // pane so adoption can match both endpoints for stream restarts.
+          if (source !== "local") {
+            await sftpRef.current.connect("left", source, {
+              forceNewTab: true,
+              initialPath: sourceDirectory,
+            });
+            const sourcePane = sftpRef.current.leftPane;
+            if (sourcePane.connection?.status !== "connected") {
+              throw new Error(sourcePane.connection?.error || sourcePane.error || "Source server authentication failed");
+            }
+          } else {
+            await sftpRef.current.connect("left", "local", {
+              forceNewTab: true,
+              initialPath: sourceDirectory,
+            });
+          }
+          if (target !== "local") {
+            await sftpRef.current.connect("right", target, {
+              forceNewTab: true,
+              initialPath: targetDirectory,
+            });
+            const targetPane = sftpRef.current.rightPane;
+            if (targetPane.connection?.status !== "connected") {
+              throw new Error(targetPane.connection?.error || targetPane.error || "Target server authentication failed");
+            }
+          } else {
+            await sftpRef.current.connect("right", "local", {
+              forceNewTab: true,
+              initialPath: targetDirectory,
+            });
+            const targetPane = sftpRef.current.rightPane;
+            if (targetPane.connection?.status !== "connected") {
+              throw new Error(targetPane.connection?.error || targetPane.error || "Local folder is unavailable");
+            }
+          }
+        } catch (error) {
+          detail.reportFailure?.(error instanceof Error ? error.message : String(error));
+        } finally {
+          connectingTaskIds.delete(task.id);
+        }
+      });
+      void drain();
+    };
+    window.addEventListener("netcatty:prepare-sftp-transfer-resume", handler);
+    return () => window.removeEventListener("netcatty:prepare-sftp-transfer-resume", handler);
+  }, [hosts, transferOwnerId]);
+
+  // Report via a ref so callback identity churn never re-runs a cleanup that
+  // spuriously zeros the parent's active-transfer count mid-transfer (that
+  // would unmount the retained owner and abort live work).
+  const onActiveTransfersChangeRef = useRef(onActiveTransfersChange);
+  onActiveTransfersChangeRef.current = onActiveTransfersChange;
+
   useLayoutEffect(() => {
-    onActiveTransfersChange?.(sftp.activeTransfersCount);
-  }, [onActiveTransfersChange, sftp.activeTransfersCount]);
+    onActiveTransfersChangeRef.current?.(sftp.activeTransfersCount);
+  }, [sftp.activeTransfersCount]);
 
   useEffect(() => () => {
-    onActiveTransfersChange?.(0);
-  }, [onActiveTransfersChange]);
+    // True unmount only — owner is going away; allow parent to release retain.
+    onActiveTransfersChangeRef.current?.(0);
+  }, []);
 
   // Register this instance's writeTextFileByConnection with the editor bridge
   // so editor tabs promoted from SFTP files opened in a terminal side panel
@@ -592,30 +709,7 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
         const results = await sftpRef.current.uploadExternalEntries("left", pendingUpload.entries, {
           targetPath: pendingUpload.targetPath,
         });
-        if (results.some((result) => result.cancelled)) {
-          toast.info(t("sftp.upload.cancelled"), "SFTP");
-          return;
-        }
-
-        const failCount = results.filter((result) => !result.success && !result.cancelled).length;
-        const successCount = results.filter((result) => result.success).length;
-
-        if (failCount === 0) {
-          const message =
-            successCount === 1
-              ? `${t("sftp.upload")}: ${results[0]?.fileName ?? ""}`
-              : `${t("sftp.uploadFiles")}: ${successCount}`;
-          toast.success(message, "SFTP");
-        } else {
-          const failedFiles = results.filter((result) => !result.success && !result.cancelled);
-          failedFiles.forEach((failed) => {
-            const errorMsg = failed.error ? ` - ${failed.error}` : "";
-            toast.error(
-              `${t("sftp.error.uploadFailed")}: ${failed.fileName}${errorMsg}`,
-              "SFTP",
-            );
-          });
-        }
+        reportSftpUploadResults({ results, t, toast });
       } catch (error) {
         logger.error("[SftpSidePanel] Failed to upload dropped files:", error);
         handledPendingUploadIdRef.current = null;

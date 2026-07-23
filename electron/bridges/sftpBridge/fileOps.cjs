@@ -614,16 +614,69 @@ function createFileOpsApi(ctx) {
     }
     
     /**
-     * Close an SFTP connection
-     * Also cleans up any jump host connections and file watchers if present
+     * Close an SFTP connection.
+     * Also cleans up any jump host connections and file watchers if present.
+     *
+     * When transfers still hold a lease on this sftpId (active or paused), the
+     * close is deferred: browse-side resources are dropped but the client stays
+     * in sftpClients until the last transfer releases. Pass force:true to tear
+     * down immediately (used by the lease finalizer).
      */
     async function closeSftp(event, payload) {
-      const client = sftpClients.get(payload.sftpId);
-      if (!client) return;
+      const sftpId = payload?.sftpId;
+      const client = sftpClients.get(sftpId);
+      if (!client) {
+        try {
+          const { sftpTransferSessionLeaseStore } = require("../sftpTransferSessionLease.cjs");
+          sftpTransferSessionLeaseStore.clear(sftpId);
+        } catch { /* optional in tests */ }
+        return { success: true, deferred: false };
+      }
+
+      // Soft-close: panel disconnect while transfers still use this session.
+      // Do NOT abort SCP streams or end the client — that would kill transfers.
+      if (!payload?.force) {
+        try {
+          const { sftpTransferSessionLeaseStore } = require("../sftpTransferSessionLease.cjs");
+          if (sftpTransferSessionLeaseStore.markSoftClosed(sftpId)) {
+            try {
+              fileWatcherBridge.stopWatchersForSession(sftpId, true);
+            } catch (err) {
+              console.warn("[SFTP] Error stopping file watchers during soft-close:", err.message);
+            }
+            console.log(
+              `[SFTP] Soft-closed ${sftpId}; ${sftpTransferSessionLeaseStore.getLeaseCount(sftpId)} transfer lease(s) still hold it`,
+            );
+            return {
+              success: true,
+              deferred: true,
+              leaseCount: sftpTransferSessionLeaseStore.getLeaseCount(sftpId),
+            };
+          }
+        } catch {
+          // Lease module unavailable — fall through to hard close.
+        }
+      } else {
+        // Force close is for lease finalizers. If a new transfer re-acquired
+        // between shouldHardClose and now, defer instead of killing live work.
+        try {
+          const { sftpTransferSessionLeaseStore } = require("../sftpTransferSessionLease.cjs");
+          if (sftpTransferSessionLeaseStore.isHeld(sftpId)) {
+            sftpTransferSessionLeaseStore.markSoftClosed(sftpId);
+            return {
+              success: true,
+              deferred: true,
+              leaseCount: sftpTransferSessionLeaseStore.getLeaseCount(sftpId),
+            };
+          }
+        } catch {
+          // Lease module unavailable — fall through to hard close.
+        }
+      }
     
       // Stop file watchers and clean up temp files for this SFTP session
       try {
-        fileWatcherBridge.stopWatchersForSession(payload.sftpId, true);
+        fileWatcherBridge.stopWatchersForSession(sftpId, true);
       } catch (err) {
         console.warn("[SFTP] Error stopping file watchers:", err.message);
       }
@@ -642,23 +695,53 @@ function createFileOpsApi(ctx) {
             try { client.client?.destroy?.(); } catch { /* ignore */ }
           }
         }
+        // Re-check after any async yield before destroying the map entry.
+        try {
+          const { sftpTransferSessionLeaseStore } = require("../sftpTransferSessionLease.cjs");
+          if (payload?.force && sftpTransferSessionLeaseStore.isHeld(sftpId)) {
+            sftpTransferSessionLeaseStore.markSoftClosed(sftpId);
+            return {
+              success: true,
+              deferred: true,
+              leaseCount: sftpTransferSessionLeaseStore.getLeaseCount(sftpId),
+            };
+          }
+        } catch { /* optional */ }
         await client.end();
       } catch (err) {
         console.warn("SFTP close failed", err);
       }
-      copySftpEncodingState(payload?.sftpId, payload?.encodingStateKey);
-      sftpClients.delete(payload.sftpId);
-      clearSftpEncodingState(payload.sftpId);
+      // Final TOCTOU guard: do not clear leases/map if someone re-acquired
+      // during client.end().
+      try {
+        const { sftpTransferSessionLeaseStore } = require("../sftpTransferSessionLease.cjs");
+        if (payload?.force && sftpTransferSessionLeaseStore.isHeld(sftpId)) {
+          sftpTransferSessionLeaseStore.markSoftClosed(sftpId);
+          return {
+            success: true,
+            deferred: true,
+            leaseCount: sftpTransferSessionLeaseStore.getLeaseCount(sftpId),
+          };
+        }
+      } catch { /* optional */ }
+      copySftpEncodingState(sftpId, payload?.encodingStateKey);
+      sftpClients.delete(sftpId);
+      clearSftpEncodingState(sftpId);
+      try {
+        const { sftpTransferSessionLeaseStore } = require("../sftpTransferSessionLease.cjs");
+        sftpTransferSessionLeaseStore.clear(sftpId);
+      } catch { /* optional */ }
     
       // Clean up jump connections if any
-      const jumpData = jumpConnectionsMap.get(payload.sftpId);
+      const jumpData = jumpConnectionsMap.get(sftpId);
       if (jumpData) {
         for (const conn of jumpData.connections) {
           try { conn.end(); } catch (cleanupErr) { console.warn('[SFTP] Cleanup error on close:', cleanupErr.message); }
         }
-        jumpConnectionsMap.delete(payload.sftpId);
-        console.log(`[SFTP] Cleaned up ${jumpData.connections.length} jump connection(s) for ${payload.sftpId}`);
+        jumpConnectionsMap.delete(sftpId);
+        console.log(`[SFTP] Cleaned up ${jumpData.connections.length} jump connection(s) for ${sftpId}`);
       }
+      return { success: true, deferred: false };
     }
     
     /**

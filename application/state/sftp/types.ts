@@ -75,11 +75,18 @@ export interface FileWatchErrorEvent {
 }
 
 export interface SftpStateOptions {
+  transferOwnerId?: string;
+  canPrepareTransferAdoption?: boolean;
   onFileWatchSynced?: (event: FileWatchSyncedEvent) => void;
   onFileWatchError?: (event: FileWatchErrorEvent) => void;
   useCompressedUpload?: boolean;
   defaultShowHiddenFiles?: boolean;
   autoConnectLocalOnMount?: boolean;
+  /**
+   * When false, park (soft-close) browse SFTP channels so transfer-pool
+   * sessions stay independent. Defaults to true (interactive).
+   */
+  interactive?: boolean;
   /**
    * Global SSH keepalive settings, forwarded through to per-SFTP-connection
    * keepalive resolution so a host that has opted into its own override

@@ -124,6 +124,20 @@ test("request sends a worker command and resolves matching response", async () =
   assert.deepEqual(await promise, { sessionId: "local-1" });
 });
 
+test("worker manager retains the stable host id for session-backed transfers", async () => {
+  const child = new FakeChild();
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork: () => child },
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const promise = manager.request("netcatty:start", { sessionId: "session-1", hostId: "host-1" }).catch(() => {});
+  assert.equal(manager.getSessionHostId("session-1"), "host-1");
+  manager.stop();
+  await promise;
+  assert.equal(manager.getSessionHostId("session-1"), null);
+});
+
 test("session ownership listeners finish before buffered output is released", async () => {
   const child = new FakeChild();
   const routed = [];

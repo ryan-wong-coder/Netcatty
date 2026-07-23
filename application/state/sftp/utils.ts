@@ -8,6 +8,35 @@ export const formatFileSize = (bytes: number): string => {
   return `${size.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
 };
 
+/**
+ * Estimate remaining transfer time from bytes left and current speed.
+ * Returns null when inputs are too small to be meaningful (WinSCP-style:
+ * only show ETA after a stable speed sample).
+ */
+export function estimateTransferEtaSeconds(
+  remainingBytes: number,
+  speedBytesPerSec: number,
+): number | null {
+  if (!Number.isFinite(remainingBytes) || remainingBytes <= 0) return null;
+  if (!Number.isFinite(speedBytesPerSec) || speedBytesPerSec < 1024) return null;
+  const seconds = Math.ceil(remainingBytes / speedBytesPerSec);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  // Cap absurd ETAs (e.g. speed briefly dips).
+  if (seconds > 48 * 3600) return null;
+  return seconds;
+}
+
+export function formatTransferEta(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 export const formatDate = (timestamp: number): string => {
   if (!timestamp) return "--";
   const date = new Date(timestamp);

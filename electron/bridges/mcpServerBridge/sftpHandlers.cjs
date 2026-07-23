@@ -14,6 +14,15 @@ function createSftpHandlerApi(ctx) {
       return typeof sessions !== "undefined" ? sessions : null;
     }
 
+    function getStableTransferHostId(params) {
+      if (typeof params?.hostId === "string" && params.hostId) return params.hostId;
+      const mainHostId = getMainSessions()?.get?.(params?.sessionId)?.hostId;
+      if (typeof mainHostId === "string" && mainHostId) return mainHostId;
+      const workerHostId = getWorkerManager()?.getSessionHostId?.(params?.sessionId);
+      if (typeof workerHostId === "string" && workerHostId) return workerHostId;
+      return typeof params?.sessionId === "string" && params.sessionId ? params.sessionId : undefined;
+    }
+
     function shouldProxySessionBackedSftpToWorker(params) {
       if (!params?.sessionId) return false;
       const manager = getWorkerManager();
@@ -110,11 +119,10 @@ function createSftpHandlerApi(ctx) {
         if (cancellationError) throw cancellationError;
 
         const { abortSignal: _abortSignal, ...workerParams } = params || {};
-        const value = await requestWorkerSftp(workerChannel, {
-          ...workerParams,
-          sftpId,
-          timeoutMs,
-        }, { timeoutMs, operationName });
+        const workerPayload = options.buildWorkerPayload
+          ? options.buildWorkerPayload(workerParams, sftpId)
+          : { ...workerParams, sftpId, timeoutMs };
+        const value = await requestWorkerSftp(workerChannel, workerPayload, { timeoutMs, operationName });
         if (cancellationError) throw cancellationError;
         return value;
       } finally {
@@ -280,24 +288,176 @@ function createSftpHandlerApi(ctx) {
       if (!params?.remotePath || !params?.localPath) {
         throw new Error("remotePath and localPath are required");
       }
-      const result = await withSessionBackedSftp(
-        params,
-        (payload) => sftpBridge.downloadSftpToLocal(null, payload),
-        { timeoutMs: commandTimeoutMs, operationName: "SFTP download", workerChannel: "netcatty:sftp:downloadToLocal" },
-      );
-      return { ok: true, ...result };
+      const transferId = createTransferId();
+      const sourceHostId = getStableTransferHostId(params);
+      reportTransferEvent({
+        type: "queued", transferId, origin: "agent", background: true,
+        direction: "download", sourcePath: params.remotePath, targetPath: params.localPath,
+        sessionId: params.sessionId, startedAt: Date.now(),
+        sourceHostId,
+      });
+      try {
+        const sender = {
+          send(channel, payload) {
+            if (channel === "netcatty:transfer:progress") {
+              reportTransferEvent({ type: "progress", ...payload });
+            } else if (channel === "netcatty:transfer:started") {
+              reportTransferEvent({ type: "started", ...payload });
+            } else if (channel === "netcatty:transfer:queued") {
+              reportTransferEvent({ type: "queued", ...payload });
+            } else if (channel === "netcatty:transfer:paused") {
+              reportTransferEvent({ type: "paused", ...payload });
+            } else if (channel === "netcatty:transfer:cancelled") {
+              reportTransferEvent({ type: "cancelled", ...payload, endedAt: Date.now() });
+            }
+          },
+        };
+        const useOuterAdmission = !!(
+          shouldProxySessionBackedSftpToWorker(params) && transferBridge?.runAdmittedTransfer
+        );
+        const runDownload = (skipAdmission) => withSessionBackedSftp(
+          params,
+          (payload) => transferBridge
+            ? transferBridge.startTransfer({ sender }, {
+                transferId,
+                sourcePath: params.remotePath,
+                targetPath: params.localPath,
+                sourceType: "sftp",
+                targetType: "local",
+                sourceSftpId: payload.sftpId,
+                sourceHostId,
+                resumable: true,
+                globalConcurrency: transferBridge.getGlobalTransferConcurrency?.(),
+                // Only skip when outer runAdmittedTransfer already owns the slot.
+                skipAdmission: skipAdmission === true,
+              })
+            : sftpBridge.downloadSftpToLocal(null, payload),
+          {
+            timeoutMs: commandTimeoutMs,
+            operationName: "SFTP download",
+            workerChannel: transferBridge ? "netcatty:transfer:start" : "netcatty:sftp:downloadToLocal",
+            buildWorkerPayload: transferBridge ? (_workerParams, sftpId) => ({
+              transferId,
+              sourcePath: params.remotePath,
+              targetPath: params.localPath,
+              sourceType: "sftp",
+              targetType: "local",
+              sourceSftpId: sftpId,
+              sourceHostId,
+              resumable: true,
+              skipAdmission: true,
+            }) : undefined,
+          },
+        );
+        const result = await (
+          useOuterAdmission
+            ? transferBridge.runAdmittedTransfer(
+                { sender },
+                { transferId, sourceHostId, globalConcurrency: transferBridge.getGlobalTransferConcurrency?.() },
+                undefined,
+                () => runDownload(true),
+              )
+            : runDownload(false)
+        );
+        if (result?.cancelled || result?.error === "Transfer cancelled") {
+          reportTransferEvent({ type: "cancelled", transferId, endedAt: Date.now() });
+          return { ok: false, cancelled: true, transferId };
+        }
+        if (result?.error) throw new Error(result.error);
+        reportTransferEvent({ type: "completed", transferId, endedAt: Date.now() });
+        return { ok: true, transferId, ...result };
+      } catch (error) {
+        reportTransferEvent({ type: "failed", transferId, endedAt: Date.now(), error: error?.message || String(error) });
+        throw error;
+      }
     }
     
     async function handleSftpUpload(params) {
       if (!params?.remotePath || !params?.localPath) {
         throw new Error("remotePath and localPath are required");
       }
-      const result = await withSessionBackedSftp(
-        params,
-        (payload) => sftpBridge.uploadLocalToSftp(null, payload),
-        { timeoutMs: commandTimeoutMs, operationName: "SFTP upload", workerChannel: "netcatty:sftp:uploadLocal" },
-      );
-      return { ok: true, ...result };
+      const transferId = createTransferId();
+      const targetHostId = getStableTransferHostId(params);
+      reportTransferEvent({
+        type: "queued", transferId, origin: "agent", background: true,
+        direction: "upload", sourcePath: params.localPath, targetPath: params.remotePath,
+        sessionId: params.sessionId, startedAt: Date.now(),
+        targetHostId,
+      });
+      try {
+        const sender = {
+          send(channel, payload) {
+            if (channel === "netcatty:transfer:progress") {
+              reportTransferEvent({ type: "progress", ...payload });
+            } else if (channel === "netcatty:transfer:started") {
+              reportTransferEvent({ type: "started", ...payload });
+            } else if (channel === "netcatty:transfer:queued") {
+              reportTransferEvent({ type: "queued", ...payload });
+            } else if (channel === "netcatty:transfer:paused") {
+              reportTransferEvent({ type: "paused", ...payload });
+            } else if (channel === "netcatty:transfer:cancelled") {
+              reportTransferEvent({ type: "cancelled", ...payload, endedAt: Date.now() });
+            }
+          },
+        };
+        const useOuterAdmissionUpload = !!(
+          shouldProxySessionBackedSftpToWorker(params) && transferBridge?.runAdmittedTransfer
+        );
+        const runUpload = (skipAdmission) => withSessionBackedSftp(
+          params,
+          (payload) => transferBridge
+            ? transferBridge.startTransfer({ sender }, {
+                transferId,
+                sourcePath: params.localPath,
+                targetPath: params.remotePath,
+                sourceType: "local",
+                targetType: "sftp",
+                targetSftpId: payload.sftpId,
+                targetHostId,
+                resumable: true,
+                globalConcurrency: transferBridge.getGlobalTransferConcurrency?.(),
+                // Only skip when outer runAdmittedTransfer already owns the slot.
+                skipAdmission: skipAdmission === true,
+              })
+            : sftpBridge.uploadLocalToSftp(null, payload),
+          {
+            timeoutMs: commandTimeoutMs,
+            operationName: "SFTP upload",
+            workerChannel: transferBridge ? "netcatty:transfer:start" : "netcatty:sftp:uploadLocal",
+            buildWorkerPayload: transferBridge ? (_workerParams, sftpId) => ({
+              transferId,
+              sourcePath: params.localPath,
+              targetPath: params.remotePath,
+              sourceType: "local",
+              targetType: "sftp",
+              targetSftpId: sftpId,
+              targetHostId,
+              resumable: true,
+              skipAdmission: true,
+            }) : undefined,
+          },
+        );
+        const result = await (
+          useOuterAdmissionUpload
+            ? transferBridge.runAdmittedTransfer(
+                { sender },
+                { transferId, targetHostId, globalConcurrency: transferBridge.getGlobalTransferConcurrency?.() },
+                undefined,
+                () => runUpload(true),
+              )
+            : runUpload(false)
+        );
+        if (result?.cancelled || result?.error === "Transfer cancelled") {
+          reportTransferEvent({ type: "cancelled", transferId, endedAt: Date.now() });
+          return { ok: false, cancelled: true, transferId };
+        }
+        if (result?.error) throw new Error(result.error);
+        reportTransferEvent({ type: "completed", transferId, endedAt: Date.now() });
+        return { ok: true, transferId, ...result };
+      } catch (error) {
+        reportTransferEvent({ type: "failed", transferId, endedAt: Date.now(), error: error?.message || String(error) });
+        throw error;
+      }
     }
     
     async function handleSftpMkdir(params) {

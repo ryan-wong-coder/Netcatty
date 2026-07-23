@@ -9,7 +9,7 @@ const {
 } = require("./transferLimits.cjs");
 
 test("SFTP transfer limits preserve upload safety and the pre-regression download window", () => {
-  assert.equal(UPLOAD_TRANSFER_CONCURRENCY, 4);
+  assert.equal(UPLOAD_TRANSFER_CONCURRENCY, 8);
   assert.equal(DOWNLOAD_TRANSFER_CONCURRENCY, 64);
   assert.equal(FAST_DOWNLOAD_CHANNELS_PER_SESSION, 1);
   // Keep ssh2's default chunk size — larger packets can corrupt uploads on

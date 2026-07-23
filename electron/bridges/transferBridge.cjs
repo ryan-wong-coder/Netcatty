@@ -5,7 +5,8 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const os = require("node:os");
+const crypto = require("node:crypto");
+const tempDirBridge = require("./tempDirBridge.cjs");
 const { encodePathForSession, ensureRemoteDirForSession, requireSftpChannel, resolveEncodingForRequest } = require("./sftpBridge.cjs");
 const { isScpModeClient, getScpBackendForClient } = require("./sftpBridge/scpBackend.cjs");
 const {
@@ -69,6 +70,210 @@ async function ensureLocalDir(dir) {
   }
 }
 
+function buildRemoteTransferStagePath(targetPath, transferId) {
+  const dir = path.posix.dirname(targetPath);
+  const base = path.posix.basename(targetPath);
+  const safeId = String(transferId).replace(/[^A-Za-z0-9_-]/g, "_");
+  return path.posix.join(dir, `.${base}.netcatty-${safeId}.part`);
+}
+
+/**
+ * Reconcile a claimed resume offset with durable staged bytes.
+ *
+ * Progress events update checkpointBytes as soon as data is handed to the write
+ * stream — not when those bytes are fully flushed to disk/remote. After a hard
+ * app quit the UI-persisted checkpoint is almost always ahead of the .part file,
+ * so exact-size equality would reject resume ~100% of the time. Disk/remote size
+ * is the source of truth for how far we can safely continue.
+ *
+ * Returns the safe resume offset (0 when the staged file is missing/unusable).
+ */
+async function resolveLocalResumeCheckpoint(filePath, claimedCheckpoint) {
+  const claimed = Math.max(0, Number(claimedCheckpoint) || 0);
+  if (!claimed) return 0;
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return 0;
+    // Never resume past durable bytes. If the file is larger than the claim,
+    // keep the claim — the write stream overwrites from that offset.
+    return Math.min(claimed, Math.max(0, Number(stat.size) || 0));
+  } catch (error) {
+    if (error?.code === "ENOENT") return 0;
+    throw new Error(`Resume safety check failed for local temporary file: ${error.message || String(error)}`);
+  }
+}
+
+async function resolveRemoteResumeCheckpoint(client, sftpId, filePath, encoding, claimedCheckpoint) {
+  const claimed = Math.max(0, Number(claimedCheckpoint) || 0);
+  if (!claimed) return 0;
+  try {
+    const stat = isScpModeClient(client)
+      ? await getScpBackendForClient(client).stat(filePath, { encoding })
+      : await client.stat(encodePathForSession(sftpId, filePath, encoding));
+    return Math.min(claimed, Math.max(0, Number(stat?.size) || 0));
+  } catch (error) {
+    const message = error?.message || String(error);
+    // Missing remote .part after kill/crash — start over instead of blocking forever.
+    if (
+      error?.code === "ENOENT"
+      || error?.code === 2
+      || /no such file|ENOENT|not found|does not exist/i.test(message)
+    ) {
+      return 0;
+    }
+    throw new Error(`Resume safety check failed for remote temporary file: ${message}`);
+  }
+}
+
+async function hashReadable(readable) {
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of readable) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+function hashLocalPrefix(filePath, bytes) {
+  if (!bytes) return Promise.resolve(null);
+  return hashReadable(fs.createReadStream(filePath, { start: 0, end: bytes - 1 }));
+}
+
+function hashLocalFile(filePath) {
+  return hashReadable(fs.createReadStream(filePath));
+}
+
+async function hashRemoteFile(client, sftpId, filePath, encoding) {
+  if (isScpModeClient(client)) return null;
+  const sshClient = client?.client;
+  if (sshClient && typeof sshClient.exec === "function") {
+    const escapedPath = String(filePath).replace(/'/g, "'\\''");
+    const digest = await new Promise((resolve, reject) => {
+      sshClient.exec(`sha256sum -- '${escapedPath}'`, (error, stream) => {
+        if (error) return reject(error);
+        let stdout = "";
+        let stderr = "";
+        stream.on("data", (chunk) => { stdout += chunk.toString(); });
+        stream.stderr?.on?.("data", (chunk) => { stderr += chunk.toString(); });
+        stream.on("close", (code) => {
+          const match = stdout.match(/^([a-fA-F0-9]{64})\s/);
+          if (code === 0 && match) resolve(match[1].toLowerCase());
+          else reject(new Error(stderr || "Remote SHA-256 is unavailable"));
+        });
+      });
+    }).catch(() => null);
+    if (digest) return digest;
+  }
+  if (!client.sftp) await requireSftpChannel(client);
+  if (typeof client.sftp?.createReadStream !== "function") {
+    throw new Error("Remote SHA-256 verification is unavailable");
+  }
+  return hashReadable(client.sftp.createReadStream(encodePathForSession(sftpId, filePath, encoding)));
+}
+
+async function computeSourceFingerprint({ sourceType, sourcePath, sourceSftpId, sourceEncoding }) {
+  if (sourceType === "local") return `sha256:${await hashLocalFile(sourcePath)}`;
+  const client = sftpClients.get(sourceSftpId);
+  if (!client) throw new Error("Source SFTP session not found");
+  const digest = await hashRemoteFile(client, sourceSftpId, sourcePath, sourceEncoding);
+  return digest ? `sha256:${digest}` : null;
+}
+
+async function hashRemotePrefix(client, sftpId, filePath, encoding, bytes) {
+  if (!bytes) return null;
+  if (isScpModeClient(client)) return null;
+  await requireSftpChannel(client);
+  const encodedPath = encodePathForSession(sftpId, filePath, encoding);
+  return hashReadable(client.sftp.createReadStream(encodedPath, { start: 0, end: bytes - 1 }));
+}
+
+/**
+ * Cap content re-hash on resume. Full-prefix hashing of multi-MB .part files
+ * over SFTP can take longer than the remaining transfer itself and freezes the
+ * UI at "transferring" with no byte movement (seen after Resume All post-quit).
+ * A leading sample still catches swapped / truncated garbage cheaply.
+ */
+const RESUME_CONTENT_VERIFY_MAX_BYTES = 256 * 1024;
+
+function resumeContentVerifyBytes(checkpoint) {
+  const claimed = Math.max(0, Number(checkpoint) || 0);
+  if (!claimed) return 0;
+  return Math.min(claimed, RESUME_CONTENT_VERIFY_MAX_BYTES);
+}
+
+async function assertMatchingResumeContent(sourceHashPromise, stagedHashPromise) {
+  const [sourceHash, stagedHash] = await Promise.all([sourceHashPromise, stagedHashPromise]);
+  if (sourceHash && stagedHash && sourceHash !== stagedHash) {
+    throw new Error("Resume safety check failed: saved content does not match the source");
+  }
+}
+
+async function promoteLocalTransfer(stagedPath, targetPath) {
+  const token = crypto.randomUUID().replace(/-/g, "");
+  const targetDir = path.dirname(targetPath);
+  const targetBase = path.basename(targetPath);
+  const readyPath = path.join(targetDir, `.${targetBase}.netcatty-${token}.ready`);
+  const backupPath = path.join(targetDir, `.${targetBase}.netcatty-${token}.backup`);
+  let preparedPath = stagedPath;
+  let backedUp = false;
+  try {
+    try {
+      await fs.promises.rename(stagedPath, readyPath);
+    } catch (err) {
+      if (err?.code !== "EXDEV") throw err;
+      await fs.promises.copyFile(stagedPath, readyPath);
+      preparedPath = readyPath;
+    }
+    if (preparedPath !== readyPath) preparedPath = readyPath;
+    try {
+      await fs.promises.rename(targetPath, backupPath);
+      backedUp = true;
+    } catch (err) {
+      if (err?.code !== "ENOENT") throw err;
+    }
+    await fs.promises.rename(readyPath, targetPath);
+    if (backedUp) await fs.promises.unlink(backupPath).catch(() => {});
+    if (stagedPath !== readyPath) await fs.promises.unlink(stagedPath).catch(() => {});
+  } catch (err) {
+    if (backedUp) {
+      await fs.promises.rename(backupPath, targetPath).catch(() => {});
+    }
+    await fs.promises.unlink(readyPath).catch(() => {});
+    throw err;
+  }
+}
+
+async function promoteRemoteTransfer(client, sftpId, stagedPath, targetPath, encoding) {
+  const backupPath = `${targetPath}.netcatty-${crypto.randomUUID().replace(/-/g, "")}.backup`;
+  let backedUp = false;
+  if (isScpModeClient(client)) {
+    const backend = getScpBackendForClient(client);
+    try {
+      await backend.rename(targetPath, backupPath, { encoding });
+      backedUp = true;
+    } catch { /* target may not exist */ }
+    try {
+      await backend.rename(stagedPath, targetPath, { encoding });
+    } catch (err) {
+      if (backedUp) await backend.rename(backupPath, targetPath, { encoding }).catch(() => {});
+      throw err;
+    }
+    if (backedUp) await backend.remove(backupPath, { recursive: false, encoding }).catch(() => {});
+    return;
+  }
+  const encodedStage = encodePathForSession(sftpId, stagedPath, encoding);
+  const encodedTarget = encodePathForSession(sftpId, targetPath, encoding);
+  const encodedBackup = encodePathForSession(sftpId, backupPath, encoding);
+  try {
+    await client.rename(encodedTarget, encodedBackup);
+    backedUp = true;
+  } catch { /* target may not exist */ }
+  try {
+    await client.rename(encodedStage, encodedTarget);
+  } catch (err) {
+    if (backedUp) await client.rename(encodedBackup, encodedTarget).catch(() => {});
+    throw err;
+  }
+  if (backedUp) await client.delete(encodedBackup).catch(() => {});
+}
+
 // ── Transfer performance tuning ──────────────────────────────────────────────
 // Progress IPC throttle: sending too many IPC messages bogs down the event loop
 const PROGRESS_THROTTLE_MS = 100;         // Send IPC at most every 100ms
@@ -85,16 +290,100 @@ let sftpClients = null;
 
 // Active transfers storage
 const activeTransfers = new Map();
+const admittedTransferQueue = [];
+const pausedAdmittedTransfers = new Map();
+/** Transfer ids cancelled before startTransferNow registered them (skipAdmission open window). */
+const pendingCancelTransferIds = new Set();
+const admittedActiveByResource = new Map();
+let admittedTransferLimit = 2;
 const isolatedDownloadChannelPools = new WeakMap();
 // Cache sftpIds where remote cp is known to be unavailable, so we skip
 // repeated failed exec attempts for each file in a multi-file transfer.
 const cpUnavailableSet = new Set();
+
+const {
+  sftpTransferSessionLeaseStore,
+} = require("./sftpTransferSessionLease.cjs");
 
 /**
  * Initialize the transfer bridge with dependencies
  */
 function init(deps) {
   sftpClients = deps.sftpClients;
+}
+
+function listTransferSftpIds(payload = {}) {
+  return [...new Set(
+    [payload.sourceSftpId, payload.targetSftpId].filter((id) => typeof id === "string" && id.length > 0),
+  )];
+}
+
+function acquireTransferSessionLeases(transferId, payload) {
+  const sftpIds = listTransferSftpIds(payload);
+  for (const sftpId of sftpIds) {
+    sftpTransferSessionLeaseStore.acquire(sftpId, transferId);
+  }
+  return sftpIds;
+}
+
+async function hardCloseSftpSession(sftpId) {
+  if (!sftpId) return;
+  // TOCTOU: another transfer may have acquired between shouldHardClose and here.
+  // Re-arm soft-close and abort the force close so we don't kill live work.
+  if (sftpTransferSessionLeaseStore.isHeld(sftpId)) {
+    sftpTransferSessionLeaseStore.markSoftClosed(sftpId);
+    return;
+  }
+  try {
+    const sftpBridge = require("./sftpBridge.cjs");
+    if (typeof sftpBridge.closeSftp === "function") {
+      const result = await sftpBridge.closeSftp(null, { sftpId, force: true });
+      // fileOps may defer if a new lease appeared mid-close.
+      if (result?.deferred) return;
+      return;
+    }
+  } catch (err) {
+    console.warn(`[Transfer] Failed to hard-close leased SFTP session ${sftpId}:`, err?.message || err);
+  }
+  // Fallback if bridge close is unavailable (unit tests with partial mocks).
+  // Re-check again before wiping the client map.
+  if (sftpTransferSessionLeaseStore.isHeld(sftpId)) {
+    sftpTransferSessionLeaseStore.markSoftClosed(sftpId);
+    return;
+  }
+  const client = sftpClients?.get?.(sftpId);
+  if (!client) {
+    sftpTransferSessionLeaseStore.clear(sftpId);
+    return;
+  }
+  try { await client.end?.(); } catch { /* ignore */ }
+  if (sftpTransferSessionLeaseStore.isHeld(sftpId)) {
+    sftpTransferSessionLeaseStore.markSoftClosed(sftpId);
+    return;
+  }
+  sftpClients.delete(sftpId);
+  sftpTransferSessionLeaseStore.clear(sftpId);
+}
+
+function releaseTransferSessionLeases(transferId, sftpIds) {
+  for (const sftpId of sftpIds || []) {
+    const result = sftpTransferSessionLeaseStore.release(sftpId, transferId);
+    if (result.shouldHardClose) {
+      void hardCloseSftpSession(sftpId);
+    }
+  }
+}
+
+function setGlobalTransferConcurrency(limit) {
+  const normalized = Number(limit);
+  if (Number.isInteger(normalized) && normalized >= 1 && normalized <= 16) {
+    admittedTransferLimit = normalized;
+  }
+  return admittedTransferLimit;
+}
+
+function getGlobalTransferConcurrency() {
+  return admittedTransferLimit;
 }
 
 /**
@@ -257,6 +546,8 @@ async function acquireIsolatedDownloadChannel(client, transfer) {
  */
 async function uploadFile(localPath, remotePath, client, fileSize, transfer, sendProgress, encoding = "utf-8") {
   if (isScpModeClient(client)) {
+    transfer.pauseSupported = false;
+    transfer.pauseUnavailableReason = "Pause is unavailable for SCP transfers";
     const backend = getScpBackendForClient(client);
     await backend.uploadFile(localPath, remotePath, {
       fileSize,
@@ -270,9 +561,10 @@ async function uploadFile(localPath, remotePath, client, fileSize, transfer, sen
   await requireSftpChannel(client);
   const sftp = client.sftp;
   if (!sftp) throw new Error("SFTP client not ready");
+  transfer.pauseSupported = Boolean(transfer.resumable);
 
   // Prefer fastPut on an isolated SFTP channel so cancellation can abort just this transfer.
-  if (!client.__netcattySudoMode) {
+  if (!transfer.resumable && !client.__netcattySudoMode) {
     let fastSftp = null;
     try {
       fastSftp = await openIsolatedSftpChannel(client);
@@ -338,13 +630,22 @@ async function uploadFile(localPath, remotePath, client, fileSize, transfer, sen
   // 'finish' event. Treat a successful close after the complete local read as
   // completion, then verify the persisted remote size below.
   await new Promise((resolve, reject) => {
-    const readStream = fs.createReadStream(localPath, { highWaterMark: TRANSFER_CHUNK_SIZE });
-    const writeStream = sftp.createWriteStream(remotePath, { highWaterMark: TRANSFER_CHUNK_SIZE });
-    let transferred = 0;
+    const checkpoint = Math.max(0, Math.min(transfer.checkpointBytes || 0, fileSize));
+    const readStream = fs.createReadStream(localPath, { highWaterMark: TRANSFER_CHUNK_SIZE, start: checkpoint });
+    const writeStream = sftp.createWriteStream(remotePath, {
+      highWaterMark: TRANSFER_CHUNK_SIZE,
+      flags: checkpoint > 0 ? "r+" : "w",
+      start: checkpoint,
+    });
+    let transferred = checkpoint;
     let settled = false;
 
     transfer.readStream = readStream;
     transfer.writeStream = writeStream;
+    // Honor a pause that raced stream open (fingerprint / dir ensure window).
+    if (transfer.paused) {
+      try { readStream.pause(); } catch { }
+    }
 
     const cleanup = (err) => {
       if (settled) return;
@@ -389,6 +690,8 @@ async function uploadFile(localPath, remotePath, client, fileSize, transfer, sen
  */
 async function downloadFile(remotePath, localPath, client, fileSize, transfer, sendProgress, encoding = "utf-8") {
   if (isScpModeClient(client)) {
+    transfer.pauseSupported = false;
+    transfer.pauseUnavailableReason = "Pause is unavailable for SCP transfers";
     const backend = getScpBackendForClient(client);
     await backend.downloadFile(remotePath, localPath, {
       fileSize,
@@ -402,9 +705,10 @@ async function downloadFile(remotePath, localPath, client, fileSize, transfer, s
   await requireSftpChannel(client);
   const sftp = client.sftp;
   if (!sftp) throw new Error("SFTP client not ready");
+  transfer.pauseSupported = Boolean(transfer.resumable);
 
   // Prefer fastGet on an isolated SFTP channel so cancellation can abort just this transfer.
-  if (!client.__netcattySudoMode) {
+  if (!transfer.resumable && !client.__netcattySudoMode) {
     const fastSftp = await acquireIsolatedDownloadChannel(client, transfer);
     if (transfer.cancelled) throw new Error("Transfer cancelled");
 
@@ -467,13 +771,21 @@ async function downloadFile(remotePath, localPath, client, fileSize, transfer, s
 
   // Fallback: sequential stream piping
   return new Promise((resolve, reject) => {
-    const readStream = sftp.createReadStream(remotePath, { highWaterMark: TRANSFER_CHUNK_SIZE });
-    const writeStream = fs.createWriteStream(localPath, { highWaterMark: TRANSFER_CHUNK_SIZE });
-    let transferred = 0;
+    const checkpoint = Math.max(0, Math.min(transfer.checkpointBytes || 0, fileSize));
+    const readStream = sftp.createReadStream(remotePath, { highWaterMark: TRANSFER_CHUNK_SIZE, start: checkpoint });
+    const writeStream = fs.createWriteStream(localPath, {
+      highWaterMark: TRANSFER_CHUNK_SIZE,
+      flags: checkpoint > 0 ? "r+" : "w",
+      start: checkpoint,
+    });
+    let transferred = checkpoint;
     let finished = false;
 
     transfer.readStream = readStream;
     transfer.writeStream = writeStream;
+    if (transfer.paused) {
+      try { readStream.pause(); } catch { }
+    }
 
     const cleanup = (err) => {
       if (finished) return;
@@ -497,8 +809,13 @@ async function downloadFile(remotePath, localPath, client, fileSize, transfer, s
     readStream.on('error', cleanup);
     writeStream.on('error', cleanup);
     writeStream.on('finish', () => {
-      if (transfer.cancelled) cleanup(new Error('Transfer cancelled'));
-      else cleanup(null);
+      if (transfer.cancelled) {
+        cleanup(new Error('Transfer cancelled'));
+      } else if (!readStream.readableEnded || transferred !== fileSize) {
+        cleanup(new Error('Download stream finished before the full source was received'));
+      } else {
+        cleanup(null);
+      }
     });
     writeStream.on('close', () => {
       if (transfer.cancelled) cleanup(new Error('Transfer cancelled'));
@@ -510,7 +827,7 @@ async function downloadFile(remotePath, localPath, client, fileSize, transfer, s
 /**
  * Start a file transfer
  */
-async function startTransfer(event, payload, onProgress) {
+async function startTransferNow(event, payload, onProgress) {
   const {
     transferId,
     sourcePath,
@@ -526,14 +843,45 @@ async function startTransfer(event, payload, onProgress) {
   } = payload;
   const sender = event.sender;
 
-  const transfer = { cancelled: false, readStream: null, writeStream: null, abort: null };
+  // Cancel may have won the race during open/reconnect before we register.
+  if (transferId && pendingCancelTransferIds.has(transferId)) {
+    pendingCancelTransferIds.delete(transferId);
+    sender.send?.("netcatty:transfer:cancelled", { transferId });
+    return { transferId, error: "Transfer cancelled", cancelled: true };
+  }
+
+  sender.send?.("netcatty:transfer:started", { transferId });
+
+  const transfer = {
+    cancelled: false,
+    paused: false,
+    pauseSupported: false,
+    pauseUnavailableReason: "This transfer cannot be paused safely",
+    resumable: payload.resumable === true,
+    checkpointBytes: Math.max(0, Number(payload.checkpointBytes) || 0),
+    resumeStage: payload.resumeStage || 'direct',
+    downloadCheckpointBytes: Math.max(0, Number(payload.downloadCheckpointBytes) || 0),
+    uploadCheckpointBytes: Math.max(0, Number(payload.uploadCheckpointBytes) || 0),
+    sourceFingerprint: payload.sourceFingerprint,
+    sourceType,
+    sourcePath,
+    sourceSftpId,
+    sourceEncoding,
+    readStream: null,
+    writeStream: null,
+    abort: null,
+  };
   activeTransfers.set(transferId, transfer);
+  // Hold panel/agent SFTP sessions for the full transfer lifetime (including
+  // pause). Panel close becomes a soft-close until we release these leases.
+  const leasedSftpIds = acquireTransferSessionLeases(transferId, payload);
+  transfer.leasedSftpIds = leasedSftpIds;
   const transferCreatedAt = Date.now();
 
   // ── Progress/speed tracking ──────────────────────────────────────────────
   // Keep progress monotonic and compute speed from a strict sliding window.
-  const speedSamples = [{ time: transferCreatedAt, bytes: 0 }]; // [{ time, bytes }]
-  let lastObservedTransferred = 0;
+  const speedSamples = [{ time: transferCreatedAt, bytes: transfer.checkpointBytes }]; // [{ time, bytes }]
+  let lastObservedTransferred = transfer.checkpointBytes;
   let lastObservedTotal = Math.max(0, totalBytes || 0);
   let lastProgressSentTime = 0;
   let lastProgressSentBytes = -1;
@@ -586,18 +934,41 @@ async function startTransfer(event, payload, onProgress) {
     ) {
       lastProgressSentTime = now;
       lastProgressSentBytes = transferred;
-      sender.send("netcatty:transfer:progress", { transferId, transferred, speed, totalBytes: total });
+      sender.send("netcatty:transfer:progress", {
+        transferId,
+        transferred,
+        speed,
+        totalBytes: total,
+        checkpointBytes: transfer.checkpointBytes,
+        resumeStage: transfer.resumeStage,
+        downloadCheckpointBytes: transfer.downloadCheckpointBytes,
+        uploadCheckpointBytes: transfer.uploadCheckpointBytes,
+        sourceFingerprint: transfer.sourceFingerprint,
+        resumable: transfer.resumable && transfer.pauseSupported,
+        // Only surface a reason when pause is actually unavailable; never keep
+        // the startup default once pauseSupported is true.
+        pauseUnavailableReason: transfer.pauseSupported
+          ? undefined
+          : transfer.pauseUnavailableReason,
+      });
     }
   };
 
+  let leasesReleased = false;
   const cleanupTransfer = () => {
     activeTransfers.delete(transferId);
+    if (!leasesReleased) {
+      leasesReleased = true;
+      releaseTransferSessionLeases(transferId, transfer.leasedSftpIds || leasedSftpIds);
+      transfer.leasedSftpIds = [];
+    }
   };
 
-  const sendProgress = (transferred, total) => {
+  const sendProgress = (transferred, total, options = {}) => {
     if (transfer.cancelled) return;
 
     const now = Date.now();
+    const force = options.force === true;
 
     let normalizedTotal = Number.isFinite(total) && total > 0 ? total : 0;
     if (normalizedTotal === 0) {
@@ -606,13 +977,19 @@ async function startTransfer(event, payload, onProgress) {
     normalizedTotal = Math.max(normalizedTotal, lastObservedTotal, 0);
 
     let normalizedTransferred = Number.isFinite(transferred) && transferred > 0 ? transferred : 0;
-    if (normalizedTotal > 0) {
+    // Explicit force (resume clamp / restart) may lower the durable offset.
+    if (!force) {
+      if (normalizedTotal > 0) {
+        normalizedTransferred = Math.min(normalizedTransferred, normalizedTotal);
+      }
+      normalizedTransferred = Math.max(normalizedTransferred, lastObservedTransferred);
+    } else if (normalizedTotal > 0) {
       normalizedTransferred = Math.min(normalizedTransferred, normalizedTotal);
     }
-    normalizedTransferred = Math.max(normalizedTransferred, lastObservedTransferred);
 
     lastObservedTransferred = normalizedTransferred;
     lastObservedTotal = normalizedTotal;
+    transfer.checkpointBytes = normalizedTransferred;
 
     const lastSample = speedSamples[speedSamples.length - 1];
     if (!lastSample || lastSample.bytes !== normalizedTransferred || now - lastSample.time >= PROGRESS_THROTTLE_MS) {
@@ -625,7 +1002,7 @@ async function startTransfer(event, payload, onProgress) {
       onProgress(normalizedTransferred, normalizedTotal, speed);
     }
 
-    emitProgress(now, normalizedTransferred, normalizedTotal, speed);
+    emitProgress(now, normalizedTransferred, normalizedTotal, speed, force);
   };
 
   const sendComplete = () => {
@@ -662,7 +1039,37 @@ async function startTransfer(event, payload, onProgress) {
       }
     }
 
-    sendProgress(0, fileSize);
+    const sourceClient = sourceType === "sftp" ? sftpClients.get(sourceSftpId) : null;
+    const targetClient = targetType === "sftp" ? sftpClients.get(targetSftpId) : null;
+    if ((sourceClient && isScpModeClient(sourceClient)) || (targetClient && isScpModeClient(targetClient))) {
+      transfer.resumable = false;
+      transfer.pauseSupported = false;
+      transfer.pauseUnavailableReason = "Pause is unavailable for SCP transfers; cancel and retry from the beginning instead";
+    } else {
+      transfer.pauseSupported = Boolean(transfer.resumable);
+      // Clear the default "cannot be paused safely" once we know pause works.
+      if (transfer.pauseSupported) {
+        transfer.pauseUnavailableReason = undefined;
+      }
+    }
+
+    if (transfer.resumable && transfer.sourceFingerprint) {
+      const currentSourceFingerprint = await computeSourceFingerprint({
+        sourceType,
+        sourcePath,
+        sourceSftpId,
+        sourceEncoding,
+      });
+      if (
+        transfer.sourceFingerprint
+        && currentSourceFingerprint
+        && transfer.sourceFingerprint !== currentSourceFingerprint
+      ) {
+        throw new Error("Resume safety check failed: the source file has changed");
+      }
+    }
+
+    sendProgress(transfer.checkpointBytes, fileSize, { force: true });
 
     if (sourceType === 'local' && targetType === 'sftp') {
       const client = sftpClients.get(targetSftpId);
@@ -671,9 +1078,27 @@ async function startTransfer(event, payload, onProgress) {
       const dir = path.dirname(targetPath).replace(/\\/g, '/');
       try { await ensureRemoteDirForSession(targetSftpId, dir, targetEncoding); } catch { }
 
+      const uploadTargetPath = transfer.resumable
+        ? buildRemoteTransferStagePath(targetPath, transferId)
+        : targetPath;
+      transfer.stagedRemote = transfer.resumable
+        ? { client, sftpId: targetSftpId, path: uploadTargetPath, encoding: targetEncoding }
+        : null;
+      // Clamp UI/progress checkpoint to durable remote .part size (crash-safe).
+      transfer.checkpointBytes = await resolveRemoteResumeCheckpoint(
+        client, targetSftpId, uploadTargetPath, targetEncoding, transfer.checkpointBytes,
+      );
+      sendProgress(transfer.checkpointBytes, fileSize, { force: true });
+      {
+        const verifyBytes = resumeContentVerifyBytes(transfer.checkpointBytes);
+        await assertMatchingResumeContent(
+          hashLocalPrefix(sourcePath, verifyBytes),
+          hashRemotePrefix(client, targetSftpId, uploadTargetPath, targetEncoding, verifyBytes),
+        );
+      }
       const encodedTargetPath = isScpModeClient(client)
-        ? targetPath
-        : encodePathForSession(targetSftpId, targetPath, targetEncoding);
+        ? uploadTargetPath
+        : encodePathForSession(targetSftpId, uploadTargetPath, targetEncoding);
       await uploadFile(
         sourcePath,
         encodedTargetPath,
@@ -683,6 +1108,10 @@ async function startTransfer(event, payload, onProgress) {
         sendProgress,
         resolveEncodingForRequest(targetSftpId, targetEncoding),
       );
+      if (transfer.resumable) {
+        await promoteRemoteTransfer(client, targetSftpId, uploadTargetPath, targetPath, targetEncoding);
+        transfer.stagedRemote = null;
+      }
 
     } else if (sourceType === 'sftp' && targetType === 'local') {
       const client = sftpClients.get(sourceSftpId);
@@ -694,28 +1123,79 @@ async function startTransfer(event, payload, onProgress) {
       const encodedSourcePath = isScpModeClient(client)
         ? sourcePath
         : encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
+      const downloadTargetPath = transfer.resumable
+        ? tempDirBridge.getTransferTempFilePath(transferId, path.basename(targetPath))
+        : targetPath;
+      transfer.stagedLocalPath = transfer.resumable ? downloadTargetPath : null;
+      transfer.checkpointBytes = await resolveLocalResumeCheckpoint(
+        downloadTargetPath, transfer.checkpointBytes,
+      );
+      sendProgress(transfer.checkpointBytes, fileSize, { force: true });
+      {
+        const verifyBytes = resumeContentVerifyBytes(transfer.checkpointBytes);
+        await assertMatchingResumeContent(
+          hashRemotePrefix(client, sourceSftpId, sourcePath, sourceEncoding, verifyBytes),
+          hashLocalPrefix(downloadTargetPath, verifyBytes),
+        );
+      }
       await downloadFile(
         encodedSourcePath,
-        targetPath,
+        downloadTargetPath,
         client,
         fileSize,
         transfer,
         sendProgress,
         resolveEncodingForRequest(sourceSftpId, sourceEncoding),
       );
+      if (transfer.resumable) {
+        const stagedStat = await fs.promises.stat(downloadTargetPath);
+        if (stagedStat.size !== fileSize) {
+          throw new Error(`Downloaded file size mismatch: expected ${fileSize}, got ${stagedStat.size}`);
+        }
+        await promoteLocalTransfer(downloadTargetPath, targetPath);
+        transfer.stagedLocalPath = null;
+      }
 
     } else if (sourceType === 'local' && targetType === 'local') {
       const dir = path.dirname(targetPath);
       await ensureLocalDir(dir);
+      const localTargetPath = transfer.resumable
+        ? tempDirBridge.getTransferTempFilePath(transferId, path.basename(targetPath))
+        : targetPath;
+      transfer.stagedLocalPath = transfer.resumable ? localTargetPath : null;
+      const checkpoint = Math.max(
+        0,
+        Math.min(
+          await resolveLocalResumeCheckpoint(localTargetPath, transfer.checkpointBytes || 0),
+          fileSize,
+        ),
+      );
+      transfer.checkpointBytes = checkpoint;
+      sendProgress(checkpoint, fileSize, { force: true });
+      {
+        const verifyBytes = resumeContentVerifyBytes(checkpoint);
+        await assertMatchingResumeContent(
+          hashLocalPrefix(sourcePath, verifyBytes),
+          hashLocalPrefix(localTargetPath, verifyBytes),
+        );
+      }
 
       await new Promise((resolve, reject) => {
-        const readStream = fs.createReadStream(sourcePath, { highWaterMark: TRANSFER_CHUNK_SIZE });
-        const writeStream = fs.createWriteStream(targetPath, { highWaterMark: TRANSFER_CHUNK_SIZE });
-        let transferred = 0;
+        transfer.pauseSupported = Boolean(transfer.resumable);
+        const readStream = fs.createReadStream(sourcePath, { highWaterMark: TRANSFER_CHUNK_SIZE, start: checkpoint });
+        const writeStream = fs.createWriteStream(localTargetPath, {
+          highWaterMark: TRANSFER_CHUNK_SIZE,
+          flags: checkpoint > 0 ? "r+" : "w",
+          start: checkpoint,
+        });
+        let transferred = checkpoint;
         let finished = false;
 
         transfer.readStream = readStream;
         transfer.writeStream = writeStream;
+        if (transfer.paused) {
+          try { readStream.pause(); } catch { }
+        }
 
         const cleanup = (err) => {
           if (finished) return;
@@ -739,14 +1219,23 @@ async function startTransfer(event, payload, onProgress) {
         readStream.on('error', cleanup);
         writeStream.on('error', cleanup);
         writeStream.on('finish', () => {
-          if (transfer.cancelled) cleanup(new Error('Transfer cancelled'));
-          else cleanup(null);
+          if (transfer.cancelled) {
+            cleanup(new Error('Transfer cancelled'));
+          } else if (!readStream.readableEnded || transferred !== fileSize) {
+            cleanup(new Error('Local copy finished before the full source was read'));
+          } else {
+            cleanup(null);
+          }
         });
         writeStream.on('close', () => {
           if (transfer.cancelled) cleanup(new Error('Transfer cancelled'));
         });
         readStream.pipe(writeStream);
       });
+      if (transfer.resumable && transfer.stagedLocalPath) {
+        await promoteLocalTransfer(transfer.stagedLocalPath, targetPath);
+        transfer.stagedLocalPath = null;
+      }
 
     } else if (sourceType === 'sftp' && targetType === 'sftp') {
       // Try same-host optimization first: remote cp via SSH exec.
@@ -754,7 +1243,8 @@ async function startTransfer(event, payload, onProgress) {
       let sameHostDone = false;
       const resolvedSourceEnc = sourceSftpId ? resolveEncodingForRequest(sourceSftpId, sourceEncoding) : sourceEncoding;
       const resolvedTargetEnc = targetSftpId ? resolveEncodingForRequest(targetSftpId, targetEncoding) : targetEncoding;
-      if (sameHost
+      if (!transfer.resumable
+        && sameHost
         && (!resolvedSourceEnc || resolvedSourceEnc === 'utf-8')
         && (!resolvedTargetEnc || resolvedTargetEnc === 'utf-8')
         && !cpUnavailableSet.has(sourceSftpId)) {
@@ -787,28 +1277,55 @@ async function startTransfer(event, payload, onProgress) {
       }
 
       if (!sameHostDone) {
-        const tempPath = path.join(os.tmpdir(), `netcatty-transfer-${transferId}`);
+        const tempPath = tempDirBridge.getTransferTempFilePath(transferId, path.basename(sourcePath));
+        transfer.stagedLocalPath = tempPath;
 
         const sourceClient = sftpClients.get(sourceSftpId);
         const targetClient = sftpClients.get(targetSftpId);
         if (!sourceClient) throw new Error("Source SFTP session not found");
         if (!targetClient) throw new Error("Target SFTP session not found");
 
-        const encodedSourcePath = isScpModeClient(sourceClient)
-          ? sourcePath
-          : encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
-        const downloadProgress = (transferred) => {
-          sendProgress(Math.floor(transferred / 2), fileSize);
-        };
-        await downloadFile(
-          encodedSourcePath,
-          tempPath,
-          sourceClient,
-          fileSize,
-          transfer,
-          downloadProgress,
-          resolveEncodingForRequest(sourceSftpId, sourceEncoding),
-        );
+        if (transfer.resumeStage !== 'upload') {
+          transfer.resumeStage = 'download';
+          transfer.downloadCheckpointBytes = await resolveLocalResumeCheckpoint(
+            tempPath, transfer.downloadCheckpointBytes,
+          );
+          transfer.checkpointBytes = transfer.downloadCheckpointBytes;
+          lastObservedTransferred = Math.floor(transfer.downloadCheckpointBytes / 2);
+          // sendProgress stores overall UI bytes on checkpointBytes — restore the
+          // stage offset afterward so downloadFile resumes at the durable point.
+          sendProgress(lastObservedTransferred, fileSize, { force: true });
+          transfer.checkpointBytes = transfer.downloadCheckpointBytes;
+          const encodedSourcePath = isScpModeClient(sourceClient)
+            ? sourcePath
+            : encodePathForSession(sourceSftpId, sourcePath, sourceEncoding);
+          {
+            const verifyBytes = resumeContentVerifyBytes(transfer.downloadCheckpointBytes);
+            await assertMatchingResumeContent(
+              hashRemotePrefix(sourceClient, sourceSftpId, sourcePath, sourceEncoding, verifyBytes),
+              hashLocalPrefix(tempPath, verifyBytes),
+            );
+          }
+          const downloadProgress = (transferred) => {
+            transfer.downloadCheckpointBytes = transferred;
+            sendProgress(Math.floor(transferred / 2), fileSize);
+            transfer.checkpointBytes = transferred;
+          };
+          await downloadFile(
+            encodedSourcePath,
+            tempPath,
+            sourceClient,
+            fileSize,
+            transfer,
+            downloadProgress,
+            resolveEncodingForRequest(sourceSftpId, sourceEncoding),
+          );
+        }
+
+        const localStageStat = await fs.promises.stat(tempPath);
+        if (localStageStat.size !== fileSize) {
+          throw new Error(`Server copy download size mismatch: expected ${fileSize}, got ${localStageStat.size}`);
+        }
 
         if (transfer.cancelled) {
           try { await fs.promises.unlink(tempPath); } catch { }
@@ -818,11 +1335,38 @@ async function startTransfer(event, payload, onProgress) {
         const dir = path.dirname(targetPath).replace(/\\/g, '/');
         try { await ensureRemoteDirForSession(targetSftpId, dir, targetEncoding); } catch { }
 
+        transfer.resumeStage = 'upload';
+        const uploadTargetPath = transfer.resumable
+          ? buildRemoteTransferStagePath(targetPath, transferId)
+          : targetPath;
+        transfer.uploadCheckpointBytes = await resolveRemoteResumeCheckpoint(
+          targetClient, targetSftpId, uploadTargetPath, targetEncoding, transfer.uploadCheckpointBytes,
+        );
+        transfer.checkpointBytes = transfer.uploadCheckpointBytes;
+        // Overall progress for R2R upload stage is ~50% + upload/2.
+        lastObservedTransferred = Math.floor(fileSize / 2)
+          + Math.floor(transfer.uploadCheckpointBytes / 2);
+        // sendProgress stores overall UI bytes on checkpointBytes — restore the
+        // stage offset afterward so uploadFile resumes at the durable point.
+        sendProgress(lastObservedTransferred, fileSize, { force: true });
+        transfer.checkpointBytes = transfer.uploadCheckpointBytes;
+        transfer.stagedRemote = transfer.resumable
+          ? { client: targetClient, sftpId: targetSftpId, path: uploadTargetPath, encoding: targetEncoding }
+          : null;
+        {
+          const verifyBytes = resumeContentVerifyBytes(transfer.uploadCheckpointBytes);
+          await assertMatchingResumeContent(
+            hashLocalPrefix(tempPath, verifyBytes),
+            hashRemotePrefix(targetClient, targetSftpId, uploadTargetPath, targetEncoding, verifyBytes),
+          );
+        }
         const encodedTargetPath = isScpModeClient(targetClient)
-          ? targetPath
-          : encodePathForSession(targetSftpId, targetPath, targetEncoding);
+          ? uploadTargetPath
+          : encodePathForSession(targetSftpId, uploadTargetPath, targetEncoding);
         const uploadProgress = (transferred) => {
+          transfer.uploadCheckpointBytes = transferred;
           sendProgress(Math.floor(fileSize / 2) + Math.floor(transferred / 2), fileSize);
+          transfer.checkpointBytes = transferred;
         };
         await uploadFile(
           tempPath,
@@ -833,8 +1377,13 @@ async function startTransfer(event, payload, onProgress) {
           uploadProgress,
           resolveEncodingForRequest(targetSftpId, targetEncoding),
         );
+        if (transfer.resumable) {
+          await promoteRemoteTransfer(targetClient, targetSftpId, uploadTargetPath, targetPath, targetEncoding);
+          transfer.stagedRemote = null;
+        }
 
         try { await fs.promises.unlink(tempPath); } catch { }
+        transfer.stagedLocalPath = null;
       }
 
     } else {
@@ -847,6 +1396,19 @@ async function startTransfer(event, payload, onProgress) {
     return { transferId, totalBytes: fileSize };
   } catch (err) {
     if (err.message === 'Transfer cancelled') {
+      if (transfer.stagedLocalPath) {
+        try { await fs.promises.unlink(transfer.stagedLocalPath); } catch { }
+      }
+      if (transfer.stagedRemote) {
+        const staged = transfer.stagedRemote;
+        try {
+          if (isScpModeClient(staged.client)) {
+            await getScpBackendForClient(staged.client).remove(staged.path, { recursive: false, encoding: staged.encoding });
+          } else {
+            await staged.client.delete(encodePathForSession(staged.sftpId, staged.path, staged.encoding));
+          }
+        } catch { }
+      }
       cleanupTransfer();
       sender.send("netcatty:transfer:cancelled", { transferId });
     } else {
@@ -856,14 +1418,148 @@ async function startTransfer(event, payload, onProgress) {
   }
 }
 
+function getAdmissionResourceKeys(payload) {
+  const keys = [
+    payload?.sourceHostId ? `host:${payload.sourceHostId}` : payload?.sourceSftpId ? `session:${payload.sourceSftpId}` : null,
+    payload?.targetHostId ? `host:${payload.targetHostId}` : payload?.targetSftpId ? `session:${payload.targetSftpId}` : null,
+  ].filter(Boolean);
+  return [...new Set(keys.length > 0 ? keys : ["local"])];
+}
+
+function canAdmitTransfer(job) {
+  return job.resourceKeys.every((key) => (admittedActiveByResource.get(key) || 0) < admittedTransferLimit);
+}
+
+function adjustAdmittedResources(job, delta) {
+  for (const key of job.resourceKeys) {
+    const next = (admittedActiveByResource.get(key) || 0) + delta;
+    if (next > 0) admittedActiveByResource.set(key, next);
+    else admittedActiveByResource.delete(key);
+  }
+}
+
+function pumpAdmittedTransfers() {
+  while (admittedTransferQueue.length > 0) {
+    const runnableIndex = admittedTransferQueue.findIndex(canAdmitTransfer);
+    if (runnableIndex < 0) return;
+    const [job] = admittedTransferQueue.splice(runnableIndex, 1);
+    if (!job) return;
+    adjustAdmittedResources(job, 1);
+    void job.run()
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        adjustAdmittedResources(job, -1);
+        pumpAdmittedTransfers();
+      });
+  }
+}
+
+function findQueuedTransfer(transferId) {
+  const index = admittedTransferQueue.findIndex((job) => job.payload?.transferId === transferId);
+  return index === -1 ? null : { index, job: admittedTransferQueue[index] };
+}
+
+function pauseQueuedTransfer(transferId) {
+  const queued = findQueuedTransfer(transferId);
+  if (!queued) return null;
+  admittedTransferQueue.splice(queued.index, 1);
+  pausedAdmittedTransfers.set(transferId, queued.job);
+  // Preserve the resume checkpoint from the payload — never report 0, or the
+  // UI/store will wipe a real checkpoint and restart from byte 0 after restart.
+  const checkpointBytes = Math.max(
+    0,
+    Number(queued.job.payload?.checkpointBytes) || 0,
+    Number(queued.job.payload?.downloadCheckpointBytes) || 0,
+    Number(queued.job.payload?.uploadCheckpointBytes) || 0,
+  );
+  const resumeStage = queued.job.payload?.resumeStage || "direct";
+  queued.job.event?.sender?.send?.("netcatty:transfer:paused", {
+    transferId,
+    checkpointBytes,
+    resumeStage,
+  });
+  return {
+    success: true,
+    checkpointBytes,
+    resumeStage,
+    downloadCheckpointBytes: queued.job.payload?.downloadCheckpointBytes,
+    uploadCheckpointBytes: queued.job.payload?.uploadCheckpointBytes,
+    sourceFingerprint: queued.job.payload?.sourceFingerprint,
+  };
+}
+
+function cancelQueuedTransfer(transferId) {
+  const queued = findQueuedTransfer(transferId);
+  const job = queued?.job ?? pausedAdmittedTransfers.get(transferId);
+  if (!job) return false;
+  if (queued) admittedTransferQueue.splice(queued.index, 1);
+  pausedAdmittedTransfers.delete(transferId);
+  job.event?.sender?.send?.("netcatty:transfer:cancelled", { transferId });
+  job.resolve({ transferId, error: "Transfer cancelled", cancelled: true });
+  return true;
+}
+
+function resumeQueuedTransfer(transferId) {
+  const job = pausedAdmittedTransfers.get(transferId);
+  if (!job) return false;
+  pausedAdmittedTransfers.delete(transferId);
+  admittedTransferQueue.push(job);
+  job.event?.sender?.send?.("netcatty:transfer:queued", { transferId });
+  pumpAdmittedTransfers();
+  return true;
+}
+
+function prioritizeQueuedTransfer(transferId) {
+  const queued = findQueuedTransfer(transferId);
+  if (!queued) return false;
+  admittedTransferQueue.splice(queued.index, 1);
+  admittedTransferQueue.unshift(queued.job);
+  return true;
+}
+
+function runAdmittedTransfer(event, payload, onProgress, runner) {
+  const requestedLimit = Number(payload?.globalConcurrency);
+  if (Number.isInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 16) {
+    setGlobalTransferConcurrency(requestedLimit);
+  }
+  return new Promise((resolve, reject) => {
+    admittedTransferQueue.push({
+      event,
+      payload,
+      resourceKeys: getAdmissionResourceKeys(payload),
+      onProgress,
+      resolve,
+      reject,
+      run: runner ?? (() => startTransferNow(event, payload, onProgress)),
+    });
+    event?.sender?.send?.("netcatty:transfer:queued", { transferId: payload?.transferId });
+    pumpAdmittedTransfers();
+  });
+}
+
+function startTransfer(event, payload, onProgress) {
+  if (payload?.skipAdmission === true) {
+    return startTransferNow(event, payload, onProgress);
+  }
+  return runAdmittedTransfer(event, payload, onProgress);
+}
+
 /**
  * Cancel a transfer
  */
 async function cancelTransfer(event, payload) {
   const { transferId } = payload;
+  if (transferId) pendingCancelTransferIds.add(String(transferId));
+  if (cancelQueuedTransfer(transferId)) {
+    // Queued cancel already settled the job; clear pending so a later retry
+    // with a new open can proceed if the UI reuses the id unexpectedly.
+    pendingCancelTransferIds.delete(String(transferId));
+    return { success: true };
+  }
   const transfer = activeTransfers.get(transferId);
   if (transfer) {
     transfer.cancelled = true;
+    pendingCancelTransferIds.delete(String(transferId));
     if (typeof transfer.abort === "function") {
       try { transfer.abort(); } catch { }
     }
@@ -879,6 +1575,168 @@ async function cancelTransfer(event, payload) {
   return { success: true };
 }
 
+/** Clear a pre-start cancel latch (used when retrying the same transfer id). */
+function clearPendingCancel(transferId) {
+  if (transferId) pendingCancelTransferIds.delete(String(transferId));
+}
+
+async function pauseTransfer(_event, payload) {
+  const queuedResult = pauseQueuedTransfer(payload?.transferId);
+  if (queuedResult) return queuedResult;
+  const transfer = activeTransfers.get(payload?.transferId);
+  if (!transfer) {
+    return { success: false, reason: "Transfer is no longer active" };
+  }
+  if (!transfer.pauseSupported) {
+    return {
+      success: false,
+      reason: transfer.pauseUnavailableReason || "This transfer cannot be paused safely",
+    };
+  }
+  // Refuse until streams (or an abortable fast path) exist — otherwise the UI
+  // latches "paused" while content-verify/fingerprint still runs and then the
+  // stream starts under a paused row.
+  if (
+    !transfer.readStream
+    && !transfer.writeStream
+    && typeof transfer.abort !== "function"
+  ) {
+    return { success: false, reason: "This transfer cannot be paused yet" };
+  }
+  transfer.paused = true;
+  try { transfer.readStream?.pause?.(); } catch { }
+  if (transfer.writeStream?.pending) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 2000);
+      timer.unref?.();
+      transfer.writeStream.once?.('open', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+  if (transfer.writeStream?.writableNeedDrain) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 2000);
+      timer.unref?.();
+      transfer.writeStream.once?.('drain', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+  if (
+    transfer.writeStream
+    && Number.isFinite(transfer.writeStream.bytesWritten)
+    && transfer.writeStream.bytesWritten < transfer.checkpointBytes
+  ) {
+    const deadline = Date.now() + 2000;
+    while (transfer.writeStream.bytesWritten < transfer.checkpointBytes && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    if (transfer.stagedLocalPath) {
+      const stat = await fs.promises.stat(transfer.stagedLocalPath);
+      transfer.checkpointBytes = stat.size;
+    } else if (transfer.stagedRemote) {
+      const staged = transfer.stagedRemote;
+      const stat = isScpModeClient(staged.client)
+        ? await getScpBackendForClient(staged.client).stat(staged.path, { encoding: staged.encoding })
+        : await staged.client.stat(encodePathForSession(staged.sftpId, staged.path, staged.encoding));
+      transfer.checkpointBytes = stat.size;
+    }
+  } catch {
+    transfer.paused = false;
+    try { transfer.readStream?.resume?.(); } catch { }
+    return { success: false, reason: "Could not verify the saved transfer checkpoint" };
+  }
+  if (transfer.resumeStage === 'download') transfer.downloadCheckpointBytes = transfer.checkpointBytes;
+  if (transfer.resumeStage === 'upload') transfer.uploadCheckpointBytes = transfer.checkpointBytes;
+  if (transfer.resumable && !transfer.sourceFingerprint) {
+    try {
+      transfer.sourceFingerprint = await computeSourceFingerprint({
+        sourceType: transfer.sourceType,
+        sourcePath: transfer.sourcePath,
+        sourceSftpId: transfer.sourceSftpId,
+        sourceEncoding: transfer.sourceEncoding,
+      });
+    } catch {
+      transfer.paused = false;
+      try { transfer.readStream?.resume?.(); } catch { }
+      return { success: false, reason: "Could not verify that the source is safe to resume" };
+    }
+  }
+  return {
+    success: true,
+    checkpointBytes: transfer.checkpointBytes || 0,
+    resumeStage: transfer.resumeStage,
+    downloadCheckpointBytes: transfer.downloadCheckpointBytes || 0,
+    uploadCheckpointBytes: transfer.uploadCheckpointBytes || 0,
+    ...(transfer.sourceFingerprint ? { sourceFingerprint: transfer.sourceFingerprint } : {}),
+  };
+}
+
+async function resumeTransfer(_event, payload) {
+  if (resumeQueuedTransfer(payload?.transferId)) return { success: true };
+  const transfer = activeTransfers.get(payload?.transferId);
+  if (!transfer) {
+    return { success: false, reason: "Transfer is no longer active" };
+  }
+  if (!transfer.pauseSupported) {
+    return {
+      success: false,
+      reason: transfer.pauseUnavailableReason || "This transfer cannot be resumed safely",
+    };
+  }
+  transfer.paused = false;
+  try { transfer.readStream?.resume?.(); } catch { }
+  return { success: true };
+}
+
+async function prioritizeTransfer(_event, payload) {
+  return { success: prioritizeQueuedTransfer(payload?.transferId) };
+}
+
+async function cleanupTransferArtifacts(_event, payload) {
+  const transferId = payload?.transferId;
+  if (!transferId) return { success: false };
+  const stageNames = new Set([
+    path.basename(payload.targetPath || "transfer"),
+    path.basename(payload.sourcePath || "transfer"),
+  ]);
+  for (const fileName of stageNames) {
+    const localStage = tempDirBridge.getTransferTempFilePath(transferId, fileName);
+    await fs.promises.rm(localStage, { recursive: true, force: true }).catch(() => {});
+  }
+
+  if (payload.targetSftpId && payload.targetPath) {
+    const client = sftpClients.get(payload.targetSftpId);
+    if (client) {
+      const stagePath = buildRemoteTransferStagePath(payload.targetPath, transferId);
+      try {
+        if (isScpModeClient(client)) {
+          await getScpBackendForClient(client).remove(stagePath, { recursive: false, encoding: payload.targetEncoding });
+        } else {
+          await client.delete(encodePathForSession(payload.targetSftpId, stagePath, payload.targetEncoding));
+        }
+      } catch { /* artifact may not exist */ }
+    }
+  }
+
+  if (payload.stagedTargetPath) {
+    try {
+      if (payload.targetSftpId) {
+        const client = sftpClients.get(payload.targetSftpId);
+        if (client) await client.rmdir(encodePathForSession(payload.targetSftpId, payload.stagedTargetPath, payload.targetEncoding), true);
+      } else {
+        await fs.promises.rm(payload.stagedTargetPath, { recursive: true, force: true });
+      }
+    } catch { /* best effort */ }
+  }
+  return { success: true };
+}
+
 /**
  * Same-host directory copy: uses a single `cp -ra` command on the remote server
  * instead of recursively transferring files one by one.
@@ -887,9 +1745,13 @@ async function sameHostCopyDirectory(event, payload) {
   const { sftpId, sourcePath, targetPath, encoding, transferId } = payload;
 
   // Register in activeTransfers so cancelTransfer can flag it
-  const transfer = { cancelled: false };
+  const transfer = { cancelled: false, leasedSftpIds: [] };
   if (transferId) {
     activeTransfers.set(transferId, transfer);
+    transfer.leasedSftpIds = acquireTransferSessionLeases(transferId, {
+      sourceSftpId: sftpId,
+      targetSftpId: sftpId,
+    });
   }
 
   try {
@@ -935,6 +1797,8 @@ async function sameHostCopyDirectory(event, payload) {
   } finally {
     if (transferId) {
       activeTransfers.delete(transferId);
+      releaseTransferSessionLeases(transferId, transfer.leasedSftpIds || [sftpId]);
+      transfer.leasedSftpIds = [];
     }
   }
 }
@@ -951,22 +1815,97 @@ function registerWorkerHandle(ipcMain, terminalWorkerManager, channel) {
 function registerHandlers(ipcMain, options = {}) {
   const terminalWorkerManager = options.terminalWorkerManager || null;
   if (terminalWorkerManager) {
+    const workerRequest = (event, channel, payload) => terminalWorkerManager.request(channel, payload, {
+      webContentsId: event?.sender?.id,
+    });
+    ipcMain.handle("netcatty:transfer:start", (event, payload) => {
+      // Renderer (or outer main) already admitted — skip a second queue so
+      // dedicated pool leases are not pinned while waiting on main admission.
+      if (payload?.skipAdmission === true) {
+        return workerRequest(event, "netcatty:transfer:start", payload);
+      }
+      return runAdmittedTransfer(
+        event,
+        payload,
+        undefined,
+        () => workerRequest(event, "netcatty:transfer:start", {
+          ...payload,
+          skipAdmission: true,
+        }),
+      );
+    });
+    ipcMain.handle("netcatty:transfer:cancel", (event, payload) => (
+      cancelQueuedTransfer(payload?.transferId)
+        ? { success: true }
+        : workerRequest(event, "netcatty:transfer:cancel", payload)
+    ));
+    ipcMain.handle("netcatty:transfer:pause", (event, payload) => (
+      pauseQueuedTransfer(payload?.transferId)
+        ?? workerRequest(event, "netcatty:transfer:pause", payload)
+    ));
+    ipcMain.handle("netcatty:transfer:resume", (event, payload) => (
+      resumeQueuedTransfer(payload?.transferId)
+        ? { success: true }
+        : workerRequest(event, "netcatty:transfer:resume", payload)
+    ));
+    ipcMain.handle("netcatty:transfer:prioritize", (event, payload) => (
+      prioritizeQueuedTransfer(payload?.transferId)
+        ? { success: true }
+        : workerRequest(event, "netcatty:transfer:prioritize", payload)
+    ));
     [
-      "netcatty:transfer:start",
-      "netcatty:transfer:cancel",
+      "netcatty:transfer:cleanup",
       "netcatty:transfer:same-host-copy-dir",
     ].forEach((channel) => registerWorkerHandle(ipcMain, terminalWorkerManager, channel));
+    ipcMain.handle("netcatty:transfer:set-concurrency", async (_event, payload) => {
+      const limit = setGlobalTransferConcurrency(payload?.limit);
+      await terminalWorkerManager.request("netcatty:transfer:set-concurrency", { limit }).catch(() => {});
+      return { success: true, limit };
+    });
+    // With skipAdmission, cancel latches pendingCancel inside the worker process.
+    // Clear must reach the same process that owns startTransferNow.
+    ipcMain.handle("netcatty:transfer:clear-pending-cancel", (event, payload) => (
+      workerRequest(event, "netcatty:transfer:clear-pending-cancel", payload)
+        .catch(() => {
+          clearPendingCancel(payload?.transferId);
+          return { success: true };
+        })
+    ));
     return;
   }
   ipcMain.handle("netcatty:transfer:start", startTransfer);
   ipcMain.handle("netcatty:transfer:cancel", cancelTransfer);
+  ipcMain.handle("netcatty:transfer:pause", pauseTransfer);
+  ipcMain.handle("netcatty:transfer:resume", resumeTransfer);
+  ipcMain.handle("netcatty:transfer:prioritize", prioritizeTransfer);
+  ipcMain.handle("netcatty:transfer:set-concurrency", (_event, payload) => ({
+    success: true,
+    limit: setGlobalTransferConcurrency(payload?.limit),
+  }));
+  ipcMain.handle("netcatty:transfer:cleanup", cleanupTransferArtifacts);
   ipcMain.handle("netcatty:transfer:same-host-copy-dir", sameHostCopyDirectory);
+  ipcMain.handle("netcatty:transfer:clear-pending-cancel", (_event, payload) => {
+    clearPendingCancel(payload?.transferId);
+    return { success: true };
+  });
 }
 
 module.exports = {
   init,
   registerHandlers,
   startTransfer,
+  runAdmittedTransfer,
   cancelTransfer,
+  clearPendingCancel,
+  pauseTransfer,
+  resumeTransfer,
+  prioritizeTransfer,
+  setGlobalTransferConcurrency,
+  getGlobalTransferConcurrency,
+  cleanupTransferArtifacts,
   sameHostCopyDirectory,
+  // Test / integration helpers for session leases
+  acquireTransferSessionLeases,
+  releaseTransferSessionLeases,
+  listTransferSftpIds,
 };

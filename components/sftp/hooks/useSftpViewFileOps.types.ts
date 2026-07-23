@@ -29,11 +29,20 @@ export interface UseSftpViewFileOpsParams {
       targetType: 'local' | 'sftp';
       sourceSftpId?: string;
       targetSftpId?: string;
+      sourceHostId?: string;
+      targetHostId?: string;
       totalBytes?: number;
       sourceEncoding?: SftpFilenameEncoding;
       targetEncoding?: SftpFilenameEncoding;
+      resumable?: boolean;
     },
-    onProgress?: (transferred: number, total: number, speed: number) => void,
+    onProgress?: (transferred: number, total: number, speed: number, checkpoint?: {
+      resumeStage?: 'direct' | 'download' | 'upload';
+      checkpointBytes?: number;
+      downloadCheckpointBytes?: number;
+      uploadCheckpointBytes?: number;
+      sourceFingerprint?: string;
+    }) => void,
     onComplete?: () => void,
     onError?: (error: string) => void
   ) => Promise<{ transferId: string; totalBytes?: number; error?: string }>;

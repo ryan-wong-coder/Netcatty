@@ -43,6 +43,8 @@ interface TransferChildListProps {
   scrollTop: number;
   viewportHeight: number;
   onCancel: (taskId: string) => void;
+  onPause: (taskId: string) => void;
+  onResume: (taskId: string) => void;
   onRetry: (taskId: string) => Promise<void>;
   onDismiss: (taskId: string) => void;
   onSetNameColumnWidth: (width: number) => void;
@@ -57,6 +59,8 @@ const TransferChildList: React.FC<TransferChildListProps> = ({
   scrollTop,
   viewportHeight,
   onCancel,
+  onPause,
+  onResume,
   onRetry,
   onDismiss,
   onSetNameColumnWidth,
@@ -136,6 +140,8 @@ const TransferChildList: React.FC<TransferChildListProps> = ({
                 onSetNameColumnWidth={onSetNameColumnWidth}
                 resizeHandleTabIndex={visibleIndex === 0 ? 0 : -1}
                 onCancel={() => onCancel(child.id)}
+                onPause={() => onPause(child.id)}
+                onResume={() => onResume(child.id)}
                 onRetry={() => onRetry(child.id)}
                 onDismiss={() => onDismiss(child.id)}
               />
@@ -416,6 +422,8 @@ export const SftpTransferQueue: React.FC<SftpTransferQueueProps> = ({
                   }
                   sftp.cancelTransfer(task.id);
                 }}
+                onPause={() => sftp.pauseTransfer(task.id)}
+                onResume={() => sftp.resumeTransfer(task.id)}
                 onRetry={() => sftp.retryTransfer(task.id)}
                 onDismiss={() => sftp.dismissTransfer(task.id)}
                 canRevealTarget={canRevealTransferTarget?.(task) ?? false}
@@ -447,6 +455,8 @@ export const SftpTransferQueue: React.FC<SftpTransferQueueProps> = ({
                   scrollTop={scrollTop}
                   viewportHeight={viewportHeight}
                   onCancel={(taskId) => sftp.cancelTransfer(taskId)}
+                  onPause={(taskId) => sftp.pauseTransfer(taskId)}
+                  onResume={(taskId) => sftp.resumeTransfer(taskId)}
                   onRetry={(taskId) => sftp.retryTransfer(taskId)}
                   onDismiss={(taskId) => sftp.dismissTransfer(taskId)}
                 />
