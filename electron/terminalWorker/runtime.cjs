@@ -13,6 +13,7 @@ const SESSION_START_CHANNELS = new Set([
   "netcatty:et:start",
   "netcatty:serial:start",
   "netcatty:local:reconnect",
+  "netcatty:external:start",
 ]);
 
 function createIpcMainHarness() {
@@ -279,14 +280,14 @@ function createSender(
     if (pipelineProcessed || !terminalDataPipeline?.interceptOutput || (pipelineMode & 2) === 0) {
       if (!previous) {
         deliver(payload?.data, false);
-        return;
+        return Promise.resolve();
       }
       const pending = previous.then(
         () => deliver(payload?.data, false),
         () => deliver(payload?.data, false),
       );
       trackPendingOutput(sessionId, pending);
-      return;
+      return pending;
     }
     const interceptAndDeliver = () => {
       try {
@@ -305,6 +306,7 @@ function createSender(
     // retains the latest barrier for direct fail-open output and session exit.
     const pending = Promise.resolve(interceptAndDeliver());
     trackPendingOutput(sessionId, pending);
+    return pending;
   };
   return {
     id: webContentsId,
@@ -316,8 +318,7 @@ function createSender(
     },
     send(channel, payload) {
       if (channel === "netcatty:data") {
-        deliverTerminalData(payload);
-        return;
+        return deliverTerminalData(payload);
       }
       if (channel === "netcatty:exit" && payload?.sessionId) {
         const pending = pendingOutputBySession.get(payload.sessionId);

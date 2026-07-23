@@ -5,6 +5,7 @@ import { ChevronsLeft, GripVertical, X as XIcon } from 'lucide-react';
 import { shouldKeepTerminalBackgroundWorkActive } from '../../domain/terminalHibernate';
 import { resolveEffectiveTerminalProtocol } from '../../domain/terminalProtocol';
 import { classifyDistroId } from '../../domain/host';
+import { isPluginHostProtocol } from '../../domain/pluginConnection';
 import { OSC7_SETUP_TARGETS } from './osc7Setup';
 import PasswordCredentialPicker from './PasswordCredentialPicker';
 import { TerminalServerStats } from './TerminalServerStats';
@@ -148,7 +149,8 @@ type TerminalTitleAddressHost = {
 };
 
 export function formatTerminalTitleConnectionAddress(host?: TerminalTitleAddressHost): string | null {
-  if (!host || host.protocol === 'local' || host.id?.startsWith('local-') || !host.hostname || host.hostname === 'localhost') {
+  if (!host || host.protocol === 'local' || isPluginHostProtocol(host.protocol)
+    || host.id?.startsWith('local-') || !host.hostname || host.hostname === 'localhost') {
     return null;
   }
   const isSerial = host.protocol === 'serial' || host.id?.startsWith('serial-');

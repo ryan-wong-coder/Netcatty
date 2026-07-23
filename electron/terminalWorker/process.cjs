@@ -173,6 +173,76 @@ function main() {
       fileWatcherBridge.registerHandlers(ipcMain);
       compressUploadBridge.registerHandlers(ipcMain);
       registerWorkerAiExecHandlers(ipcMain, { sessions });
+      ipcMain.handle("netcatty:external:start", async (event, payload) => {
+        const sessionId = payload?.sessionId;
+        if (typeof sessionId !== "string" || sessionId.length < 1 || sessionId.length > 128) {
+          throw new TypeError("External terminal session ID is invalid");
+        }
+        if (sessions.has(sessionId)) throw new Error("Terminal session already exists");
+        const columns = Number(payload?.columns);
+        const rows = Number(payload?.rows);
+        if (!Number.isInteger(columns) || columns < 1 || columns > 16_384
+          || !Number.isInteger(rows) || rows < 1 || rows > 16_384) {
+          throw new TypeError("External terminal dimensions are invalid");
+        }
+        const postEvent = (message) => parentPort.postMessage({
+          kind: "external-session-event",
+          sessionId,
+          ...message,
+        });
+        const stream = {
+          write(data) {
+            postEvent({ event: "input", data });
+            return true;
+          },
+          setWindow(nextRows, nextColumns) {
+            postEvent({ event: "resize", columns: nextColumns, rows: nextRows });
+          },
+          pause() {
+            postEvent({ event: "flow", paused: true });
+          },
+          resume() {
+            postEvent({ event: "flow", paused: false });
+          },
+          close() {
+            postEvent({ event: "close", reason: "closed" });
+          },
+        };
+        sessions.set(sessionId, {
+          type: "plugin",
+          protocol: typeof payload?.protocol === "string" ? payload.protocol : "plugin",
+          stream,
+          cols: columns,
+          rows,
+          webContentsId: event.sender.id,
+          closed: false,
+        });
+        return { sessionId };
+      });
+      ipcMain.handle("netcatty:external:output", async (event, payload) => {
+        const session = sessions.get(payload?.sessionId);
+        if (!session || session.type !== "plugin" || session.closed) {
+          throw new Error("External terminal session is unavailable");
+        }
+        await event.sender.send("netcatty:data", {
+          sessionId: payload.sessionId,
+          data: payload.data,
+        });
+        return null;
+      });
+      ipcMain.handle("netcatty:external:finish", async (event, payload) => {
+        const session = sessions.get(payload?.sessionId);
+        if (!session || session.type !== "plugin") return null;
+        session.closed = true;
+        sessions.delete(payload.sessionId);
+        event.sender.send("netcatty:exit", {
+          sessionId: payload.sessionId,
+          exitCode: payload?.reason === "error" ? 1 : 0,
+          reason: payload?.reason || "closed",
+          ...(payload?.error ? { error: payload.error } : {}),
+        });
+        return null;
+      });
       const { createSystemManagerBridge } = require("../bridges/systemManagerBridge.cjs");
       createSystemManagerBridge({
         getSessions: () => sessions,

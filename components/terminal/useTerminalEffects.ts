@@ -58,6 +58,7 @@ import {
 } from './connectionTimeouts';
 import { resolveHostSshConnectionTimeouts } from '../../domain/sshConnectionTimeouts';
 import { resolveEffectiveTerminalProtocol } from '../../domain/terminalProtocol';
+import { isPluginHostProtocol } from '../../domain/pluginConnection';
 
 type TerminalEffectsContext = Record<string, any>;
 
@@ -292,7 +293,8 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
 
 
   useEffect(() => {
-    if (host.protocol === "local" || host.protocol === "serial" || host.protocol === "telnet") {
+    if (host.protocol === "local" || host.protocol === "serial" || host.protocol === "telnet"
+      || isPluginHostProtocol(host.protocol)) {
       return;
     }
     if (status !== "connected" || !sessionRef.current || knownCwdRef.current) return;
@@ -673,7 +675,12 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
           return;
         }
 
-        if (effectiveTerminalProtocol === "serial") {
+        if (effectiveTerminalProtocol.startsWith("plugin:")) {
+          setBackendConnectingStatus();
+          setProgressLogs(["Initializing plugin connection..."]);
+          await sessionStarters.startPluginConnection(term);
+          if (disposed) return;
+        } else if (effectiveTerminalProtocol === "serial") {
           setBackendConnectingStatus();
           setProgressLogs(["Initializing serial connection..."]);
           await sessionStarters.startSerial(term);
@@ -826,7 +833,8 @@ export function useTerminalEffects(ctx: TerminalEffectsContext) {
       && host.protocol !== "mosh"
       && !host.moshEnabled
       && host.protocol !== "et"
-      && !host.etEnabled;
+      && !host.etEnabled
+      && !isPluginHostProtocol(host.protocol);
     const timeoutState = {
       status,
       needsAuth: auth.needsAuth,

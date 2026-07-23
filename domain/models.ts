@@ -5,3 +5,4 @@ export * from './models/portForwarding';
 export * from './models/sftp';
 export * from './models/terminal';
 export * from './models/workspace';
+export * from './pluginConnection';

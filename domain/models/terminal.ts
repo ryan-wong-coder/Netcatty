@@ -1,4 +1,4 @@
-import type { SerialConfig, Snippet } from './connection';
+import type { HostProtocol, PluginConnectionConfig, SerialConfig, Snippet } from './connection';
 import type { CodingCliProviderId } from '../codingCliProviders';
 import {
   normalizeHibernateHiddenTabsDelaySec,
@@ -477,7 +477,8 @@ export interface TerminalSession {
   noAutoRun?: boolean;     // If true, paste command without auto-executing
   multiLineRunMode?: Snippet['multiLineRunMode'];
   // Connection-time protocol overrides (used instead of looking up from hosts)
-  protocol?: 'ssh' | 'telnet' | 'local' | 'serial';
+  protocol?: HostProtocol;
+  pluginConnection?: PluginConnectionConfig;
   port?: number;
   moshEnabled?: boolean;
   etEnabled?: boolean;

@@ -6,6 +6,7 @@ import {
   pluginErrorToRpcError,
 } from "@netcatty/plugin-sdk";
 import { createMessagePortStreamEnvelope } from "@netcatty/plugin-contract";
+import { createPluginStreamEndpoint } from "./pluginStreamEndpoint.mjs";
 
 let terminalInterceptorTransportPromise;
 
@@ -348,7 +349,11 @@ function createPluginContext(config, client, runtimeApi) {
             handleId: result.handleId,
             method,
             ...(params === undefined ? {} : { params }),
-            ...options,
+            ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+            ...(options.credentialLeases === undefined ? {} : {
+              credentialLeases: options.credentialLeases,
+              operationId: options.operationId,
+            }),
           },
           { deadlineMs: forwardedDeadline(options.timeoutMs, 60_000) },
         ),
@@ -356,6 +361,13 @@ function createPluginContext(config, client, runtimeApi) {
         dispose() { void stop().catch(() => {}); },
       });
     },
+  };
+  const streams = {
+    acceptReadable: (streamId) => runtimeApi.streams.acceptReadable(streamId),
+    openWritable: (streamId, options = {}) => runtimeApi.streams.openWritable(
+      streamId,
+      options.windowBytes,
+    ),
   };
   const settings = {
     get: (settingId, options = {}) => client.request("settings.get", {
@@ -477,6 +489,7 @@ function createPluginContext(config, client, runtimeApi) {
     network,
     filesystem,
     companions,
+    streams,
     logger,
   };
 }
@@ -503,7 +516,9 @@ export async function startPluginRuntime({
     environment: normalizeRuntimeEnvironment(config.environment),
     viewMessages: new Map(),
     terminalInterceptorPorts: new Set(),
+    streams: null,
   };
+  runtimeApi.streams = createPluginStreamEndpoint(transport);
   const pluginModule = await loadPlugin(config.entryUrl);
   plugin = pluginModule?.default;
   if (!plugin || typeof plugin.activate !== "function") {
@@ -587,23 +602,58 @@ export async function startPluginRuntime({
       if (deadlineMs != null && (!Number.isInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 300_000)) {
         throw new PluginError("invalid_argument", "Plugin Provider deadline is invalid");
       }
+      const payload = message.params?.payload === undefined
+        ? undefined
+        : freezeRuntimeJson(message.params.payload);
+      const streamed = (kind === "connection" && operation === "open")
+        || (kind === "importer" && operation === "parse");
+      let input;
+      let output;
+      let cancelStreams;
+      if (streamed) {
+        const inputStreamId = payload?.inputStreamId;
+        const outputStreamId = payload?.outputStreamId;
+        const windowBytes = payload?.windowBytes;
+        if (typeof inputStreamId !== "string" || typeof outputStreamId !== "string") {
+          throw new PluginError("invalid_argument", "Streamed Provider invocation requires input and output stream IDs");
+        }
+        input = runtimeApi.streams.acceptReadable(inputStreamId);
+        // Prevent a cancelled request from creating an unhandled rejected
+        // promise when the Provider never awaited its input stream.
+        void input.catch(() => {});
+        try {
+          output = await runtimeApi.streams.openWritable(outputStreamId, windowBytes);
+        } catch (error) {
+          runtimeApi.streams.rejectReadable(inputStreamId, error);
+          throw error;
+        }
+        cancelStreams = () => {
+          const error = new PluginError("cancelled", "Streamed Provider invocation was cancelled");
+          runtimeApi.streams.rejectReadable(inputStreamId, error);
+          output.cancel();
+          void input.then((stream) => stream.cancel(), () => {});
+        };
+      }
+      const cancellationDisposable = cancelStreams
+        ? cancellationToken.onCancellationRequested(cancelStreams)
+        : null;
       try {
         const result = await registration.handler(Object.freeze({
           providerId,
           kind,
           operation,
           requestId,
-          payload: message.params?.payload === undefined
-            ? undefined
-            : freezeRuntimeJson(message.params.payload),
+          payload,
           deadlineMs,
           cancellationToken,
+          ...(streamed ? { input, output } : {}),
         }));
         if (cancellationToken.isCancellationRequested) {
           return { requestId, status: "cancelled" };
         }
         return { requestId, status: "ok", result: result === undefined ? null : result };
       } catch (error) {
+        cancelStreams?.();
         if (cancellationToken.isCancellationRequested) {
           return { requestId, status: "cancelled" };
         }
@@ -613,6 +663,9 @@ export async function startPluginRuntime({
           status: "failed",
           error: { code: rpcError.code, message: rpcError.message, ...(rpcError.data === undefined ? {} : { data: rpcError.data }) },
         };
+      } finally {
+        cancellationDisposable?.dispose();
+        if (streamed && cancellationToken.isCancellationRequested) cancelStreams();
       }
     }
     throw new PluginError("unsupported", `Unsupported host method: ${message.method}`);
@@ -750,7 +803,9 @@ export async function startPluginRuntime({
   const dispose = transport.onMessage((message, ports) => {
     if (message && typeof message === "object" && Object.hasOwn(message, "frame")) {
       for (const port of ports) port?.close?.();
-      try { cancelUnhandledStream(transport, message); }
+      try {
+        if (!runtimeApi.streams.accept(message)) cancelUnhandledStream(transport, message);
+      }
       catch { transport.close(); }
       return;
     }
@@ -803,6 +858,7 @@ export async function startPluginRuntime({
       runtimeApi.terminalEvents.clear();
       for (const interceptorPort of runtimeApi.terminalInterceptorPorts) interceptorPort.close?.();
       runtimeApi.terminalInterceptorPorts.clear();
+      runtimeApi.streams.close();
       for (const emitter of runtimeApi.viewMessages.values()) emitter.clear();
       cancellation.clear();
       if (!deactivated) {

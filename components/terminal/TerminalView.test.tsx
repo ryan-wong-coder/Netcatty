@@ -144,6 +144,11 @@ test("terminal title formats the connection address for remote sessions", () => 
     "root@10.1.2.34:2222",
   );
   assert.equal(formatTerminalTitleConnectionAddress({ protocol: "local", hostname: "localhost" }), null);
+  assert.equal(formatTerminalTitleConnectionAddress({
+    protocol: "plugin:com.example.transport.connection",
+    hostname: "com.example.transport.connection",
+    port: 22,
+  }), null);
 });
 
 test("terminal title row does not render a status dot beside the address", () => {

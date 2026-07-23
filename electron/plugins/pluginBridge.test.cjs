@@ -1,6 +1,9 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { mkdtemp, rename, rm, writeFile } = require("node:fs/promises");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
 const test = require("node:test");
 
 const {
@@ -67,6 +70,29 @@ test("plugin management bridge checks sender ownership before invoking manager",
   await assert.rejects(
     ipcMain.handlers.get(CHANNELS.list)({ senderFrame: { url: "https://attacker.invalid/" } }),
     /Untrusted/,
+  );
+});
+
+test("plugin Vault credential catalog updates only through the trusted host bridge", async () => {
+  const ipcMain = createIpcMain();
+  const updates = [];
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    credentialResolver: {
+      update(entries) { updates.push(entries); return entries.length; },
+    },
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: (event) => event?.trusted === true,
+  });
+  const entries = [{ id: "credential-reference-0001", ciphertext: "enc:v1:Y2lwaGVy" }];
+  assert.equal(await ipcMain.handlers.get(CHANNELS.credentialCatalogUpdate)(
+    { trusted: true },
+    { entries },
+  ), 1);
+  assert.deepEqual(updates, [entries]);
+  await assert.rejects(
+    ipcMain.handlers.get(CHANNELS.credentialCatalogUpdate)({ trusted: false }, { entries }),
+    /Untrusted/i,
   );
 });
 
@@ -332,4 +358,423 @@ test("plugin terminal Provider bridge releases cancellation during host initiali
   assert.deepEqual(retry, [{ status: "ok" }]);
   assert.equal(observedSignals.length, 1);
   assert.equal(observedSignals[0].aborted, false);
+});
+
+test("plugin extension Provider requests are cancellable and sender-owned", async () => {
+  const ipcMain = createIpcMain();
+  let destroyed;
+  const calls = [];
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async invoke(payload, options) {
+        calls.push(payload);
+        return new Promise((resolve) => {
+          options.signal.addEventListener("abort", () => resolve({ cancelled: true }), { once: true });
+        });
+      },
+    },
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = {
+    sender: {
+      id: 73,
+      once(name, listener) { if (name === "destroyed") destroyed = listener; },
+    },
+  };
+  const pending = ipcMain.handlers.get(CHANNELS.extensionInvoke)(event, {
+    requestId: "extension-request-1",
+    providerId: "com.example.transport.connection",
+    kind: "connection",
+    operation: "probe",
+    payload: {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await ipcMain.handlers.get(CHANNELS.extensionCancel)(event, {
+    requestId: "extension-request-1",
+  }), true);
+  assert.deepEqual(await pending, { cancelled: true });
+  assert.equal(await ipcMain.handlers.get(CHANNELS.extensionCancel)(event, {
+    requestId: "extension-request-1",
+  }), false);
+  assert.equal(typeof destroyed, "function");
+  assert.equal(calls.length, 1);
+});
+
+test("generic extension invocation cannot bypass authentication or connection-session ownership", async () => {
+  const ipcMain = createIpcMain();
+  let calls = 0;
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async invoke() { calls += 1; return null; },
+    },
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const invoke = ipcMain.handlers.get(CHANNELS.extensionInvoke);
+  const event = { sender: { once() {}, id: 41 } };
+  await assert.rejects(invoke(event, {
+    requestId: "auth-bypass",
+    kind: "authentication",
+    providerId: "com.example.auth.provider",
+    operation: "respond",
+    payload: { response: "plaintext" },
+  }), /dedicated host workflow/i);
+  await assert.rejects(invoke(event, {
+    requestId: "connection-bypass",
+    kind: "connection",
+    providerId: "com.example.connection.provider",
+    operation: "close",
+    payload: { connectionId: "not-owned" },
+  }), /dedicated host workflow/i);
+  assert.equal(calls, 0);
+});
+
+test("plugin importer files use sender-owned native selections and bounded streaming", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "netcatty-plugin-importer-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = join(directory, "hosts.json");
+  await writeFile(filePath, "streamed-import");
+  const parsed = [];
+  const ipcMain = createIpcMain();
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async parseImporter(params, options) {
+        for await (const chunk of params.source) parsed.push(Buffer.from(chunk));
+        assert.equal(params.sourceByteLength, 15);
+        assert.equal(params.fileName, "hosts.json");
+        options.onProgress({ type: "progress", completed: 1, total: 2, message: "Reading" });
+        return { providerId: params.providerId, result: { parsed: 0, warnings: 0, errors: 0 }, records: [] };
+      },
+    },
+    selectImporterFile: async () => filePath,
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const progressEvents = [];
+  const first = { sender: {
+    id: 1,
+    once() {},
+    isDestroyed: () => false,
+    send(channel, payload) { progressEvents.push([channel, payload]); },
+  } };
+  const second = { sender: { id: 2, once() {} } };
+  const selection = await ipcMain.handlers.get(CHANNELS.importerSelectFile)(first, {});
+  assert.equal(selection.fileName, "hosts.json");
+  assert.equal(Buffer.from(selection.sample).toString(), "streamed-import");
+  await assert.rejects(ipcMain.handlers.get(CHANNELS.importerParseFile)(second, {
+    requestId: "other-window",
+    providerId: "com.example.importer",
+    selectionToken: selection.selectionToken,
+  }), /selection expired/i);
+  await rename(filePath, `${filePath}.selected`);
+  await writeFile(filePath, "path-replaced!!");
+  const preview = await ipcMain.handlers.get(CHANNELS.importerParseFile)(first, {
+    requestId: "owner-window",
+    providerId: "com.example.importer",
+    selectionToken: selection.selectionToken,
+  });
+  assert.equal(preview.providerId, "com.example.importer");
+  assert.equal(Buffer.concat(parsed).toString(), "streamed-import");
+  assert.deepEqual(progressEvents, [[CHANNELS.importerProgress, {
+    requestId: "owner-window",
+    providerId: "com.example.importer",
+    progress: { type: "progress", completed: 1, total: 2, message: "Reading" },
+  }]]);
+  await assert.rejects(ipcMain.handlers.get(CHANNELS.importerParseFile)(first, {
+    requestId: "replay",
+    providerId: "com.example.importer",
+    selectionToken: selection.selectionToken,
+  }), /selection expired/i);
+});
+
+test("plugin connection authentication uses host-rendered sender-owned challenges", async () => {
+  const ipcMain = createIpcMain();
+  const sent = [];
+  const calls = [];
+  const external = [];
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async authenticate(params, requestChallenge) {
+        calls.push(["authenticate", params]);
+        const response = await requestChallenge({
+          id: "password-1",
+          kind: "password",
+          title: "Password",
+        });
+        calls.push(["response", response]);
+        return {
+          status: "authenticated",
+          credential: { kind: "credential", id: "credential-after-auth" },
+        };
+      },
+      async openConnection(params, options) {
+        calls.push(["open", params]);
+        await options.onData(Uint8Array.from([65]));
+        return { sessionId: params.sessionId, providerId: params.providerId, status: "connected", diagnostics: [] };
+      },
+      closeSessionLocal() {},
+    },
+    getTerminalWorkerManager: () => ({
+      async startExternalSession(options) { external.push(["start", options]); return { sessionId: options.sessionId }; },
+      async pushExternalOutput(sessionId, data) { external.push(["output", sessionId, data]); },
+      async finishExternalSession(sessionId, details) { external.push(["finish", sessionId, details]); },
+    }),
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = {
+    sender: {
+      id: 74,
+      once() {},
+      isDestroyed: () => false,
+      send(channel, payload) { sent.push([channel, payload]); },
+    },
+  };
+  const pending = ipcMain.handlers.get(CHANNELS.connectionStart)(event, {
+    requestId: "connection-auth-1",
+    sessionId: "session-auth-1",
+    providerId: "com.example.transport.connection",
+    authenticationProviderId: "com.example.transport.authentication",
+    configuration: { host: "example.test" },
+    columns: 80,
+    rows: 24,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], CHANNELS.authenticationChallenge);
+  const challengeEvent = sent[0][1];
+  await assert.rejects(
+    ipcMain.handlers.get(CHANNELS.authenticationRespond)({ sender: { id: 75, once() {} } }, {
+      ...challengeEvent,
+      challengeId: challengeEvent.challenge.id,
+      response: "stolen",
+    }),
+    /not owned/,
+  );
+  await ipcMain.handlers.get(CHANNELS.authenticationRespond)(event, {
+    requestId: challengeEvent.requestId,
+    challengeRequestId: challengeEvent.challengeRequestId,
+    challengeId: challengeEvent.challenge.id,
+    response: "secret answer",
+  });
+  assert.deepEqual(await pending, {
+    sessionId: "session-auth-1",
+    providerId: "com.example.transport.connection",
+    status: "connected",
+    diagnostics: [],
+  });
+  assert.deepEqual(calls[0], ["authenticate", {
+    providerId: "com.example.transport.authentication",
+    connectionProviderId: "com.example.transport.connection",
+    configuration: { host: "example.test" },
+  }]);
+  assert.deepEqual(calls[1], ["response", "secret answer"]);
+  assert.deepEqual(calls[2][0], "open");
+  assert.deepEqual(calls[2][1].credential, {
+    kind: "credential",
+    id: "credential-after-auth",
+  });
+  assert.equal(external[0][0], "start");
+  assert.equal(external[0][1].sessionId, "session-auth-1");
+  assert.deepEqual(external[1], ["output", "session-auth-1", Uint8Array.from([65])]);
+});
+
+test("plugin connection status monitoring releases silent connected sessions", async () => {
+  const ipcMain = createIpcMain();
+  const statusCalls = [];
+  let resolveConnectedOutput;
+  const connectedOutput = new Promise((resolve) => { resolveConnectedOutput = resolve; });
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async openConnection(params) {
+        return { sessionId: params.sessionId, providerId: params.providerId, status: "connecting", diagnostics: [] };
+      },
+      async control(sessionId, operation, payload, options) {
+        statusCalls.push([sessionId, operation, payload, options.signal.aborted]);
+        return { status: statusCalls.length === 1 ? "connecting" : "connected" };
+      },
+      closeSessionLocal() {},
+    },
+    getTerminalWorkerManager: () => ({
+      async startExternalSession(options) { return { sessionId: options.sessionId }; },
+      async pushExternalOutput(sessionId, data) { resolveConnectedOutput([sessionId, data]); },
+      async finishExternalSession() { return true; },
+    }),
+    connectionStatusPollMs: 0,
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = { sender: { id: 77, once() {}, isDestroyed: () => false } };
+  const opened = await ipcMain.handlers.get(CHANNELS.connectionStart)(event, {
+    requestId: "connection-silent-start",
+    sessionId: "session-silent-start",
+    providerId: "com.example.transport.connection",
+    configuration: {},
+    columns: 80,
+    rows: 24,
+  });
+  assert.equal(opened.status, "connecting");
+  assert.deepEqual(await connectedOutput, ["session-silent-start", ""]);
+  assert.equal(statusCalls.length, 2);
+  assert.equal(statusCalls.every((call) => call[1] === "getStatus" && call[3] === false), true);
+});
+
+test("plugin connections that open connected release silent terminal startup", async () => {
+  const ipcMain = createIpcMain();
+  const output = [];
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async openConnection(params) {
+        return { sessionId: params.sessionId, providerId: params.providerId, status: "connected", diagnostics: [] };
+      },
+      closeSessionLocal() {},
+    },
+    getTerminalWorkerManager: () => ({
+      async startExternalSession(options) { return { sessionId: options.sessionId }; },
+      async pushExternalOutput(sessionId, data) { output.push([sessionId, data]); return true; },
+      async finishExternalSession() { return true; },
+    }),
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = { sender: { id: 79, once() {}, isDestroyed: () => false } };
+  const opened = await ipcMain.handlers.get(CHANNELS.connectionStart)(event, {
+    requestId: "connection-silent-connected",
+    sessionId: "session-silent-connected",
+    providerId: "com.example.transport.connection",
+    configuration: {},
+    columns: 80,
+    rows: 24,
+  });
+  assert.equal(opened.status, "connected");
+  assert.deepEqual(output, [["session-silent-connected", ""]]);
+});
+
+test("silent connection readiness delivery failure closes the opened provider session", async () => {
+  const ipcMain = createIpcMain();
+  const controls = [];
+  const finished = [];
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async openConnection(params) {
+        return { sessionId: params.sessionId, providerId: params.providerId, status: "connected", diagnostics: [] };
+      },
+      async control(...args) { controls.push(args); return null; },
+      closeSessionLocal() {},
+    },
+    getTerminalWorkerManager: () => ({
+      async startExternalSession(options) { return { sessionId: options.sessionId }; },
+      async pushExternalOutput() { throw new Error("renderer unavailable"); },
+      async finishExternalSession(sessionId, details) { finished.push([sessionId, details]); return true; },
+    }),
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = { sender: { id: 80, once() {}, isDestroyed: () => false } };
+  await assert.rejects(
+    ipcMain.handlers.get(CHANNELS.connectionStart)(event, {
+      requestId: "connection-readiness-failure",
+      sessionId: "session-readiness-failure",
+      providerId: "com.example.transport.connection",
+      configuration: {},
+      columns: 80,
+      rows: 24,
+    }),
+    /renderer unavailable/,
+  );
+  assert.deepEqual(controls.map(([sessionId, operation]) => [sessionId, operation]), [
+    ["session-readiness-failure", "close"],
+  ]);
+  assert.deepEqual(finished, [[
+    "session-readiness-failure",
+    { reason: "error", error: "renderer unavailable" },
+  ]]);
+});
+
+test("plugin connection status monitoring closes asynchronous provider errors", async () => {
+  const ipcMain = createIpcMain();
+  const closed = [];
+  let resolveFinished;
+  const finished = new Promise((resolve) => { resolveFinished = resolve; });
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      async openConnection(params) {
+        return { sessionId: params.sessionId, providerId: params.providerId, status: "connecting", diagnostics: [] };
+      },
+      async control() { return { status: "error", message: "Handshake rejected" }; },
+      closeSessionLocal(sessionId) { closed.push(sessionId); },
+    },
+    getTerminalWorkerManager: () => ({
+      async startExternalSession(options) { return { sessionId: options.sessionId }; },
+      async pushExternalOutput() {},
+      async finishExternalSession(sessionId, details) { resolveFinished([sessionId, details]); return true; },
+    }),
+    connectionStatusPollMs: 0,
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = { sender: { id: 78, once() {}, isDestroyed: () => false } };
+  await ipcMain.handlers.get(CHANNELS.connectionStart)(event, {
+    requestId: "connection-late-error",
+    sessionId: "session-late-error",
+    providerId: "com.example.transport.connection",
+    configuration: {},
+    columns: 80,
+    rows: 24,
+  });
+  assert.deepEqual(await finished, [
+    "session-late-error",
+    { reason: "error", error: "Handshake rejected" },
+  ]);
+  assert.deepEqual(closed, ["session-late-error"]);
+});
+
+test("closing the terminal while a plugin connection opens cancels the provider startup", async () => {
+  const ipcMain = createIpcMain();
+  let externalOptions;
+  const closed = [];
+  registerPluginBridge(ipcMain, {
+    manager: { initialize: async () => {} },
+    extensionProviderService: {
+      openConnection(_params, options) {
+        return new Promise((_resolve, reject) => {
+          const rejectCancelled = () => reject(options.signal.reason);
+          if (options.signal.aborted) rejectCancelled();
+          else options.signal.addEventListener("abort", rejectCancelled, { once: true });
+        });
+      },
+      closeSessionLocal(sessionId) { closed.push(sessionId); },
+    },
+    getTerminalWorkerManager: () => ({
+      async startExternalSession(options) {
+        externalOptions = options;
+        return { sessionId: options.sessionId };
+      },
+      async finishExternalSession() { return false; },
+    }),
+    env: { NETCATTY_PLUGIN_DEV: "1" },
+    isTrustedSender: () => true,
+  });
+  const event = { sender: { id: 76, once() {}, isDestroyed: () => false } };
+  const pending = ipcMain.handlers.get(CHANNELS.connectionStart)(event, {
+    requestId: "connection-close-during-start",
+    sessionId: "session-close-during-start",
+    providerId: "com.example.transport.connection",
+    configuration: {},
+    columns: 80,
+    rows: 24,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await externalOptions.onClose("renderer-close");
+  await assert.rejects(pending, (error) => error?.name === "AbortError");
+  assert.deepEqual(closed, ["session-close-during-start"]);
 });

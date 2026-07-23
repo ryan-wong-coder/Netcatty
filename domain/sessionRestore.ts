@@ -1,4 +1,5 @@
-import type { SerialConfig, TerminalSession, Workspace, WorkspaceNode } from "./models";
+import type { PluginConnectionConfig, SerialConfig, TerminalSession, Workspace, WorkspaceNode } from "./models";
+import { isPluginHostProtocol, sanitizePluginConnection } from "./pluginConnection";
 
 export const SESSION_RESTORE_VERSION = 1 as const;
 
@@ -11,6 +12,7 @@ export type RestoredTerminalSession = {
   status: "disconnected";
   workspaceId?: string;
   protocol?: TerminalSession["protocol"];
+  pluginConnection?: PluginConnectionConfig;
   port?: number;
   moshEnabled?: boolean;
   etEnabled?: boolean;
@@ -86,9 +88,10 @@ const isOneOf = <T extends string | number>(
   allowed: readonly T[],
 ): value is T => allowed.includes(value as T);
 
-const sanitizeProtocol = (value: unknown): TerminalSession["protocol"] | undefined => (
-  isOneOf(value, ["ssh", "telnet", "local", "serial"] as const) ? value : undefined
-);
+const sanitizeProtocol = (value: unknown): TerminalSession["protocol"] | undefined => {
+  if (isOneOf(value, ["ssh", "telnet", "mosh", "et", "local", "serial"] as const)) return value;
+  return typeof value === "string" && isPluginHostProtocol(value) ? value : undefined;
+};
 
 const sanitizeShellType = (value: unknown): TerminalSession["shellType"] | undefined => (
   isOneOf(value, ["posix", "fish", "powershell", "cmd", "unknown"] as const) ? value : undefined
@@ -122,6 +125,7 @@ const sanitizeSerialConfig = (value: unknown): SerialConfig | undefined => {
 const restoreSession = (session: TerminalSession): RestoredTerminalSession => {
   const serialConfig = sanitizeSerialConfig(session.serialConfig);
   const protocol = sanitizeProtocol(session.protocol);
+  const pluginConnection = sanitizePluginConnection(session.pluginConnection, protocol);
   const shellType = sanitizeShellType(session.shellType);
   return {
     id: session.id,
@@ -131,6 +135,7 @@ const restoreSession = (session: TerminalSession): RestoredTerminalSession => {
     username: session.username,
     ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
     ...(protocol ? { protocol } : {}),
+    ...(pluginConnection ? { pluginConnection } : {}),
     ...(session.port !== undefined ? { port: session.port } : {}),
     ...(session.moshEnabled !== undefined ? { moshEnabled: session.moshEnabled } : {}),
     ...(session.etEnabled !== undefined ? { etEnabled: session.etEnabled } : {}),
@@ -162,6 +167,7 @@ const restoreSessionFromUnknown = (value: unknown): RestoredTerminalSession | nu
 
   const serialConfig = sanitizeSerialConfig(value.serialConfig);
   const protocol = sanitizeProtocol(value.protocol);
+  const pluginConnection = sanitizePluginConnection(value.pluginConnection, protocol);
   const shellType = sanitizeShellType(value.shellType);
   return {
     id,
@@ -171,6 +177,7 @@ const restoreSessionFromUnknown = (value: unknown): RestoredTerminalSession | nu
     username,
     ...(readString(value, "workspaceId") ? { workspaceId: readString(value, "workspaceId") } : {}),
     ...(protocol ? { protocol } : {}),
+    ...(pluginConnection ? { pluginConnection } : {}),
     ...(readNumber(value, "port") !== undefined ? { port: readNumber(value, "port") } : {}),
     ...(readBoolean(value, "moshEnabled") !== undefined ? { moshEnabled: readBoolean(value, "moshEnabled") } : {}),
     ...(readBoolean(value, "etEnabled") !== undefined ? { etEnabled: readBoolean(value, "etEnabled") } : {}),

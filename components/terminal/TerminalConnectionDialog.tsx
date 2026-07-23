@@ -8,6 +8,7 @@ import { useI18n } from '../../application/i18n/I18nProvider';
 import { cn } from '../../lib/utils';
 import { Host, SSHKey } from '../../types';
 import { formatHostPort, resolveTelnetPort } from '../../domain/host';
+import { isPluginHostProtocol } from '../../domain/pluginConnection';
 import { DistroAvatar } from '../DistroAvatar';
 import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
@@ -61,6 +62,9 @@ const getProtocolInfo = (host: Host): { i18nKey: string; showPort: boolean; port
         return { i18nKey: 'terminal.connection.protocol.et', showPort: true, port: host.etPort || 2022 };
     }
     const protocol = host.protocol || 'ssh';
+    if (isPluginHostProtocol(protocol)) {
+        return { i18nKey: 'terminal.connection.protocol.plugin', showPort: false, port: 0 };
+    }
     switch (protocol) {
         case 'local':
             return { i18nKey: 'terminal.connection.protocol.local', showPort: false, port: 0 };

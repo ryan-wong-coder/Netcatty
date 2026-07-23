@@ -274,6 +274,53 @@ declare global {
     };
   }
 
+  interface NetcattyExtensionProviderContribution {
+    pluginId: string;
+    pluginVersion: string;
+    pluginDisplayName?: string;
+    provider: import("@netcatty/plugin-contract").ProviderContribution;
+  }
+
+  interface NetcattyExtensionProviderRequest {
+    providerId: string;
+    kind: 'connection' | 'authentication' | 'importer';
+    operation: string;
+    requestId?: string;
+    payload?: import("@netcatty/plugin-contract").JsonValue;
+    deadlineMs?: number;
+  }
+
+  interface NetcattyPluginConnectionStartRequest {
+    requestId?: string;
+    sessionId: string;
+    protocol?: string;
+    providerId: string;
+    configuration: import("@netcatty/plugin-contract").JsonValue;
+    columns: number;
+    rows: number;
+    credential?: import("@netcatty/plugin-contract").CredentialRef | import("@netcatty/plugin-contract").SecretRef;
+    authenticationProviderId?: string;
+    deadlineMs?: number;
+  }
+
+  interface NetcattyPluginImporterPreview {
+    providerId: string;
+    result: import("@netcatty/plugin-contract").ImporterParseResult;
+    records: ReadonlyArray<import("@netcatty/plugin-contract").ImporterRecord>;
+  }
+
+  interface NetcattyPluginImporterProgressEvent {
+    requestId: string;
+    providerId: string;
+    progress: Extract<import("@netcatty/plugin-contract").ImporterRecord, { type: "progress" }>;
+  }
+
+  interface NetcattyPluginAuthenticationChallengeEvent {
+    requestId: string;
+    challengeRequestId: string;
+    challenge: import("@netcatty/plugin-contract").AuthenticationChallenge;
+  }
+
   interface NetcattyBridge {
     getPluginRuntimeStatus?(): Promise<NetcattyPluginRuntimeStatus>;
     listPlugins?(): Promise<NetcattyInstalledPlugin[]>;
@@ -291,6 +338,28 @@ declare global {
     providePluginTerminal?(request: NetcattyTerminalProviderRequest): Promise<ReadonlyArray<NetcattyTerminalProviderResult>>;
     cancelPluginTerminalRequest?(requestId: string): Promise<boolean>;
     publishPluginTerminalSessionEvent?(event: NetcattyTerminalSessionEvent): Promise<ReadonlyArray<{ pluginId: string; delivered: boolean }>>;
+    listPluginExtensionProviders?(options: { kind: 'connection' | 'authentication' | 'importer'; locale?: string }): Promise<ReadonlyArray<NetcattyExtensionProviderContribution>>;
+    updatePluginCredentialCatalog?(entries: ReadonlyArray<{ id: string; ciphertext: string }>): Promise<number>;
+    invokePluginExtensionProvider?(request: NetcattyExtensionProviderRequest): Promise<import("@netcatty/plugin-contract").JsonValue>;
+    cancelPluginExtensionRequest?(requestId: string): Promise<boolean>;
+    startPluginConnection?(request: NetcattyPluginConnectionStartRequest): Promise<{ sessionId: string; providerId: string; status: 'connecting' | 'connected'; diagnostics: ReadonlyArray<import("@netcatty/plugin-contract").ProviderValidationIssue> }>;
+    writePluginConnection?(sessionId: string, data: Uint8Array): Promise<void>;
+    controlPluginConnection?(sessionId: string, operation: 'resize' | 'signal' | 'reconnect' | 'close' | 'getStatus', payload?: Record<string, unknown>): Promise<unknown>;
+    detectPluginImporter?(request: { providerId: string; sample: Uint8Array; fileName?: string; mediaType?: string; deadlineMs?: number }): Promise<import("@netcatty/plugin-contract").ImporterDetectResult>;
+    selectPluginImporterFile?(): Promise<{ selectionToken: string; fileName: string; sample: Uint8Array } | null>;
+    releasePluginImporterFile?(selectionToken: string): Promise<boolean>;
+    parsePluginImporterFile?(request: { requestId?: string; providerId: string; selectionToken: string; mediaType?: string; options?: import("@netcatty/plugin-contract").JsonValue; deadlineMs?: number }): Promise<NetcattyPluginImporterPreview>;
+    onPluginImporterProgress?(callback: (event: NetcattyPluginImporterProgressEvent) => void): () => void;
+    respondPluginAuthenticationChallenge?(response: {
+      requestId: string;
+      challengeRequestId: string;
+      challengeId: string;
+      response?: string | boolean | ReadonlyArray<string>;
+      cancelled?: boolean;
+    }): Promise<void>;
+    onPluginAuthenticationChallenge?(callback: (event: NetcattyPluginAuthenticationChallengeEvent) => void): () => void;
+    onPluginConnectionData?(callback: (event: { sessionId: string; data: Uint8Array }) => void): () => void;
+    onPluginConnectionClosed?(callback: (event: { sessionId: string; reason: string }) => void): () => void;
     openPluginView?(payload: NetcattyPluginViewOpenRequest): Promise<{ instanceId: string }>;
     closePluginView?(instanceId: string): Promise<void>;
     setPluginViewBounds?(instanceId: string, bounds: { x: number; y: number; width: number; height: number }): Promise<void>;

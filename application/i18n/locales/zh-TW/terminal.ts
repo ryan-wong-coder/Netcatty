@@ -28,6 +28,7 @@ export const zhTWTerminalMessages: Messages = {
   'terminal.progress.autoReconnectScheduled': '連線已斷開，將在 {seconds} 秒後自動重連（第 {attempt} 次）。',
   'terminal.progress.autoReconnectAttempt': '正在自動重連（第 {attempt} 次）...',
   'terminal.connection.protocol.et': 'EternalTerminal',
+  'terminal.connection.protocol.plugin': '外掛連線',
   'terminal.et.proxyUnsupported': 'EternalTerminal 目前不支援 Netcatty 的代理設定。請改用 SSH，或移除該主機的代理。',
   'terminal.et.multiJumpUnsupported': 'EternalTerminal 目前在 Netcatty 中最多支援一個跳板機。',
   // Command history side panel

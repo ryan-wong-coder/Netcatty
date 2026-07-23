@@ -602,6 +602,325 @@
       },
       "additionalProperties": false
     },
+    "ProviderValidationIssue": {
+      "type": "object",
+      "required": ["severity", "message"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 1024 },
+        "severity": { "type": "string", "enum": ["warning", "error"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionConfigurationPayload": {
+      "type": "object",
+      "required": ["configuration"],
+      "properties": { "configuration": { "$ref": "#/$defs/JsonValue" } },
+      "additionalProperties": false
+    },
+    "ConnectionValidateResult": {
+      "type": "object",
+      "required": ["valid", "issues"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "issues": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/ProviderValidationIssue" } }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionProbeResult": {
+      "type": "object",
+      "required": ["available"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "message": { "type": "string", "maxLength": 2048 },
+        "capabilities": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": { "$ref": "#/$defs/JsonValue" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionOpenPayload": {
+      "type": "object",
+      "required": ["configuration", "operationId", "columns", "rows", "inputStreamId", "outputStreamId", "windowBytes"],
+      "properties": {
+        "configuration": { "$ref": "#/$defs/JsonValue" },
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "columns": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "inputStreamId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "outputStreamId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "windowBytes": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
+        "credential": {
+          "oneOf": [
+            { "$ref": "#/$defs/SecretRef" },
+            { "$ref": "#/$defs/CredentialRef" },
+            { "$ref": "#/$defs/SecretLeaseRef" }
+          ]
+        },
+        "authenticationProviderId": { "$ref": "#/$defs/ContributionId" }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionOpenResult": {
+      "type": "object",
+      "required": ["connectionId", "status"],
+      "properties": {
+        "connectionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "type": "string", "enum": ["connecting", "connected"] },
+        "diagnostics": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/ProviderValidationIssue" } }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionControlPayload": {
+      "type": "object",
+      "required": ["connectionId", "operationId"],
+      "properties": {
+        "connectionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionResizePayload": {
+      "type": "object",
+      "required": ["connectionId", "operationId", "columns", "rows"],
+      "properties": {
+        "connectionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "columns": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 16384 }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionSignalPayload": {
+      "type": "object",
+      "required": ["connectionId", "operationId", "signal"],
+      "properties": {
+        "connectionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "signal": { "type": "string", "enum": ["interrupt", "terminate", "kill", "eof", "break"] }
+      },
+      "additionalProperties": false
+    },
+    "ConnectionStatusResult": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["connecting", "connected", "reconnecting", "closed", "error"] },
+        "message": { "type": "string", "maxLength": 2048 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "AuthenticationChallenge": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["id", "kind", "title"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "kind": { "type": "string", "enum": ["text", "password", "otp"] },
+            "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "message": { "type": "string", "maxLength": 2048 },
+            "placeholder": { "type": "string", "maxLength": 512 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["id", "kind", "title", "choices"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "kind": { "const": "choice" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "message": { "type": "string", "maxLength": 2048 },
+            "choices": {
+              "type": "array", "minItems": 1, "maxItems": 64,
+              "items": {
+                "type": "object", "required": ["id", "label"],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "description": { "type": "string", "maxLength": 2048 }
+                },
+                "additionalProperties": false
+              }
+            },
+            "multiple": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["id", "kind", "title"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "kind": { "const": "confirmation" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "message": { "type": "string", "maxLength": 2048 },
+            "confirmLabel": { "type": "string", "maxLength": 128 },
+            "cancelLabel": { "type": "string", "maxLength": 128 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["id", "kind", "title", "url"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "kind": { "const": "browser" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "url": { "type": "string", "format": "uri", "maxLength": 8192 },
+            "callbackUri": { "type": "string", "format": "uri", "maxLength": 8192 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["id", "kind", "title", "verificationUri", "userCode", "expiresAt"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "kind": { "const": "deviceCode" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "verificationUri": { "type": "string", "format": "uri", "maxLength": 8192 },
+            "userCode": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "expiresAt": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "intervalMs": { "type": "integer", "minimum": 100, "maximum": 300000 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AuthenticationBeginPayload": {
+      "type": "object",
+      "required": ["operationId", "connectionProviderId", "configuration"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "connectionProviderId": { "$ref": "#/$defs/ContributionId" },
+        "configuration": { "$ref": "#/$defs/JsonValue" },
+        "credential": { "oneOf": [{ "$ref": "#/$defs/SecretRef" }, { "$ref": "#/$defs/CredentialRef" }, { "$ref": "#/$defs/SecretLeaseRef" }] }
+      },
+      "additionalProperties": false
+    },
+    "AuthenticationResponsePayload": {
+      "type": "object",
+      "required": ["operationId", "challengeId", "response"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "challengeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "response": {
+          "oneOf": [
+            { "type": "string", "maxLength": 8192 },
+            { "type": "boolean" },
+            { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "maxLength": 128 } },
+            { "$ref": "#/$defs/SecretLeaseRef" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthenticationResult": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["challenge", "authenticated", "cancelled", "failed"] },
+        "challenge": { "$ref": "#/$defs/AuthenticationChallenge" },
+        "credential": { "oneOf": [{ "$ref": "#/$defs/SecretRef" }, { "$ref": "#/$defs/CredentialRef" }] },
+        "message": { "type": "string", "maxLength": 2048 }
+      },
+      "additionalProperties": false
+    },
+    "ImporterDetectPayload": {
+      "type": "object",
+      "required": ["sample"],
+      "properties": {
+        "fileName": { "type": "string", "maxLength": 1024 },
+        "mediaType": { "type": "string", "maxLength": 256 },
+        "sample": {
+          "type": "object", "required": ["encoding", "data"],
+          "properties": {
+            "encoding": { "const": "base64" },
+            "data": { "type": "string", "maxLength": 174764 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImporterDetectResult": {
+      "type": "object",
+      "required": ["confidence"],
+      "properties": {
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "format": { "type": "string", "maxLength": 256 },
+        "reason": { "type": "string", "maxLength": 2048 }
+      },
+      "additionalProperties": false
+    },
+    "ImporterParsePayload": {
+      "type": "object",
+      "required": ["operationId", "inputStreamId", "outputStreamId", "windowBytes"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fileName": { "type": "string", "maxLength": 1024 },
+        "mediaType": { "type": "string", "maxLength": 256 },
+        "inputStreamId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "outputStreamId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "windowBytes": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
+        "options": { "$ref": "#/$defs/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "ImporterParseResult": {
+      "type": "object",
+      "required": ["parsed", "warnings", "errors"],
+      "properties": {
+        "parsed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "warnings": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "errors": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      },
+      "additionalProperties": false
+    },
+    "ImporterRecord": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["type", "draft"],
+          "properties": {
+            "type": { "const": "draft" },
+            "draft": {
+              "type": "object", "required": ["kind", "value"],
+              "properties": {
+                "kind": { "type": "string", "enum": ["host", "identity", "key", "snippet", "group"] },
+                "value": { "$ref": "#/$defs/JsonValue" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["type", "message"],
+          "properties": {
+            "type": { "type": "string", "enum": ["warning", "error"] },
+            "code": { "type": "string", "maxLength": 128 },
+            "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "path": { "type": "string", "maxLength": 1024 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["type", "completed"],
+          "properties": {
+            "type": { "const": "progress" },
+            "completed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "total": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "message": { "type": "string", "maxLength": 2048 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "CompanionPlatform": {
       "type": "string",
       "enum": [

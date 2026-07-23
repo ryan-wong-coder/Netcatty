@@ -106,6 +106,9 @@ export const createHostTerminalSession = (
     username: host.username,
     status: "connecting",
     protocol: host.protocol,
+    pluginConnection: host.pluginConnection == null
+      ? undefined
+      : structuredClone(host.pluginConnection),
     port: host.port,
     moshEnabled: host.moshEnabled,
     etEnabled: host.etEnabled,

@@ -937,5 +937,13 @@ export const zhCNCoreMessages: Messages = {
   'settings.plugins.scopeTarget': '{scope} 目标',
   'settings.plugins.noScopeTargets': '暂无可用目标',
   'settings.plugins.thisDevice': '此设备',
+  'plugins.authentication.description': '请在此 Netcatty 对话框中完成认证请求。',
+  'plugins.authentication.value': '值',
+  'plugins.authentication.password': '密码',
+  'plugins.authentication.code': '一次性验证码',
+  'plugins.authentication.deviceCode': '设备代码',
+  'plugins.authentication.openBrowser': '打开浏览器',
+  'plugins.authentication.invalidUrl': '认证提供程序返回了不安全或无效的网址。',
+  'plugins.authentication.continue': '继续',
 
 };

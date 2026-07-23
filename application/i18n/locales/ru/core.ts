@@ -929,4 +929,12 @@ export const ruCoreMessages: Messages = {
   'settings.plugins.scopeTarget': 'Цель {scope}',
   'settings.plugins.noScopeTargets': 'Нет доступных целей',
   'settings.plugins.thisDevice': 'Это устройство',
+  'plugins.authentication.description': 'Завершите запрос аутентификации в этом диалоге Netcatty.',
+  'plugins.authentication.value': 'Значение',
+  'plugins.authentication.password': 'Пароль',
+  'plugins.authentication.code': 'Одноразовый код',
+  'plugins.authentication.deviceCode': 'Код устройства',
+  'plugins.authentication.openBrowser': 'Открыть браузер',
+  'plugins.authentication.invalidUrl': 'Поставщик аутентификации вернул небезопасный или некорректный URL.',
+  'plugins.authentication.continue': 'Продолжить',
 };

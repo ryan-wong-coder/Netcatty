@@ -36,6 +36,18 @@ function assertHandleId(value) {
   return value;
 }
 
+function assertOperationId(value) {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > 128
+    || value.includes("\0")
+  ) {
+    throw new PluginRpcError(RPC_ERRORS.invalidArgument, "Plugin companion operation ID is invalid");
+  }
+  return value;
+}
+
 function assertCompanionMethod(value) {
   if (
     typeof value !== "string"
@@ -352,10 +364,33 @@ class PluginCompanionSupervisor {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
       throw new PluginRpcError(RPC_ERRORS.invalidArgument, "Plugin companion request timeout is invalid");
     }
+    let credentialLeases;
+    let operationId;
+    if (params.credentialLeases !== undefined) {
+      if (!params.credentialLeases || typeof params.credentialLeases !== "object"
+        || Array.isArray(params.credentialLeases)
+        || Object.keys(params.credentialLeases).length < 1
+        || Object.keys(params.credentialLeases).length > 16) {
+        throw new PluginRpcError(RPC_ERRORS.invalidArgument, "Plugin companion credential leases are invalid");
+      }
+      operationId = assertOperationId(params.operationId);
+      credentialLeases = {};
+      for (const [name, lease] of Object.entries(params.credentialLeases)) {
+        if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(name)
+          || !lease || typeof lease !== "object" || Array.isArray(lease)
+          || lease.kind !== "secretLease"
+          || typeof lease.id !== "string" || lease.id.length < 16 || lease.id.length > 256) {
+          throw new PluginRpcError(RPC_ERRORS.invalidArgument, "Plugin companion credential lease is invalid");
+        }
+        credentialLeases[name] = Object.freeze({ kind: "secretLease", id: lease.id });
+      }
+      Object.freeze(credentialLeases);
+    }
     return {
       handleId: assertHandleId(params.handleId),
       method: assertCompanionMethod(params.method),
       ...(params.params === undefined ? {} : { params: params.params }),
+      ...(credentialLeases === undefined ? {} : { credentialLeases, operationId }),
       timeoutMs,
     };
   }

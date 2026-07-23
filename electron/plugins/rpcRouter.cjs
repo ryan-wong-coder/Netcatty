@@ -21,6 +21,7 @@ const RPC_ERRORS = Object.freeze({
   invalidArgument: -32003,
   deadlineExceeded: -32004,
   notFound: -32005,
+  alreadyExists: -32006,
   permissionDenied: -32007,
   resourceExhausted: -32008,
   failedPrecondition: -32009,

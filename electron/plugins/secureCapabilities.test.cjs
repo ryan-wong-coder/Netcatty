@@ -157,3 +157,87 @@ test("companion start authorization receives host-owned runtime placement", () =
   }, runtimeContext);
   assert.equal(observedContext, runtimeContext);
 });
+
+test("companion requests consume operation-bound credential leases exactly once", async () => {
+  const registrations = new Map();
+  const registry = {
+    use() {},
+    registerRequest(method, handler, options) { registrations.set(method, { handler, options }); },
+  };
+  const middlewareOwner = { createMiddleware: () => async (_context, next) => next() };
+  const consumed = [];
+  const forwarded = [];
+  const credentialBroker = {
+    async consumeLease(context, lease, operationId) {
+      consumed.push({ context, lease, operationId });
+      return lease.id.endsWith("user") ? "alice" : "correct horse battery staple";
+    },
+  };
+  const companionSupervisor = {
+    validateRequest(params) { return params; },
+    describeHandleAuthorization: () => ({
+      permission: "companion.execute",
+      resources: ["com.example.secure.helper"],
+    }),
+    async request(params, context) {
+      forwarded.push({ params, context });
+      return { accepted: true };
+    },
+    validateStart: (params) => params,
+    validateStop: (params) => params,
+    describeStartAuthorization: () => ({
+      permission: "companion.execute",
+      resources: ["com.example.secure.helper"],
+    }),
+    start: async () => null,
+    stop: async () => null,
+  };
+  const broker = new Proxy({}, { get: () => () => ({}) });
+  registerSecurePluginCapabilities(registry, {
+    quotaManager: middlewareOwner,
+    permissionEngine: middlewareOwner,
+    secretStore: {},
+    credentialBroker,
+    networkBroker: broker,
+    filesystemBroker: broker,
+    companionSupervisor,
+    assertLeaseParams: (params) => params,
+  });
+
+  const context = {
+    pluginId: "com.example.secure",
+    async assertActive() {},
+  };
+  const result = await registrations.get("companion.request").handler({
+    handleId: "companion-handle-0001",
+    method: "authenticate",
+    params: { host: "example.test" },
+    credentialLeases: {
+      username: { kind: "secretLease", id: "credential-lease-user" },
+      password: { kind: "secretLease", id: "credential-lease-password" },
+    },
+    operationId: "login",
+    timeoutMs: 5_000,
+  }, context);
+
+  assert.deepEqual(result, { accepted: true });
+  assert.equal(consumed.length, 2);
+  assert.deepEqual(consumed.map(({ lease, operationId }) => [lease.id, operationId]), [
+    ["credential-lease-user", "login"],
+    ["credential-lease-password", "login"],
+  ]);
+  assert.equal(forwarded.length, 1);
+  assert.deepEqual(forwarded[0].params, {
+    handleId: "companion-handle-0001",
+    method: "authenticate",
+    params: {
+      payload: { host: "example.test" },
+      credentials: {
+        username: "alice",
+        password: "correct horse battery staple",
+      },
+    },
+    timeoutMs: 5_000,
+  });
+  assert.equal(forwarded[0].context, context);
+});

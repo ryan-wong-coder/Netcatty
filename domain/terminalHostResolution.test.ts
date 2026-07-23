@@ -120,6 +120,59 @@ test("resolveTerminalSessionHost keeps explicit missing local sessions local", (
   assert.equal(resolved.os, "macos");
 });
 
+test("resolveTerminalSessionHost restores a missing plugin host from the session snapshot", () => {
+  const providerId = "com.example.transport.connection";
+  const pluginConnection = {
+    providerId,
+    configuration: { endpoint: "saved.example", mode: "opaque" },
+  };
+  const resolved = resolveTerminalSessionHost({
+    session: {
+      ...baseSession,
+      hostId: "missing-plugin-host",
+      protocol: `plugin:${providerId}`,
+      pluginConnection,
+    },
+    hosts: [],
+    groupConfigs: [],
+    proxyProfiles,
+    localOs: "macos",
+  });
+
+  assert.equal(resolved.protocol, `plugin:${providerId}`);
+  assert.deepEqual(resolved.pluginConnection, pluginConnection);
+});
+
+test("resolveTerminalSessionHost keeps the session plugin configuration when the Vault host changes", () => {
+  const providerId = "com.example.transport.connection";
+  const protocol = `plugin:${providerId}` as const;
+  const resolved = resolveTerminalSessionHost({
+    session: {
+      ...baseSession,
+      protocol,
+      pluginConnection: { providerId, configuration: { endpoint: "session.example" } },
+    },
+    hosts: [{
+      id: "target",
+      label: "Target",
+      hostname: providerId,
+      username: "",
+      tags: [],
+      os: "linux",
+      protocol,
+      pluginConnection: { providerId, configuration: { endpoint: "vault.example" } },
+    }],
+    groupConfigs: [],
+    proxyProfiles,
+    localOs: "linux",
+  });
+
+  assert.deepEqual(resolved.pluginConnection, {
+    providerId,
+    configuration: { endpoint: "session.example" },
+  });
+});
+
 test("resolveTerminalSessionHost carries local session start directory into fallback host", () => {
   const resolved = resolveTerminalSessionHost({
     session: {

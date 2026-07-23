@@ -4,6 +4,66 @@
 
 export type ActivationEvent = "onStartupFinished" | `onCommand:${ContributionId}` | `onView:${ContributionId}` | `onProvider:${ContributionId}`;
 
+export type AuthenticationBeginPayload = {
+  operationId: string;
+  connectionProviderId: ContributionId;
+  configuration: JsonValue;
+  credential?: (SecretRef) | (CredentialRef) | (SecretLeaseRef);
+};
+
+export type AuthenticationChallenge = ({
+  id: string;
+  kind: "text" | "password" | "otp";
+  title: string;
+  message?: string;
+  placeholder?: string;
+}) | ({
+  id: string;
+  kind: "choice";
+  title: string;
+  message?: string;
+  choices: Array<{
+    id: string;
+    label: string;
+    description?: string;
+  }>;
+  multiple?: boolean;
+}) | ({
+  id: string;
+  kind: "confirmation";
+  title: string;
+  message?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+}) | ({
+  id: string;
+  kind: "browser";
+  title: string;
+  url: string;
+  callbackUri?: string;
+}) | ({
+  id: string;
+  kind: "deviceCode";
+  title: string;
+  verificationUri: string;
+  userCode: string;
+  expiresAt: number;
+  intervalMs?: number;
+});
+
+export type AuthenticationResponsePayload = {
+  operationId: string;
+  challengeId: string;
+  response: (string) | (boolean) | (Array<string>) | (SecretLeaseRef);
+};
+
+export type AuthenticationResult = {
+  status: "challenge" | "authenticated" | "cancelled" | "failed";
+  challenge?: AuthenticationChallenge;
+  credential?: (SecretRef) | (CredentialRef);
+  message?: string;
+};
+
 export type BoundedPermissionResource = string;
 
 export type CommandContribution = {
@@ -29,6 +89,63 @@ export type CompanionExecutableVariant = {
 
 export type CompanionPlatform = "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64" | "win32-arm64" | "win32-x64";
 
+export type ConnectionConfigurationPayload = {
+  configuration: JsonValue;
+};
+
+export type ConnectionControlPayload = {
+  connectionId: string;
+  operationId: string;
+};
+
+export type ConnectionOpenPayload = {
+  configuration: JsonValue;
+  operationId: string;
+  columns: number;
+  rows: number;
+  inputStreamId: string;
+  outputStreamId: string;
+  windowBytes: number;
+  credential?: (SecretRef) | (CredentialRef) | (SecretLeaseRef);
+  authenticationProviderId?: ContributionId;
+};
+
+export type ConnectionOpenResult = {
+  connectionId: string;
+  status: "connecting" | "connected";
+  diagnostics?: Array<ProviderValidationIssue>;
+};
+
+export type ConnectionProbeResult = {
+  available: boolean;
+  message?: string;
+  capabilities?: { [key: string]: JsonValue };
+};
+
+export type ConnectionResizePayload = {
+  connectionId: string;
+  operationId: string;
+  columns: number;
+  rows: number;
+};
+
+export type ConnectionSignalPayload = {
+  connectionId: string;
+  operationId: string;
+  signal: "interrupt" | "terminate" | "kill" | "eof" | "break";
+};
+
+export type ConnectionStatusResult = {
+  status: "connecting" | "connected" | "reconnecting" | "closed" | "error";
+  message?: string;
+  retryable?: boolean;
+};
+
+export type ConnectionValidateResult = {
+  valid: boolean;
+  issues: Array<ProviderValidationIssue>;
+};
+
 export type ContextKeyExpression = string;
 
 export type ContributionId = string;
@@ -41,6 +158,55 @@ export type CredentialRef = {
 export type FeatureId = string;
 
 export type IconReference = (ThemeIcon) | (PackageIcon);
+
+export type ImporterDetectPayload = {
+  fileName?: string;
+  mediaType?: string;
+  sample: {
+    encoding: "base64";
+    data: string;
+  };
+};
+
+export type ImporterDetectResult = {
+  confidence: number;
+  format?: string;
+  reason?: string;
+};
+
+export type ImporterParsePayload = {
+  operationId: string;
+  fileName?: string;
+  mediaType?: string;
+  inputStreamId: string;
+  outputStreamId: string;
+  windowBytes: number;
+  options?: JsonValue;
+};
+
+export type ImporterParseResult = {
+  parsed: number;
+  warnings: number;
+  errors: number;
+};
+
+export type ImporterRecord = ({
+  type: "draft";
+  draft: {
+    kind: "host" | "identity" | "key" | "snippet" | "group";
+    value: JsonValue;
+  };
+}) | ({
+  type: "warning" | "error";
+  code?: string;
+  message: string;
+  path?: string;
+}) | ({
+  type: "progress";
+  completed: number;
+  total?: number;
+  message?: string;
+});
 
 export type JsonPrimitive = (string) | (number) | (boolean) | (null);
 
@@ -261,6 +427,12 @@ export type ProviderResult = ({
   status: "failed";
   error: RpcErrorObject;
 });
+
+export type ProviderValidationIssue = {
+  path?: string;
+  severity: "warning" | "error";
+  message: string;
+};
 
 export type RelativePackagePath = string;
 

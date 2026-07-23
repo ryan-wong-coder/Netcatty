@@ -50,6 +50,7 @@ import {
 } from "../../../domain/proxyProfiles";
 import { hasConnectionPassedTcpDial } from "../connectionTimeouts";
 import { resolveHostSshConnectionTimeouts } from "../../../domain/sshConnectionTimeouts";
+import { isPluginHostProtocol, sanitizePluginConnection } from "../../../domain/pluginConnection";
 
 const TELNET_SESSION_REPLACED_ERROR = "Telnet session start was replaced";
 const JUMP_HOST_AUTH_FAILED_PREFIX = "Jump host authentication failed";
@@ -837,6 +838,7 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
       attachTelnetEchoMode(ctx.sessionId);
       const id = await ctx.terminalBackend.startTelnetSession({
         sessionId: ctx.sessionId,
+        protocol: ctx.host.protocol,
         hostname: ctx.host.hostname,
         port: resolveTelnetPort(ctx.host),
         username: telnetUsername,
@@ -1411,6 +1413,75 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
     }
   };
 
+  const startPluginConnection = async (term: XTerm) => {
+    if (!ctx.terminalBackend.pluginConnectionAvailable()) {
+      ctx.setError("Plugin connection bridge unavailable. Please run the desktop build with Plugin Development enabled.");
+      writeTerminalLine(ctx, term, "\r\n[Plugin connection bridge unavailable.]");
+      ctx.updateStatus("disconnected");
+      return;
+    }
+    if (!isPluginHostProtocol(ctx.host.protocol)) {
+      ctx.setError("Plugin connection protocol is invalid.");
+      ctx.updateStatus("disconnected");
+      return;
+    }
+    const connection = sanitizePluginConnection(ctx.host.pluginConnection, ctx.host.protocol);
+    if (!connection) {
+      const message = "Plugin connection configuration is missing or invalid. Open host settings and select an installed connection Provider.";
+      ctx.setError(message);
+      writeTerminalLine(ctx, term, `\r\n[${message}]`);
+      ctx.updateStatus("disconnected");
+      return;
+    }
+    try {
+      const opened = await ctx.terminalBackend.startPluginConnection({
+        sessionId: ctx.sessionId,
+        protocol: ctx.host.protocol,
+        providerId: connection.providerId,
+        configuration: connection.configuration,
+        columns: term.cols,
+        rows: term.rows,
+        ...(connection.authenticationProviderId
+          ? { authenticationProviderId: connection.authenticationProviderId }
+          : {}),
+        ...(connection.credentialId
+          ? { credential: { kind: "credential" as const, id: connection.credentialId } }
+          : {}),
+      });
+      const id = opened.sessionId;
+      if (opened.diagnostics.length > 0) {
+        ctx.setProgressLogs((previous) => [
+          ...previous,
+          ...opened.diagnostics.map((issue) => `[Plugin ${issue.severity}] ${issue.message}`),
+        ]);
+      }
+      let startupScheduled = false;
+      const schedulePluginStartup = () => {
+        if (startupScheduled) return;
+        startupScheduled = true;
+        scheduleStartupCommand(ctx, term, id);
+      };
+      if (!tryAttachSessionToTerminal(ctx, term, id, {
+        onExitMessage: (event) => event?.error
+          ? `\r\n[Plugin connection closed: ${event.error}]`
+          : "\r\n[Plugin connection closed]",
+        onConnected: schedulePluginStartup,
+      })) {
+        abortSessionStartAfterUnmount();
+        return;
+      }
+      if (opened.status === "connected") {
+        ctx.updateStatus("connected");
+        schedulePluginStartup();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.setError(message);
+      writeTerminalLine(ctx, term, "\r\n[Failed to start plugin connection. See connection details.]");
+      ctx.updateStatus("disconnected");
+    }
+  };
+
   const startLocal = async (term: XTerm) => {
     if (!ctx.terminalBackend.localAvailable()) {
       ctx.setError("Local shell bridge unavailable. Please run the desktop build.");
@@ -1596,5 +1667,5 @@ export const createTerminalSessionStarters = (ctx: TerminalSessionStartersContex
     return true;
   };
 
-  return { startSSH, startTelnet, startMosh, startEt, startLocal, startSerial, reattachSession };
+  return { startSSH, startTelnet, startMosh, startEt, startPluginConnection, startLocal, startSerial, reattachSession };
 };

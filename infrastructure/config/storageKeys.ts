@@ -218,6 +218,8 @@ export const STORAGE_KEY_DISABLE_TERMINAL_FONT_ZOOM = 'netcatty_disable_terminal
 
 // Group Configurations (default settings inherited by hosts)
 export const STORAGE_KEY_GROUP_CONFIGS = 'netcatty_group_configs_v1';
+/** Crash-recovery journal for the plugin importer multi-key Vault commit. */
+export const STORAGE_KEY_PLUGIN_IMPORT_TRANSACTION = 'netcatty_plugin_import_transaction_v1';
 
 // Side Panel
 export const STORAGE_KEY_SIDE_PANEL_WIDTH = 'netcatty_side_panel_width';

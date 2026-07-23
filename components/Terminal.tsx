@@ -47,6 +47,7 @@ import { resolveHostSshConnectionTimeouts } from "../domain/sshConnectionTimeout
 import { supportsZmodemTerminalDragDrop } from "../lib/zmodemDragDrop";
 import { resolveHostAuth, resolveHostAutofillPassword } from "../domain/sshAuth";
 import { resolveEffectiveTerminalProtocol } from "../domain/terminalProtocol";
+import { isPluginHostProtocol } from "../domain/pluginConnection";
 import {
   appendTerminalPromptSecurityTail,
   isConfirmedTerminalShellPrompt,
@@ -322,6 +323,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
   const hostConnectionTimeouts = resolveHostSshConnectionTimeouts(host);
   const CONNECTION_TIMEOUT = hostConnectionTimeouts.tcpConnectTimeoutSeconds * 1000;
   const effectiveTerminalProtocol = resolveEffectiveTerminalProtocol(host);
+  const isPluginConnection = isPluginHostProtocol(effectiveTerminalProtocol);
   const { t } = useI18n();
   const connectScriptsConsumedRef = useRef(false);
   const connectScriptsCompletedIdsRef = useRef(new Set<string>());
@@ -711,16 +713,18 @@ const TerminalComponent: React.FC<TerminalProps> = ({
   // Prefer parent-supplied candidates (TerminalLayer); otherwise derive from
   // host/keys/identities so standalone popups (TerminalPopupPage) still work.
   const resolvedSudoAutofillCandidates = useMemo(
-    () =>
-      sudoAutofillCandidates
-      ?? listPasswordPromptFillCandidates({ host, keys, identities }),
-    [sudoAutofillCandidates, host, keys, identities],
+    () => isPluginConnection
+      ? []
+      : sudoAutofillCandidates
+        ?? listPasswordPromptFillCandidates({ host, keys, identities }),
+    [sudoAutofillCandidates, host, keys, identities, isPluginConnection],
   );
   const resolvedSudoAutofillPassword = useMemo(
-    () =>
-      sudoAutofillPassword
-      ?? resolveHostAutofillPassword({ host, keys, identities }),
-    [sudoAutofillPassword, host, keys, identities],
+    () => isPluginConnection
+      ? undefined
+      : sudoAutofillPassword
+        ?? resolveHostAutofillPassword({ host, keys, identities }),
+    [sudoAutofillPassword, host, keys, identities, isPluginConnection],
   );
   const sudoAutofillPasswordRef = useRef(resolvedSudoAutofillPassword);
   sudoAutofillPasswordRef.current = resolvedSudoAutofillPassword;
@@ -965,6 +969,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
   const supportsRemoteImagePaste =
     !isLocalConnection &&
     !isSerialConnection &&
+    !isPluginConnection &&
     host.protocol !== "telnet" &&
     host.protocol !== "mosh" &&
     !host.moshEnabled &&
@@ -981,6 +986,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     isSupportedOs &&
     !isLocalConnection &&
     !isSerialConnection &&
+    !isPluginConnection &&
     host.protocol !== 'telnet';
   // Server-stats polling now lives inside <TerminalServerStats> (rendered by
   // TerminalView) so its ~5s refresh only re-renders that widget, not the whole
@@ -1024,6 +1030,10 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     onStartSession: (term) => {
       const starters = sessionStartersRef.current;
       if (!starters) return;
+      if (effectiveTerminalProtocol.startsWith('plugin:')) {
+        starters.startPluginConnection(term);
+        return;
+      }
       if (effectiveTerminalProtocol === 'mosh') {
         starters.startMosh(term);
         return;
@@ -2052,7 +2062,8 @@ const TerminalComponent: React.FC<TerminalProps> = ({
       const isTelnet = host.protocol === 'telnet';
       const isMosh = host.protocol === 'mosh' || host.moshEnabled;
       const isEt = host.protocol === 'et' || host.etEnabled;
-      const isSSH = !isLocal && !isSerial && !isTelnet && !isMosh && !isEt;
+      const isPlugin = isPluginHostProtocol(host.protocol);
+      const isSSH = !isLocal && !isSerial && !isTelnet && !isMosh && !isEt && !isPlugin;
       const encodingAttachConnection: TerminalEncodingAttachConnection = isSSH
         ? 'ssh'
         : isTelnet
@@ -2906,7 +2917,9 @@ const TerminalComponent: React.FC<TerminalProps> = ({
       if (!retryStillActive()) return;
       xtermRuntimeRef.current?.resetKittyConnectionInputState();
       resetKittyKeyboardModeStateForSession(terminalSettingsRef);
-      if (host.protocol === "serial") {
+      if (effectiveTerminalProtocol.startsWith("plugin:")) {
+        sessionStarters.startPluginConnection(term);
+      } else if (host.protocol === "serial") {
         sessionStarters.startSerial(term);
       } else if (effectiveTerminalProtocol === 'local') {
         sessionStarters.startLocal(term);

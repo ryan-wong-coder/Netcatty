@@ -59,6 +59,82 @@ test("plugin manifest schema accepts the internal contract", () => {
   assert.equal(validate({ ...validManifest, version: "1.0.0-01" }), false);
 });
 
+test("connection authentication and importer provider payloads are canonical and bounded", () => {
+  const connectionOpen = validator("ConnectionOpenPayload");
+  const authenticationChallenge = validator("AuthenticationChallenge");
+  const importerRecord = validator("ImporterRecord");
+  assert.equal(connectionOpen({
+    configuration: { endpoint: "example" },
+    operationId: "connection:1",
+    columns: 120,
+    rows: 40,
+    inputStreamId: "connection:1:input",
+    outputStreamId: "connection:1:output",
+    windowBytes: 262_144,
+    credential: { kind: "credential", id: "credential-reference-1234" },
+  }), true, JSON.stringify(connectionOpen.errors));
+  assert.equal(connectionOpen({
+    configuration: {},
+    operationId: "connection:1",
+    columns: 0,
+    rows: 40,
+    inputStreamId: "input",
+    outputStreamId: "output",
+    windowBytes: 262_144,
+  }), false);
+  assert.equal(authenticationChallenge({
+    id: "challenge-1",
+    kind: "choice",
+    title: "Select account",
+    choices: [{ id: "primary", label: "Primary" }],
+  }), true, JSON.stringify(authenticationChallenge.errors));
+  assert.equal(authenticationChallenge({
+    id: "challenge-1",
+    kind: "password",
+    title: "Password",
+    choices: [],
+  }), false);
+  assert.equal(importerRecord({
+    type: "draft",
+    draft: { kind: "host", value: { label: "Imported" } },
+  }), true, JSON.stringify(importerRecord.errors));
+  assert.equal(importerRecord({ type: "draft", draft: { kind: "unknown", value: {} } }), false);
+});
+
+test("Provider configuration schemas use only the host restricted JSON subset", async () => {
+  const { validateManifestValue } = await import("../../plugin-cli/src/manifest.ts");
+  const connectionProvider = {
+    ...validManifest.contributes.providers[0],
+    kind: "connection",
+    configurationSchema: {
+      type: "object",
+      properties: { endpoint: { type: "string" } },
+      required: ["endpoint"],
+      additionalProperties: false,
+    },
+  };
+  const manifest = {
+    ...validManifest,
+    permissions: { required: ["provider.connection"], optional: [] },
+    contributes: { providers: [connectionProvider] },
+  };
+  assert.equal(validateManifestValue(manifest).valid, true);
+  const unsafe = validateManifestValue({
+    ...manifest,
+    contributes: {
+      providers: [{
+        ...connectionProvider,
+        configurationSchema: {
+          ...connectionProvider.configurationSchema,
+          $ref: "https://attacker.invalid/schema.json",
+        },
+      }],
+    },
+  });
+  assert.equal(unsafe.valid, false);
+  assert.match(unsafe.errors.join("\n"), /configurationSchema.*keyword is not allowed.*\$ref/i);
+});
+
 test("terminal interceptor fast-path frames are owned by the canonical schema", () => {
   const validate = validator("TerminalInterceptorFrame");
   assert.equal(validate({
@@ -1203,6 +1279,7 @@ test("planned phase consumers are representable without private application type
             configurationSchema: {
               type: "object",
               properties: { endpoint: { type: "string" } },
+              additionalProperties: false,
             },
           },
           {

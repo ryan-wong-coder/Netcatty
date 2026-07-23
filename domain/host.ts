@@ -3,6 +3,7 @@ import { sanitizeHostIconFields } from './hostIcon';
 import { migrateHostConnectScriptIds } from './hostConnectScripts.ts';
 import { migrateDeprecatedFontOverride } from '../infrastructure/config/fonts';
 import { sanitizeOptionalSshTimeoutSeconds } from './sshConnectionTimeouts.ts';
+import { sanitizePluginConnection } from './pluginConnection.ts';
 
 export type HostLabelRenameResult =
   | { ok: true; changed: true; hosts: Host[] }
@@ -399,6 +400,7 @@ export const sanitizeHost = (host: Host, snippets: Snippet[] = []): Host => {
         ? [host.loginScriptId]
         : undefined
   );
+  const pluginConnection = sanitizePluginConnection(host.pluginConnection, host.protocol);
   return {
     ...migrated,
     authMethod: isLegacyPasswordDefault
@@ -423,5 +425,6 @@ export const sanitizeHost = (host: Host, snippets: Snippet[] = []): Host => {
       host.sshAuthReadyTimeoutSeconds,
     ),
     connectScriptIds: connectScriptIds && connectScriptIds.length > 0 ? connectScriptIds : undefined,
+    pluginConnection,
   };
 };

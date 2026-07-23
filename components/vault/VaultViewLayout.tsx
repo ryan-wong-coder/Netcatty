@@ -2,6 +2,7 @@
 import React from "react";
 import { deleteVaultKey } from "../../application/defaultKeyPassphrases";
 import { preserveConcurrentHostLineTimestampUpdate } from "../../domain/host";
+import { buildPluginImporterSafePreview, mergePluginImporterDrafts, normalizePluginImporterRecords } from "../../domain/pluginImporter";
 import { STORAGE_KEY_VAULT_HOST_PANEL_WIDTH } from "@/infrastructure/config/storageKeys.ts";
 import { VaultHostListSection } from "./VaultHostListSection";
 import {
@@ -12,6 +13,7 @@ import {
 } from "./VaultPageHeader";
 import { LazyLoadBoundary } from "../ui/lazy-load-boundary";
 import { AppWordmark } from "../AppWordmark";
+import { toast } from "../ui/toast";
 
 type VaultViewLayoutContext = Record<string, any>;
 
@@ -22,6 +24,7 @@ const VaultSectionLoading = () => (
 export function VaultViewLayout({ ctx }: { ctx: VaultViewLayoutContext }) {
   const { Activity, allGroupPaths, allTags, AppLogo, Array, Badge, BookMarked, Boolean, Button, cancelInlineGroupEdit, CheckSquare, ChevronDown, clearHostSelection, ClipboardCopy, Clock, cn, commitInlineGroupRename, connectionLogs, connectSelectedHosts, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Copy, currentSection, customGroups, deleteGroupPath, deleteGroupWithHosts, deleteSelectedHosts, deleteTargetPath, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, displayedGroups, displayedHosts, DistroAvatar, Download, Dropdown, DropdownContent, DropdownTrigger, Edit2, editingGroupPath, editingHost, editingHostGroupDefaults, FileCode, FileSymlink, FolderPlus, FolderTree, getDropTargetClasses, getEffectiveHostDistro, Globe, groupConfigs, GroupDetailsPanel, groupedDisplayHosts, handleConnectClick, handleCopyCredentials, handleDeleteTag, handleDuplicateHost, handleEditGroupConfig, handleEditHost, handleEditTag, handleExportHosts, handleHostConnect, handleImportFileSelected, handleNewHost, handleProtocolSelect, handleQuickConnect, handleQuickConnectSaveHost, handleSaveGroupConfig, handleSearchKeyDown, handleUnmanageGroup, handleSidebarWidthCommit, hasHostsSidePanel, HostDetailsPanel, hostListScrollRef, hosts, HostTreeView, hotkeyScheme, identities, ImportVaultDialog, Input, isDeleteGroupOpen, isGroupPanelOpen, isHostPanelOpen, isHostsSectionActive, isImportOpen, isMultiSelectMode, isNewFolderOpen, isQuickConnectOpen, isRenameGroupOpen, isSearchQuickConnect, isSerialModalOpen, Key, keyBindings, KeychainManager, keys, knownHostsManagerElement, Label, lastPinnedId, LayoutGrid, LazyConnectionLogsManager, LazyProtocolSelectDialog, List, managedGroupPaths, managedSources, moveGroup, moveHostToGroup, Network, newFolderName, newHostGroupPath, onClearUnsavedConnectionLogs, onConnectSerial, onCreateLocalTerminal, onDeleteConnectionLog, onDeleteHost, onImportOrReuseKey, onOpenLogView, onOpenSettings, onRunSnippet, onToggleConnectionLogSaved, onUpdateCustomGroups, onUpdateGroupConfigs, onUpdateHosts, onUpdateIdentities, onUpdateKeys, onUpdateProxyProfiles, onUpdateSnippetPackages, onUpdateSnippets, Pin, pinnedHosts, pinnedRecentIds, Plug, Plus, PortForwarding, protocolSelectHost, proxyProfiles, ProxyProfilesManager, quickConnectTarget, quickConnectWarnings, QuickConnectWizard, recentHosts, renameGroupError, renameGroupName, renameTargetPath, reorderGroup, reorderHost, RippleButton, rootRef, sanitizeHost, search, selectedGroupPath, selectedHostIds, selectedTags, SerialConnectModal, SerialHostDetailsPanel, sessionCount, Set, setCurrentSection, setDeleteGroupWithHosts, setDeleteTargetPath, setDragOverDropTarget, setEditingGroupPath, setEditingHost, setGroupDragOverDropTarget, setIsDeleteGroupOpen, setIsGroupPanelOpen, setIsHostPanelOpen, setIsImportOpen, setIsMultiSelectMode, setIsNewFolderOpen, setIsQuickConnectOpen, setIsRenameGroupOpen, setIsSerialModalOpen, setLastPinnedId, setNewFolderName, setNewHostGroupPath, setProtocolSelectHost, setQuickConnectTarget, setQuickConnectWarnings, setRenameGroupError, setRenameGroupName, setRenameTargetPath, setSearch, setSelectedGroupPath, setSelectedHostIds, setSelectedTags, setSidebarCollapsed, setSidebarWidth, setSortMode, setTargetParentPath, Settings, setViewMode, shellHistory, shouldHideEmptyRootHostsSection, showRecentHosts, hostClickBehavior, sidebarCollapsed, sidebarWidth, snippetPackages, snippets, SnippetsManager, SortDropdown, sortMode, splitViewGridStyle, Square, Star, startInlineDeleteGroup, startInlineNewGroup, startInlineRenameGroup, submitNewFolder, submitRenameGroup, Suspense, t, TagFilterDropdown, targetParentPath, terminalFontSize, terminalSettings, TerminalSquare, terminalThemeId, toggleHostPinned, toggleHostSelection, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Trash2, treeExpandedState, treeViewGroupTree, treeViewHosts, Upload, upsertHostById, Usb, viewMode, visibleDisplayedHosts, X, Zap } = ctx;
   const { knownHosts, noteGroups, NotebookText, notes, NotesManager, onOpenHostFromNote, onOpenNoteIdHandled, onOpenSnippetIdHandled, onUpdateNoteGroups, onUpdateNotes, openNoteId, openSnippetId } = ctx;
+  const { onCommitPluginImporterData } = ctx;
   const vaultHostPanelResizeProps = {
     resizable: true as const,
     persistWidthStorageKey: STORAGE_KEY_VAULT_HOST_PANEL_WIDTH,
@@ -32,6 +35,35 @@ export function VaultViewLayout({ ctx }: { ctx: VaultViewLayoutContext }) {
   keyListRef.current = keys;
   const newHostActionsRef = React.useRef<HTMLDivElement>(null);
   const sessionActionsRef = React.useRef<HTMLDivElement>(null);
+  const buildPluginImportMerge = React.useCallback((preview: NetcattyPluginImporterPreview) => {
+    const drafts = normalizePluginImporterRecords(preview.records);
+    return {
+      drafts,
+      merged: mergePluginImporterDrafts({ hosts, identities, keys, snippets, customGroups }, drafts),
+    };
+  }, [customGroups, hosts, identities, keys, snippets]);
+  const handlePluginPreviewCommit = React.useCallback(async (preview: NetcattyPluginImporterPreview) => {
+    const { drafts, merged } = buildPluginImportMerge(preview);
+    if (preview.result.errors > 0 || drafts.errors.length > 0) {
+      throw new Error(drafts.errors[0] || t("vault.import.plugins.containsErrors"));
+    }
+    await onCommitPluginImporterData({
+      keys: merged.keys,
+      identities: merged.identities,
+      hosts: merged.hosts.map(sanitizeHost),
+      snippets: merged.snippets,
+      customGroups: merged.customGroups,
+    });
+    toast.success(
+      t("vault.import.plugins.committed", { count: merged.addedCount }),
+      t("vault.import.toast.completedTitle"),
+    );
+  }, [
+    buildPluginImportMerge,
+    onCommitPluginImporterData,
+    sanitizeHost,
+    t,
+  ]);
   const sidebarMinWidth = 56;
   const sidebarMaxWidth = 320;
   const effectiveSidebarWidth = Math.max(
@@ -1025,6 +1057,15 @@ export function VaultViewLayout({ ctx }: { ctx: VaultViewLayoutContext }) {
         open={isImportOpen}
         onOpenChange={setIsImportOpen}
         onFileSelected={handleImportFileSelected}
+        onPluginPreviewCommit={handlePluginPreviewCommit}
+        getPluginPreviewAnalysis={(preview) => {
+          const { drafts, merged } = buildPluginImportMerge(preview);
+          return {
+            duplicateCount: merged.duplicateCount,
+            validationErrorCount: drafts.errors.length,
+            safePreview: buildPluginImporterSafePreview(drafts),
+          };
+        }}
       />
 
       {/* Quick Connect Wizard */}

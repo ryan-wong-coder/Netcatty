@@ -1,4 +1,5 @@
 const { clearTerminalDataSession } = require("./terminalDataBacklog.cjs");
+const { randomUUID } = require("node:crypto");
 
 function createPreloadApi(ctx) {
   const terminalDataBacklog = ctx.terminalDataBacklog || null;
@@ -98,6 +99,62 @@ function createPreloadApi(ctx) {
   providePluginTerminal: (request) => ipcRenderer.invoke("netcatty:plugins:terminal-provide", request),
   cancelPluginTerminalRequest: (requestId) => ipcRenderer.invoke("netcatty:plugins:terminal-cancel", { requestId }),
   publishPluginTerminalSessionEvent: (event) => ipcRenderer.invoke("netcatty:plugins:terminal-session-event", event),
+  listPluginExtensionProviders: (options) => ipcRenderer.invoke("netcatty:plugins:extension-providers", options ?? {}),
+  updatePluginCredentialCatalog: (entries) => ipcRenderer.invoke(
+    "netcatty:plugins:credential-catalog-update",
+    { entries },
+  ),
+  invokePluginExtensionProvider: (request) => ipcRenderer.invoke("netcatty:plugins:extension-invoke", {
+    requestId: request?.requestId ?? randomUUID(),
+    ...request,
+  }),
+  cancelPluginExtensionRequest: (requestId) => ipcRenderer.invoke("netcatty:plugins:extension-cancel", { requestId }),
+  startPluginConnection: (request) => ipcRenderer.invoke("netcatty:plugins:connection-start", {
+    requestId: request?.requestId ?? randomUUID(),
+    ...request,
+  }),
+  writePluginConnection: (sessionId, data) => ipcRenderer.invoke("netcatty:plugins:connection-write", { sessionId, data }),
+  controlPluginConnection: (sessionId, operation, payload) => ipcRenderer.invoke(
+    "netcatty:plugins:connection-control",
+    { sessionId, operation, payload: payload ?? {} },
+  ),
+  detectPluginImporter: (request) => ipcRenderer.invoke("netcatty:plugins:importer-detect", {
+    requestId: request?.requestId ?? randomUUID(),
+    ...request,
+  }),
+  selectPluginImporterFile: () => ipcRenderer.invoke("netcatty:plugins:importer-select-file", {}),
+  releasePluginImporterFile: (selectionToken) => ipcRenderer.invoke(
+    "netcatty:plugins:importer-release-file",
+    { selectionToken },
+  ),
+  parsePluginImporterFile: (request) => ipcRenderer.invoke("netcatty:plugins:importer-parse-file", {
+    requestId: request?.requestId ?? randomUUID(),
+    ...request,
+  }),
+  onPluginImporterProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("netcatty:plugins:importer-progress", listener);
+    return () => ipcRenderer.removeListener("netcatty:plugins:importer-progress", listener);
+  },
+  respondPluginAuthenticationChallenge: (response) => ipcRenderer.invoke(
+    "netcatty:plugins:authentication-respond",
+    response,
+  ),
+  onPluginAuthenticationChallenge: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("netcatty:plugins:authentication-challenge", listener);
+    return () => ipcRenderer.removeListener("netcatty:plugins:authentication-challenge", listener);
+  },
+  onPluginConnectionData: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("netcatty:plugins:connection-data", listener);
+    return () => ipcRenderer.removeListener("netcatty:plugins:connection-data", listener);
+  },
+  onPluginConnectionClosed: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("netcatty:plugins:connection-closed", listener);
+    return () => ipcRenderer.removeListener("netcatty:plugins:connection-closed", listener);
+  },
   openPluginView: (payload) => ipcRenderer.invoke("netcatty:plugins:open-view", payload),
   closePluginView: (instanceId) => ipcRenderer.invoke("netcatty:plugins:close-view", { instanceId }),
   setPluginViewBounds: (instanceId, bounds) => ipcRenderer.invoke("netcatty:plugins:set-view-bounds", { instanceId, bounds }),

@@ -1,4 +1,5 @@
 import type { Host } from '../models';
+import { isPluginHostProtocol } from '../pluginConnection';
 import { encodeCsvKeyPath, encodeCsvPassphrase } from './csvCredentialFields';
 
 const UTF8_BOM = "\uFEFF";
@@ -62,10 +63,11 @@ const exportHostsToCsv = (hosts: Host[], options: VaultCsvExportOptions): string
     return value;
   };
 
-  // Filter out serial hosts - CSV format doesn't support serial port configuration
+  // Filter out transports the legacy CSV format cannot represent without
+  // silently discarding protocol-owned configuration.
   // Note: mosh-enabled hosts are exported as SSH (losing mosh flag) rather than being skipped,
   // since exporting partial data is better than losing the entire host entry
-  const isUnsupported = (h: Host) => h.protocol === "serial";
+  const isUnsupported = (h: Host) => h.protocol === "serial" || isPluginHostProtocol(h.protocol);
   const exportableHosts = hosts.filter((h) => !isUnsupported(h));
 
   // Helper to bracket IPv6 addresses for CSV export
@@ -130,8 +132,9 @@ export const exportHostsToCsvWithStats = (
   hosts: Host[],
   options: VaultCsvExportOptions = {},
 ): ExportHostsResult => {
-  // Only serial hosts are truly unsupported - mosh hosts are exported as SSH
-  const isUnsupported = (h: Host) => h.protocol === "serial";
+  // Mosh hosts intentionally degrade to SSH, but namespaced plugin protocols
+  // must be skipped because CSV has no field for their opaque configuration.
+  const isUnsupported = (h: Host) => h.protocol === "serial" || isPluginHostProtocol(h.protocol);
   const skippedHosts = hosts.filter((h) => isUnsupported(h));
   const exportableHosts = hosts.filter((h) => !isUnsupported(h));
 

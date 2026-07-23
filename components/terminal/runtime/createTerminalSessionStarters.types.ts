@@ -17,6 +17,7 @@ export type TerminalBackendApi = {
   etAvailable: () => boolean;
   localAvailable: () => boolean;
   serialAvailable: () => boolean;
+  pluginConnectionAvailable: () => boolean;
   execAvailable: () => boolean;
   startSSHSession: (options: NetcattySSHOptions) => Promise<string>;
   startTelnetSession: (
@@ -34,6 +35,12 @@ export type TerminalBackendApi = {
   startSerialSession: (
     options: Parameters<NonNullable<NetcattyBridge["startSerialSession"]>>[0],
   ) => Promise<string>;
+  startPluginConnection: (options: NetcattyPluginConnectionStartRequest) => Promise<{
+    sessionId: string;
+    providerId: string;
+    status: "connecting" | "connected";
+    diagnostics: ReadonlyArray<import("@netcatty/plugin-contract").ProviderValidationIssue>;
+  }>;
   execCommand: (options: Parameters<NetcattyBridge["execCommand"]>[0]) => Promise<{
     stdout?: string;
     stderr?: string;

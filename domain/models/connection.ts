@@ -51,7 +51,26 @@ export interface EnvVar {
 }
 
 // Protocol type for connections
-export type HostProtocol = 'ssh' | 'telnet' | 'mosh' | 'et' | 'local' | 'serial';
+export type BuiltInHostProtocol = 'ssh' | 'telnet' | 'mosh' | 'et' | 'local' | 'serial';
+export type PluginHostProtocol = `plugin:${string}`;
+export type HostProtocol = BuiltInHostProtocol | PluginHostProtocol;
+export type PluginConfigurationValue =
+  | null
+  | boolean
+  | number
+  | string
+  | PluginConfigurationValue[]
+  | { [key: string]: PluginConfigurationValue };
+
+export interface PluginConnectionConfig {
+  /** Exact namespaced connection Provider contribution ID. */
+  providerId: string;
+  /** Opaque, schema-validated Provider configuration retained if the plugin is absent. */
+  configuration: PluginConfigurationValue;
+  authenticationProviderId?: string;
+  /** Host-owned opaque credential reference; never plaintext. */
+  credentialId?: string;
+}
 export type HostIconMode = 'auto' | 'custom';
 export type HostIconColorMode = 'auto' | 'manual';
 export type HostIconId =
@@ -147,7 +166,8 @@ export interface Host {
   // Network devices use raw command execution (no shell wrapping) for AI agent compatibility.
   deviceType?: 'general' | 'network';
   identityFileId?: string; // Reference to SSHKey
-  protocol?: 'ssh' | 'telnet' | 'local' | 'serial'; // Default/primary protocol
+  protocol?: HostProtocol; // Default/primary protocol, including namespaced plugin protocols
+  pluginConnection?: PluginConnectionConfig;
   // Runtime marker for in-memory-only hosts (e.g. password deep links).
   // Ephemeral hosts are never persisted to the vault or session restore.
   ephemeral?: boolean;

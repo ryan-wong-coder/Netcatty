@@ -1,4 +1,5 @@
 import type { Host, TerminalSession } from "./models";
+import { isPluginHostProtocol } from "./pluginConnection";
 
 export type SftpConnectedHostEntry = {
   host: Host;
@@ -28,7 +29,8 @@ const isReusableSftpSourceSession = (session: SftpPickerSessionFields): boolean 
   if (session.status !== "connected") return false;
   if (session.moshEnabled || session.etEnabled) return false;
   const protocol = session.protocol;
-  if (protocol === "serial" || protocol === "local" || protocol === "telnet") return false;
+  if (protocol === "serial" || protocol === "local" || protocol === "telnet"
+    || isPluginHostProtocol(protocol)) return false;
   // Missing protocol defaults to SSH (same as host picker filtering).
   return true;
 };
@@ -106,7 +108,7 @@ export const listSftpConnectedHosts = (
     if (!isReusableSftpSourceSession(session)) continue;
     const host = hostsById.get(session.hostId);
     if (!host) continue;
-    if (host.protocol === "serial") continue;
+    if (host.protocol === "serial" || isPluginHostProtocol(host.protocol)) continue;
     // SFTP sudo never reuses a terminal shell conn (bridge requires !options.sudo).
     if (host.sftpSudo) continue;
     // Use session transport flags only. Vault hosts may still have mosh/et

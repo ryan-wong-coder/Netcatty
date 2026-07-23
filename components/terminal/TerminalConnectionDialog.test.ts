@@ -208,6 +208,22 @@ test("defaults the displayed ET port to 2022 when no etPort is set", () => {
   assert.equal(markup.includes("10.2.0.32:22"), false);
 });
 
+test("labels plugin transports without presenting them as SSH endpoints", () => {
+  const providerId = "com.example.transport.connection";
+  const markup = renderDialog({
+    host: {
+      ...host,
+      hostname: providerId,
+      port: 22,
+      protocol: `plugin:${providerId}`,
+      pluginConnection: { providerId, configuration: {} },
+    },
+  });
+
+  assert.match(markup, /Plugin connection/);
+  assert.equal(markup.includes(`${providerId}:22`), false);
+});
+
 test("shows restored session copy for disconnected restored placeholders", () => {
   const markup = renderDialog({
     status: "disconnected",

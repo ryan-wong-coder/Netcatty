@@ -1,6 +1,7 @@
 import type { Host, SSHKey } from "../domain/models";
 import { isEncryptedCredentialPlaceholder, sanitizeCredentialValue } from "../domain/credentials";
 import { resolveVaultCsvHostKeyPath } from "../domain/vaultImport";
+import { isPluginHostProtocol } from "../domain/pluginConnection";
 import {
   readExportableRememberedKeyPassphrases,
   type DefaultKeyPassphraseVerificationRead,
@@ -20,7 +21,9 @@ export async function buildVaultCsvCredentialOptions(
     keyPath: string,
   ) => Promise<DefaultKeyPassphraseVerificationRead>,
 ): Promise<VaultCsvCredentialOptions> {
-  const exportableHosts = hosts.filter((host) => host.protocol !== "serial");
+  const exportableHosts = hosts.filter((host) => (
+    host.protocol !== "serial" && !isPluginHostProtocol(host.protocol)
+  ));
   const referenceKeysById = new Map(keys.map((key) => [key.id, key] as const));
   const keyPathsById = new Map(keys.flatMap((key) => (
     key.source === "reference" && key.filePath?.trim()

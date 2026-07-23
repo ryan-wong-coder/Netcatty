@@ -94,7 +94,7 @@ function settingPatternError(source: string): string | null {
   return null;
 }
 
-function restrictedSettingSchemaErrors(root: unknown): string[] {
+function restrictedSettingSchemaErrors(root: unknown, rootType: "array" | null = "array"): string[] {
   const errors: string[] = [];
   const stack: Array<{ schema: unknown; depth: number }> = [{ schema: root, depth: 0 }];
   let nodes = 0;
@@ -116,7 +116,9 @@ function restrictedSettingSchemaErrors(root: unknown): string[] {
     if (!RESTRICTED_SCHEMA_TYPES.has(schema.type as string)) {
       errors.push("every valueSchema node must declare one supported type");
     }
-    if (current.depth === 0 && schema.type !== "array") errors.push("valueSchema root must use type array");
+    if (current.depth === 0 && rootType && schema.type !== rootType) {
+      errors.push(`valueSchema root must use type ${rootType}`);
+    }
     if (schema.type === "array") {
       if (!plainRecord(schema.items)) errors.push("array valueSchema nodes require one items schema");
       else stack.push({ schema: schema.items, depth: current.depth + 1 });
@@ -471,6 +473,12 @@ function validateSemantics(manifest: PluginManifest): string[] {
       requirePermission(true, "runtime.advanced", `Provider ${provider.id}`);
       if (!manifest.main.node) {
         errors.push(`Provider ${provider.id} requires a Node utility entrypoint`);
+      }
+    }
+    if (provider.configurationSchema !== undefined) {
+      const schemaErrors = restrictedSettingSchemaErrors(provider.configurationSchema, null);
+      for (const error of schemaErrors) {
+        errors.push(`Provider ${provider.id} configurationSchema ${error}`);
       }
     }
   }

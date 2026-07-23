@@ -151,6 +151,23 @@ test("sanitizeHost preserves valid custom host icon fields", () => {
   assert.equal(sanitized.iconColor, "blue");
 });
 
+test("sanitizeHost preserves valid unavailable plugin connection configuration", () => {
+  const providerId = "com.example.transport.connection";
+  const sanitized = sanitizeHost(makeHost({
+    protocol: `plugin:${providerId}`,
+    pluginConnection: {
+      providerId,
+      configuration: { endpoint: "example", options: [1, 2] },
+      credentialId: "credential-reference-1234",
+    },
+  }));
+  assert.deepEqual(sanitized.pluginConnection, {
+    providerId,
+    configuration: { endpoint: "example", options: [1, 2] },
+    credentialId: "credential-reference-1234",
+  });
+});
+
 test("sanitizeHost keeps legacy empty-password hosts on automatic authentication", () => {
   const sanitized = sanitizeHost(makeHost({
     password: undefined,

@@ -964,5 +964,13 @@ Highlight the focused split pane:
   'settings.plugins.scopeTarget': '{scope} target',
   'settings.plugins.noScopeTargets': 'No available targets',
   'settings.plugins.thisDevice': 'This device',
+  'plugins.authentication.description': 'Complete the authentication request in this Netcatty dialog.',
+  'plugins.authentication.value': 'Value',
+  'plugins.authentication.password': 'Password',
+  'plugins.authentication.code': 'One-time code',
+  'plugins.authentication.deviceCode': 'Device code',
+  'plugins.authentication.openBrowser': 'Open browser',
+  'plugins.authentication.invalidUrl': 'The authentication provider returned an unsafe or invalid URL.',
+  'plugins.authentication.continue': 'Continue',
 
 };

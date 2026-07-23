@@ -82,6 +82,67 @@ test("getMissingChainHostIds reports unresolved jump hosts", () => {
   );
 });
 
+test("startPluginConnection preserves the namespaced provider configuration and attaches the host session", async () => {
+  let captured: NetcattyPluginConnectionStartRequest | null = null;
+  const attached: string[] = [];
+  const statuses: string[] = [];
+  let progressLogs: string[] = [];
+  const terminalBackend = {
+    pluginConnectionAvailable: () => true,
+    startPluginConnection: async (options: NetcattyPluginConnectionStartRequest) => {
+      captured = options;
+      return {
+        sessionId: options.sessionId,
+        providerId: options.providerId,
+        status: "connected" as const,
+        diagnostics: [{ severity: "warning" as const, message: "Provider warning" }],
+      };
+    },
+    onSessionData: () => noop,
+    onSessionExit: () => noop,
+    onChainProgress: () => noop,
+    writeToSession: noop,
+    resizeSession: noop,
+  };
+  const ctx = createStarterContext({
+    host: {
+      id: "host-plugin",
+      label: "Custom protocol",
+      hostname: "opaque.example",
+      username: "",
+      protocol: "plugin:com.example.transport.connection",
+      pluginConnection: {
+        providerId: "com.example.transport.connection",
+        configuration: { endpoint: "opaque.example", secure: true },
+        authenticationProviderId: "com.example.transport.auth",
+        credentialId: "credential-reference-1234",
+      },
+    },
+    terminalBackend,
+    onSessionAttached: (id: string) => attached.push(id),
+    updateStatus: (status: string) => statuses.push(status),
+    setProgressLogs: (update: string[] | ((previous: string[]) => string[])) => {
+      progressLogs = typeof update === "function" ? update(progressLogs) : update;
+    },
+  });
+
+  await createTerminalSessionStarters(ctx as never).startPluginConnection(createTermStub() as never);
+
+  assert.deepEqual(captured, {
+    sessionId: "session-1",
+    protocol: "plugin:com.example.transport.connection",
+    providerId: "com.example.transport.connection",
+    configuration: { endpoint: "opaque.example", secure: true },
+    columns: 120,
+    rows: 32,
+    authenticationProviderId: "com.example.transport.auth",
+    credential: { kind: "credential", id: "credential-reference-1234" },
+  });
+  assert.deepEqual(attached, ["session-1"]);
+  assert.deepEqual(statuses, ["connected"]);
+  assert.deepEqual(progressLogs, ["[Plugin warning] Provider warning"]);
+});
+
 test("startSSH forwards imported system agent authentication settings", async () => {
   let capturedOptions: Record<string, unknown> | null = null;
   const terminalBackend = {

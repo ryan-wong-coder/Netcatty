@@ -166,11 +166,17 @@ test("listSftpConnectedHosts defaults missing session.port to 22, not the edited
   assert.equal(result[0]?.host.port, 22);
 });
 
-test("listSftpConnectedHosts skips serial, local, telnet, and disconnected sessions", () => {
+test("listSftpConnectedHosts skips serial, local, telnet, plugin, and disconnected sessions", () => {
   const hosts = [
     host({ id: "ssh", label: "SSH" }),
     host({ id: "serial", label: "Serial", protocol: "serial" }),
     host({ id: "telnet", label: "Telnet", protocol: "telnet" }),
+    host({
+      id: "plugin",
+      label: "Plugin",
+      protocol: "plugin:com.example.transport.connection",
+      pluginConnection: { providerId: "com.example.transport.connection", configuration: {} },
+    }),
   ];
   const hostsById = new Map(hosts.map((h) => [h.id, h]));
   const sessions = [
@@ -178,6 +184,12 @@ test("listSftpConnectedHosts skips serial, local, telnet, and disconnected sessi
     session({ id: "s-serial", hostId: "serial", status: "connected", protocol: "serial" }),
     session({ id: "s-local", hostId: "ssh", status: "connected", protocol: "local" }),
     session({ id: "s-telnet", hostId: "telnet", status: "connected", protocol: "telnet" }),
+    session({
+      id: "s-plugin",
+      hostId: "plugin",
+      status: "connected",
+      protocol: "plugin:com.example.transport.connection",
+    }),
     session({ id: "s-dead", hostId: "ssh", status: "disconnected" }),
   ];
 

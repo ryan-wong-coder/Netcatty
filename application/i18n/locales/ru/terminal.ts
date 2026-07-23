@@ -201,6 +201,7 @@ export const ruTerminalMessages: Messages = {
   'terminal.connection.protocol.ssh': 'SSH',
   'terminal.connection.protocol.telnet': 'Telnet',
   'terminal.connection.protocol.mosh': 'Mosh',
+  'terminal.connection.protocol.plugin': 'Подключение плагина',
   'terminal.connection.protocol.serial': 'Serial',
   'terminal.connection.protocol.local': 'Локальная оболочка',
   'terminal.hostKey.unknownTitle': 'Подтвердите этот ключ хоста',

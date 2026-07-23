@@ -38,6 +38,7 @@ import HostKeywordHighlightPopover from './HostKeywordHighlightPopover';
 import { collectOwnedPluginMenus, comparePluginMenus, usePluginContributions } from '../../application/state/usePluginContributions';
 import { buildTerminalPluginContributionContext } from '../../application/state/pluginContributionContexts';
 import { PluginContributionIcon } from '../plugins/PluginContributionIcon';
+import { isPluginHostProtocol } from '../../domain/pluginConnection';
 
 export const TERMINAL_TOOLBAR_ITEM_IDS = [
   'highlight',
@@ -191,14 +192,15 @@ export const TerminalToolbar: React.FC<TerminalToolbarProps> = ({
   const isSerialTerminal = host?.protocol === 'serial' || host?.id?.startsWith('serial-');
   const isMoshSession = host?.protocol === 'mosh' || host?.moshEnabled;
   const isEtSession = host?.protocol === 'et' || host?.etEnabled;
+  const isPluginConnection = isPluginHostProtocol(host?.protocol);
   // Local PTY inherits the OS locale and mosh/ET always use their own framing,
   // so the quick-switch menu only makes sense for sessions whose
   // backend decoder we actually control (SSH, telnet, serial). Hostname
   // isn't part of the gate — telnet/SSH targets pointed at localhost
   // (test daemons, forwarded endpoints) still have a real backend
   // decoder we can drive.
-  const encodingSwitchSupported = !isLocalTerminal && !isMoshSession && !isEtSession;
-  const hidesSftp = isLocalTerminal || isSerialTerminal;
+  const encodingSwitchSupported = !isLocalTerminal && !isMoshSession && !isEtSession && !isPluginConnection;
+  const hidesSftp = isLocalTerminal || isSerialTerminal || isPluginConnection;
   const historySupported =
     !!onOpenHistory && !isLocalTerminal && !isSerialTerminal && host?.protocol !== 'telnet';
   const unavailableYmodemSendLabel = `${t('terminal.toolbar.sendYmodem')} - ${t('terminal.toolbar.availableAfterConnect')}`;

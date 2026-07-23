@@ -138,6 +138,113 @@ test("worker manager retains the stable host id for session-backed transfers", a
   assert.equal(manager.getSessionHostId("session-1"), null);
 });
 
+test("external sessions reuse worker output routing and propagate input, resize, flow, and close", async () => {
+  const child = new FakeChild();
+  const observed = [];
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork: () => child },
+    electronModule: {
+      webContents: {
+        fromId(id) {
+          return { id, isDestroyed: () => false, once() {}, removeListener() {}, send() {} };
+        },
+      },
+    },
+    workerScriptPath: "/worker.cjs",
+  });
+
+  const started = manager.startExternalSession({
+    sessionId: "plugin-1",
+    webContentsId: 7,
+    columns: 80,
+    rows: 24,
+    protocol: "plugin:example.transport",
+    onInput: (data) => observed.push(["input", data]),
+    onResize: (size) => observed.push(["resize", size]),
+    onClose: (reason) => observed.push(["close", reason]),
+  });
+  const startRequest = child.messages.at(-1);
+  assert.equal(startRequest.channel, "netcatty:external:start");
+  child.emit("message", {
+    kind: "response",
+    requestId: startRequest.requestId,
+    result: { sessionId: "plugin-1" },
+    sessionGeneration: 0,
+  });
+  assert.deepEqual(await started, { sessionId: "plugin-1" });
+
+  child.emit("message", { kind: "external-session-event", sessionId: "plugin-1", event: "input", data: "hello" });
+  child.emit("message", { kind: "external-session-event", sessionId: "plugin-1", event: "resize", columns: 100, rows: 30 });
+  child.emit("message", { kind: "external-session-event", sessionId: "plugin-1", event: "flow", paused: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(observed, [
+    ["input", "hello"],
+    ["resize", { columns: 100, rows: 30 }],
+  ]);
+
+  let outputResolved = false;
+  const output = manager.pushExternalOutput("plugin-1", "world").then(() => { outputResolved = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(outputResolved, false);
+  child.emit("message", { kind: "external-session-event", sessionId: "plugin-1", event: "flow", paused: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  const outputRequest = child.messages.at(-1);
+  assert.equal(outputRequest.channel, "netcatty:external:output");
+  child.emit("message", { kind: "response", requestId: outputRequest.requestId, result: null });
+  await output;
+
+  child.emit("message", { kind: "external-session-event", sessionId: "plugin-1", event: "close", reason: "closed" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(observed.at(-1), ["close", "closed"]);
+});
+
+test("external input failures close both the worker route and its provider lifecycle", async () => {
+  const child = new FakeChild();
+  const observed = [];
+  const manager = createTerminalWorkerManager({
+    utilityProcess: { fork: () => child },
+    electronModule: {
+      webContents: {
+        fromId(id) {
+          return { id, isDestroyed: () => false, once() {}, removeListener() {}, send() {} };
+        },
+      },
+    },
+    workerScriptPath: "/worker.cjs",
+  });
+  const started = manager.startExternalSession({
+    sessionId: "plugin-input-error",
+    webContentsId: 7,
+    columns: 80,
+    rows: 24,
+    protocol: "plugin:example.transport",
+    async onInput() { throw new Error("provider input failed"); },
+    onClose: (reason) => observed.push(reason),
+  });
+  const startRequest = child.messages.at(-1);
+  child.emit("message", {
+    kind: "response",
+    requestId: startRequest.requestId,
+    result: { sessionId: "plugin-input-error" },
+    sessionGeneration: 0,
+  });
+  await started;
+  child.emit("message", {
+    kind: "external-session-event",
+    sessionId: "plugin-input-error",
+    event: "input",
+    data: "hello",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const finishRequest = child.messages.at(-1);
+  assert.equal(finishRequest.channel, "netcatty:external:finish");
+  assert.equal(finishRequest.payload.reason, "error");
+  child.emit("message", { kind: "response", requestId: finishRequest.requestId, result: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(observed, ["input-error"]);
+  await assert.rejects(manager.pushExternalOutput("plugin-input-error", "late"), /not registered/i);
+});
+
 test("session ownership listeners finish before buffered output is released", async () => {
   const child = new FakeChild();
   const routed = [];

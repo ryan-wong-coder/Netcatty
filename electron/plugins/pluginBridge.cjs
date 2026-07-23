@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("node:fs/promises");
+const { randomUUID } = require("node:crypto");
+
 const { isPluginDevelopmentEnabled } = require("./constants.cjs");
 const { raceWithAbort } = require("./rpcRouter.cjs");
 
@@ -21,6 +24,22 @@ const CHANNELS = Object.freeze({
   terminalProvide: "netcatty:plugins:terminal-provide",
   terminalCancel: "netcatty:plugins:terminal-cancel",
   terminalSessionEvent: "netcatty:plugins:terminal-session-event",
+  extensionProviders: "netcatty:plugins:extension-providers",
+  extensionInvoke: "netcatty:plugins:extension-invoke",
+  extensionCancel: "netcatty:plugins:extension-cancel",
+  connectionStart: "netcatty:plugins:connection-start",
+  connectionWrite: "netcatty:plugins:connection-write",
+  connectionControl: "netcatty:plugins:connection-control",
+  connectionData: "netcatty:plugins:connection-data",
+  connectionClosed: "netcatty:plugins:connection-closed",
+  credentialCatalogUpdate: "netcatty:plugins:credential-catalog-update",
+  authenticationChallenge: "netcatty:plugins:authentication-challenge",
+  authenticationRespond: "netcatty:plugins:authentication-respond",
+  importerDetect: "netcatty:plugins:importer-detect",
+  importerSelectFile: "netcatty:plugins:importer-select-file",
+  importerReleaseFile: "netcatty:plugins:importer-release-file",
+  importerParseFile: "netcatty:plugins:importer-parse-file",
+  importerProgress: "netcatty:plugins:importer-progress",
   openView: "netcatty:plugins:open-view",
   closeView: "netcatty:plugins:close-view",
   setViewBounds: "netcatty:plugins:set-view-bounds",
@@ -35,6 +54,10 @@ const CHANNELS = Object.freeze({
 
 const SCOPE_KINDS = Object.freeze(["workspace", "host", "session", "device"]);
 const MAX_ACTIVE_TERMINAL_REQUESTS_PER_SENDER = 64;
+const MAX_IMPORT_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_IMPORT_SELECTIONS_PER_SENDER = 8;
+const IMPORT_SELECTION_TTL_MS = 5 * 60_000;
+const DEFAULT_CONNECTION_STATUS_POLL_MS = 500;
 
 function normalizePluginScopeCatalog(value) {
   const source = value && typeof value === "object" ? value : {};
@@ -95,6 +118,15 @@ function registerPluginBridge(ipcMain, options) {
   const contributionService = options.contributionService;
   const terminalProviderService = options.terminalProviderService;
   const terminalDataPipelineService = options.terminalDataPipelineService;
+  const extensionProviderService = options.extensionProviderService;
+  const credentialResolver = options.credentialResolver;
+  const connectionStatusPollMs = Number.isSafeInteger(options.connectionStatusPollMs)
+    && options.connectionStatusPollMs >= 0
+    && options.connectionStatusPollMs <= 60_000
+    ? options.connectionStatusPollMs
+    : DEFAULT_CONNECTION_STATUS_POLL_MS;
+  const getTerminalWorkerManager = options.getTerminalWorkerManager ?? (() => null);
+  const selectImporterFile = options.selectImporterFile;
   const viewHost = options.viewHost;
   const env = options.env ?? process.env;
   const isTrustedSender = options.isTrustedSender;
@@ -104,6 +136,14 @@ function registerPluginBridge(ipcMain, options) {
   const observedScopeCatalogSenders = new WeakSet();
   const terminalRequestsBySender = new WeakMap();
   const observedTerminalRequestSenders = new WeakSet();
+  const extensionRequestsBySender = new WeakMap();
+  const observedExtensionRequestSenders = new WeakSet();
+  const connectionSessionsBySender = new WeakMap();
+  const observedConnectionSenders = new WeakSet();
+  const authenticationChallengesBySender = new WeakMap();
+  const observedAuthenticationSenders = new WeakSet();
+  const importerSelectionsBySender = new WeakMap();
+  const observedImporterSelectionSenders = new WeakSet();
   const scopeCatalogSenderKey = (event) => {
     const id = event?.sender?.id;
     return Number.isSafeInteger(id) && id > 0 ? id : "default";
@@ -161,6 +201,189 @@ function registerPluginBridge(ipcMain, options) {
       });
     }
     return requests;
+  };
+  const extensionRequestMap = (sender) => {
+    if (!sender || typeof sender !== "object") throw new Error("Plugin extension request sender is unavailable");
+    let requests = extensionRequestsBySender.get(sender);
+    if (!requests) {
+      requests = new Map();
+      extensionRequestsBySender.set(sender, requests);
+    }
+    if (!observedExtensionRequestSenders.has(sender)) {
+      observedExtensionRequestSenders.add(sender);
+      sender.once?.("destroyed", () => {
+        for (const controller of requests.values()) controller.abort();
+        requests.clear();
+      });
+    }
+    return requests;
+  };
+  const runExtensionRequest = async (event, payload, callback) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted plugin management sender");
+    const requestId = payload?.requestId;
+    if (typeof requestId !== "string" || requestId.length < 1 || requestId.length > 128 || requestId.includes("\0")) {
+      throw new TypeError("Plugin extension request ID is invalid");
+    }
+    const requests = extensionRequestMap(event.sender);
+    if (requests.has(requestId)) throw new Error("Plugin extension request ID is already active");
+    if (requests.size >= MAX_ACTIVE_TERMINAL_REQUESTS_PER_SENDER) {
+      throw new Error("Too many active Plugin extension requests");
+    }
+    const controller = new AbortController();
+    requests.set(requestId, controller);
+    try {
+      await raceWithAbort(resolveManager(), controller.signal);
+      return await callback(controller.signal);
+    } finally {
+      if (requests.get(requestId) === controller) requests.delete(requestId);
+    }
+  };
+  const connectionSessionSet = (sender) => {
+    if (!sender || typeof sender !== "object") throw new Error("Plugin connection sender is unavailable");
+    let sessions = connectionSessionsBySender.get(sender);
+    if (!sessions) {
+      sessions = new Set();
+      connectionSessionsBySender.set(sender, sessions);
+    }
+    if (!observedConnectionSenders.has(sender)) {
+      observedConnectionSenders.add(sender);
+      sender.once?.("destroyed", () => {
+        for (const sessionId of sessions) extensionProviderService?.closeSessionLocal(sessionId);
+        sessions.clear();
+      });
+    }
+    return sessions;
+  };
+  const authenticationChallengeMap = (sender) => {
+    if (!sender || typeof sender !== "object") throw new Error("Plugin authentication sender is unavailable");
+    let challenges = authenticationChallengesBySender.get(sender);
+    if (!challenges) {
+      challenges = new Map();
+      authenticationChallengesBySender.set(sender, challenges);
+    }
+    if (!observedAuthenticationSenders.has(sender)) {
+      observedAuthenticationSenders.add(sender);
+      sender.once?.("destroyed", () => {
+        for (const pending of challenges.values()) pending.reject(new Error("Plugin authentication window closed"));
+        challenges.clear();
+      });
+    }
+    return challenges;
+  };
+  const requestAuthenticationChallenge = (event, requestId, challenge, signal) => {
+    const challenges = authenticationChallengeMap(event.sender);
+    const challengeRequestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        if (challenges.delete(challengeRequestId)) reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      };
+      const finish = (callback, value) => {
+        signal?.removeEventListener?.("abort", onAbort);
+        callback(value);
+      };
+      challenges.set(challengeRequestId, {
+        requestId,
+        challengeId: challenge.id,
+        resolve: (value) => finish(resolve, value),
+        reject: (error) => finish(reject, error),
+      });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      try {
+        event.sender.send(CHANNELS.authenticationChallenge, {
+          requestId,
+          challengeRequestId,
+          challenge,
+        });
+      } catch (error) {
+        challenges.delete(challengeRequestId);
+        finish(reject, error);
+      }
+    });
+  };
+  const closeImporterSelection = (selection) => {
+    if (!selection?.handle) return;
+    void selection.handle.close().catch(() => {});
+  };
+  const waitForConnectionStatusPoll = (signal) => new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new DOMException("Plugin connection monitoring was cancelled", "AbortError"));
+      return;
+    }
+    let timer;
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException("Plugin connection monitoring was cancelled", "AbortError"));
+    };
+    timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, connectionStatusPollMs);
+    timer.unref?.();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  const monitorPluginConnection = async ({ sessionId, sessions, controller, terminalWorkerManager }) => {
+    try {
+      while (!controller.signal.aborted && sessions.has(sessionId)) {
+        await waitForConnectionStatusPoll(controller.signal);
+        if (controller.signal.aborted || !sessions.has(sessionId)) return;
+        const status = await extensionProviderService.control(
+          sessionId,
+          "getStatus",
+          {},
+          { signal: controller.signal },
+        );
+        if (status.status === "connected") {
+          // A zero-byte terminal delivery transitions silent protocols out of
+          // the connecting UI without inventing visible terminal output.
+          await terminalWorkerManager.pushExternalOutput(sessionId, "");
+          return;
+        }
+        if (status.status === "closed" || status.status === "error") {
+          sessions.delete(sessionId);
+          extensionProviderService.closeSessionLocal(sessionId);
+          await terminalWorkerManager.finishExternalSession(sessionId, {
+            reason: status.status,
+            ...(status.message ? { error: status.message } : {}),
+          });
+          return;
+        }
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      sessions.delete(sessionId);
+      extensionProviderService.closeSessionLocal(sessionId);
+      await terminalWorkerManager.finishExternalSession(sessionId, {
+        reason: "error",
+        error: error?.message || String(error),
+      });
+    }
+  };
+  const importerSelectionMap = (sender) => {
+    if (!sender || typeof sender !== "object") throw new Error("Plugin importer sender is unavailable");
+    let selections = importerSelectionsBySender.get(sender);
+    if (!selections) {
+      selections = new Map();
+      importerSelectionsBySender.set(sender, selections);
+    }
+    if (!observedImporterSelectionSenders.has(sender)) {
+      observedImporterSelectionSenders.add(sender);
+      sender.once?.("destroyed", () => {
+        for (const selection of selections.values()) closeImporterSelection(selection);
+        selections.clear();
+      });
+    }
+    const now = Date.now();
+    for (const [token, selection] of selections) {
+      if (selection.expiresAt <= now) {
+        selections.delete(token);
+        closeImporterSelection(selection);
+      }
+    }
+    return selections;
   };
   ipcMain.handle(CHANNELS.status, async (event) => {
     if (!isTrustedSender(event)) throw new Error("Untrusted plugin management sender");
@@ -268,6 +491,272 @@ function registerPluginBridge(ipcMain, options) {
     ]);
     return providers;
   });
+  handle(CHANNELS.extensionProviders, async (_activeManager, payload) => {
+    if (!extensionProviderService) throw new Error("Plugin extension Providers are unavailable");
+    return extensionProviderService.listProviders(payload ?? {});
+  });
+  handle(CHANNELS.credentialCatalogUpdate, async (_activeManager, payload) => {
+    if (!credentialResolver || typeof credentialResolver.update !== "function") {
+      throw new Error("Plugin Vault credential catalog is unavailable");
+    }
+    return credentialResolver.update(payload?.entries);
+  });
+  ipcMain.handle(CHANNELS.extensionInvoke, async (event, payload) => runExtensionRequest(event, payload, async (signal) => {
+    if (!extensionProviderService) throw new Error("Plugin extension Providers are unavailable");
+    if ((payload?.kind === "connection"
+        && payload?.operation !== "validateConfiguration"
+        && payload?.operation !== "probe")
+      || payload?.kind === "authentication"
+      || (payload?.kind === "importer" && payload?.operation === "parse")) {
+      throw new TypeError("Stateful Provider operations require their dedicated host workflow");
+    }
+    return extensionProviderService.invoke(payload ?? {}, { signal });
+  }));
+  ipcMain.handle(CHANNELS.extensionCancel, async (event, payload) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted plugin management sender");
+    const requestId = payload?.requestId;
+    if (typeof requestId !== "string" || requestId.length < 1 || requestId.length > 128) {
+      throw new TypeError("Plugin extension request ID is invalid");
+    }
+    const controller = extensionRequestMap(event.sender).get(requestId);
+    controller?.abort();
+    return controller != null;
+  });
+  ipcMain.handle(CHANNELS.connectionStart, async (event, payload) => runExtensionRequest(event, payload, async (signal) => {
+    if (!extensionProviderService) throw new Error("Plugin connection Providers are unavailable");
+    const terminalWorkerManager = getTerminalWorkerManager();
+    if (!terminalWorkerManager?.startExternalSession) {
+      throw new Error("Host terminal pipeline is unavailable for plugin connections");
+    }
+    const sessions = connectionSessionSet(event.sender);
+    let credential = payload?.credential;
+    if (payload?.authenticationProviderId) {
+      const authentication = await extensionProviderService.authenticate({
+        providerId: payload.authenticationProviderId,
+        connectionProviderId: payload?.providerId,
+        configuration: payload?.configuration,
+        ...(credential === undefined ? {} : { credential }),
+      }, (challenge) => requestAuthenticationChallenge(
+        event,
+        payload.requestId,
+        challenge,
+        signal,
+      ), { signal });
+      if (authentication.status !== "authenticated") {
+        throw new Error(authentication.message || "Plugin authentication did not complete");
+      }
+      credential = authentication.credential;
+    }
+    const sessionId = payload?.sessionId;
+    let closedDuringStart = false;
+    let providerOpened = false;
+    let providerCloseStarted = false;
+    const connectionController = new AbortController();
+    const abortConnection = () => connectionController.abort(
+      signal.reason ?? new DOMException("Plugin connection request was cancelled", "AbortError"),
+    );
+    if (signal.aborted) abortConnection();
+    else signal.addEventListener("abort", abortConnection, { once: true });
+    try {
+      await terminalWorkerManager.startExternalSession({
+        sessionId,
+        webContentsId: event.sender.id,
+        columns: payload?.columns,
+        rows: payload?.rows,
+        protocol: payload?.protocol,
+        onInput: (data) => extensionProviderService.write(sessionId, data),
+        onResize: ({ columns, rows }) => extensionProviderService.control(
+          sessionId,
+          "resize",
+          { columns, rows },
+        ),
+        onClose: async () => {
+          sessions.delete(sessionId);
+          connectionController.abort(new DOMException("Terminal session closed", "AbortError"));
+          providerCloseStarted = true;
+          if (providerOpened) {
+            try { await extensionProviderService.control(sessionId, "close", {}); }
+            catch { extensionProviderService.closeSessionLocal(sessionId); }
+          } else {
+            extensionProviderService.closeSessionLocal(sessionId);
+          }
+        },
+      });
+      const opened = await extensionProviderService.openConnection({
+        ...payload,
+        ...(credential === undefined ? {} : { credential }),
+      }, {
+        signal: connectionController.signal,
+        onData: (bytes) => terminalWorkerManager.pushExternalOutput(sessionId, bytes),
+        onOutputClose: async (reason) => {
+          closedDuringStart = true;
+          sessions.delete(sessionId);
+          await terminalWorkerManager.finishExternalSession(sessionId, {
+            reason: typeof reason === "string" ? reason : "closed",
+          });
+        },
+      });
+      providerOpened = true;
+      if (!closedDuringStart) {
+        sessions.add(opened.sessionId);
+        if (opened.status === "connecting") {
+          void monitorPluginConnection({
+            sessionId: opened.sessionId,
+            sessions,
+            controller: connectionController,
+            terminalWorkerManager,
+          });
+        } else if (opened.status === "connected") {
+          // The terminal renderer treats the first delivery as the connection
+          // readiness boundary. Preserve that boundary for silent protocols
+          // whose Provider completes open before producing terminal bytes.
+          await terminalWorkerManager.pushExternalOutput(opened.sessionId, "");
+        }
+      }
+      return opened;
+    } catch (error) {
+      sessions.delete(sessionId);
+      connectionController.abort(error);
+      if (!providerCloseStarted && providerOpened) {
+        try { await extensionProviderService.control(sessionId, "close", {}); }
+        catch { extensionProviderService.closeSessionLocal(sessionId); }
+      } else if (!providerCloseStarted && !closedDuringStart) {
+        extensionProviderService.closeSessionLocal(sessionId);
+      }
+      await terminalWorkerManager.finishExternalSession(sessionId, {
+        reason: "error",
+        error: error?.message || String(error),
+      });
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", abortConnection);
+    }
+  }));
+  ipcMain.handle(CHANNELS.authenticationRespond, async (event, payload) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted plugin management sender");
+    const challengeRequestId = payload?.challengeRequestId;
+    if (typeof challengeRequestId !== "string" || challengeRequestId.length < 1 || challengeRequestId.length > 128) {
+      throw new TypeError("Plugin authentication challenge request ID is invalid");
+    }
+    const challenges = authenticationChallengeMap(event.sender);
+    const pending = challenges.get(challengeRequestId);
+    if (!pending
+      || pending.requestId !== payload?.requestId
+      || pending.challengeId !== payload?.challengeId) {
+      throw new Error("Plugin authentication challenge is not owned by this window");
+    }
+    challenges.delete(challengeRequestId);
+    if (payload?.cancelled === true) pending.reject(new DOMException("Cancelled", "AbortError"));
+    else pending.resolve(payload?.response);
+    return null;
+  });
+  handle(CHANNELS.connectionWrite, async (_activeManager, payload, event) => {
+    if (!extensionProviderService) throw new Error("Plugin connection Providers are unavailable");
+    const sessions = connectionSessionSet(event.sender);
+    if (!sessions.has(payload?.sessionId)) throw new Error("Plugin connection session is not owned by this window");
+    await extensionProviderService.write(payload.sessionId, payload.data);
+    return null;
+  });
+  handle(CHANNELS.connectionControl, async (_activeManager, payload, event) => {
+    if (!extensionProviderService) throw new Error("Plugin connection Providers are unavailable");
+    const sessions = connectionSessionSet(event.sender);
+    if (!sessions.has(payload?.sessionId)) throw new Error("Plugin connection session is not owned by this window");
+    const result = await extensionProviderService.control(
+      payload.sessionId,
+      payload.operation,
+      payload.payload ?? {},
+    );
+    if (payload.operation === "close") sessions.delete(payload.sessionId);
+    return result;
+  });
+  ipcMain.handle(CHANNELS.importerDetect, async (event, payload) => runExtensionRequest(event, payload, async (signal) => {
+    if (!extensionProviderService) throw new Error("Plugin importer Providers are unavailable");
+    return extensionProviderService.detectImporter({ ...payload, sample: payload?.sample }, { signal });
+  }));
+  handle(CHANNELS.importerSelectFile, async (_activeManager, _payload, event) => {
+    if (typeof selectImporterFile !== "function") throw new Error("Plugin importer file selection is unavailable");
+    const filePath = await selectImporterFile(event);
+    if (!filePath) return null;
+    const handle = await fs.open(filePath, "r");
+    let retained = false;
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size < 1 || stat.size > MAX_IMPORT_FILE_BYTES) {
+        throw new TypeError("Plugin importer file is not a supported regular file");
+      }
+      const sample = Buffer.allocUnsafe(Math.min(stat.size, 128 * 1024));
+      const { bytesRead } = await handle.read(sample, 0, sample.byteLength, 0);
+      if (bytesRead !== sample.byteLength) throw new Error("Plugin importer file changed while sampling");
+      const selections = importerSelectionMap(event.sender);
+      if (selections.size >= MAX_IMPORT_SELECTIONS_PER_SENDER) {
+        throw new Error("Too many pending Plugin importer file selections");
+      }
+      const selectionToken = randomUUID();
+      selections.set(selectionToken, {
+        handle,
+        filePath,
+        fileName: filePath.split(/[\\/]/u).at(-1) || "import",
+        size: stat.size,
+        dev: stat.dev,
+        ino: stat.ino,
+        mtimeMs: stat.mtimeMs,
+        expiresAt: Date.now() + IMPORT_SELECTION_TTL_MS,
+      });
+      retained = true;
+      return { selectionToken, fileName: selections.get(selectionToken).fileName, sample: sample.subarray(0, bytesRead) };
+    } finally {
+      if (!retained) await handle.close();
+    }
+  });
+  handle(CHANNELS.importerReleaseFile, async (_activeManager, payload, event) => {
+    const selectionToken = payload?.selectionToken;
+    if (typeof selectionToken !== "string" || selectionToken.length < 1 || selectionToken.length > 128) {
+      throw new TypeError("Plugin importer selection token is invalid");
+    }
+    const selections = importerSelectionMap(event.sender);
+    const selection = selections.get(selectionToken);
+    const deleted = selections.delete(selectionToken);
+    closeImporterSelection(selection);
+    return deleted;
+  });
+  ipcMain.handle(CHANNELS.importerParseFile, async (event, payload) => runExtensionRequest(event, payload, async (signal) => {
+    if (!extensionProviderService) throw new Error("Plugin importer Providers are unavailable");
+    const selectionToken = payload?.selectionToken;
+    if (typeof selectionToken !== "string" || selectionToken.length < 1 || selectionToken.length > 128) {
+      throw new TypeError("Plugin importer selection token is invalid");
+    }
+    const selections = importerSelectionMap(event.sender);
+    const selection = selections.get(selectionToken);
+    selections.delete(selectionToken);
+    if (!selection || selection.expiresAt <= Date.now()) throw new Error("Plugin importer file selection expired");
+    const handle = selection.handle;
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size !== selection.size || stat.dev !== selection.dev
+        || stat.ino !== selection.ino || stat.mtimeMs !== selection.mtimeMs) {
+        throw new Error("Plugin importer file changed after selection");
+      }
+      return await extensionProviderService.parseImporter({
+        ...payload,
+        fileName: selection.fileName,
+        source: handle.createReadStream({ autoClose: false, signal, start: 0 }),
+        sourceByteLength: stat.size,
+      }, {
+        signal,
+        onProgress: (progress) => {
+          if (!event.sender.isDestroyed?.()) {
+            event.sender.send(CHANNELS.importerProgress, {
+              requestId: payload.requestId,
+              providerId: payload.providerId,
+              progress,
+            });
+          }
+        },
+      });
+    } finally {
+      await handle.close();
+    }
+  }));
   handle(CHANNELS.openView, async (_activeManager, payload, event) => {
     if (!viewHost) throw new Error("Plugin views are unavailable");
     return viewHost.open(payload, event.sender);

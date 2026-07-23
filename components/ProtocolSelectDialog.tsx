@@ -2,6 +2,7 @@ import { Plug } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { useI18n } from "../application/i18n/I18nProvider";
 import { formatHostPort } from "../domain/host";
+import { isPluginHostProtocol } from "../domain/pluginConnection";
 import { cn } from "../lib/utils";
 import { Host, HostProtocol } from "../types";
 import { getProtocolVisualStyle, type ProtocolVisualKey } from "./protocolVisuals";
@@ -9,7 +10,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
 interface ProtocolOption {
-  protocol: ProtocolVisualKey;
+  protocol: HostProtocol;
   port: number;
   label: string;
   description: string;
@@ -83,6 +84,16 @@ const ProtocolSelectDialog: React.FC<ProtocolSelectDialogProps> = ({
       });
     }
 
+    if (isPluginHostProtocol(host.protocol) && host.pluginConnection) {
+      options.push({
+        protocol: host.protocol,
+        port: host.port || 22,
+        label: host.pluginConnection.providerId,
+        description: host.pluginConnection.providerId,
+        enabled: true,
+      });
+    }
+
     return options;
   }, [host]);
 
@@ -143,7 +154,13 @@ const ProtocolSelectDialog: React.FC<ProtocolSelectDialogProps> = ({
             <h3 className="text-sm font-medium">{t("protocolSelect.chooseProtocol")}</h3>
             <div className="space-y-3">
               {protocolOptions.map((option) => {
-                const visual = getProtocolVisualStyle(option.protocol);
+                const visual = isPluginHostProtocol(option.protocol)
+                  ? {
+                    icon: <Plug size={18} />,
+                    selected: "bg-primary text-primary-foreground",
+                    idle: "bg-secondary text-muted-foreground",
+                  }
+                  : getProtocolVisualStyle(option.protocol as ProtocolVisualKey);
                 return (
                   <button
                     key={option.protocol}

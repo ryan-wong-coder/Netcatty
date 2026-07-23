@@ -183,6 +183,7 @@ export const enTerminalMessages: Messages = {
   'terminal.connection.protocol.telnet': 'Telnet',
   'terminal.connection.protocol.mosh': 'Mosh',
   'terminal.connection.protocol.et': 'EternalTerminal',
+  'terminal.connection.protocol.plugin': 'Plugin connection',
   'terminal.et.proxyUnsupported': 'EternalTerminal does not currently support Netcatty proxy settings. Use SSH or remove the proxy for this host.',
   'terminal.et.multiJumpUnsupported': 'EternalTerminal currently supports at most one jump host in Netcatty.',
   'terminal.connection.protocol.serial': 'Serial',

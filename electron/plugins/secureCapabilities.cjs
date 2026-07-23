@@ -111,9 +111,30 @@ function registerSecurePluginCapabilities(registry, options) {
       options.companionSupervisor.describeStartAuthorization(params, context)
     ),
   });
-  registry.registerRequest("companion.request", (params, context) => (
-    options.companionSupervisor.request(params, context)
-  ), {
+  registry.registerRequest("companion.request", async (params, context) => {
+    const validated = options.companionSupervisor.validateRequest(params);
+    if (validated.credentialLeases === undefined) {
+      return options.companionSupervisor.request(validated, context);
+    }
+    const credentials = {};
+    for (const [name, lease] of Object.entries(validated.credentialLeases)) {
+      credentials[name] = await options.credentialBroker.consumeLease(
+        context,
+        lease,
+        validated.operationId,
+      );
+    }
+    await context.assertActive();
+    return options.companionSupervisor.request({
+      handleId: validated.handleId,
+      method: validated.method,
+      params: Object.freeze({
+        payload: validated.params ?? null,
+        credentials: Object.freeze(credentials),
+      }),
+      timeoutMs: validated.timeoutMs,
+    }, context);
+  }, {
     metadata: { capability: "companion", mutating: true, permission: "companion.execute" },
     validateParams: (params) => options.companionSupervisor.validateRequest(params),
     authorization: (params, context) => options.companionSupervisor.describeHandleAuthorization(params, context),

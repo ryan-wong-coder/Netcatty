@@ -93,6 +93,7 @@ function createBridgeRegistrar(context) {
       createTrustedPluginBridgeSender,
       registerPluginBridge,
     } = require("../plugins/pluginBridge.cjs");
+    let terminalWorkerManager = null;
     const { toElectronAccelerator } = require("../plugins/keybindings.cjs");
     const { startDevelopmentPluginHost } = require("../plugins/hostBootstrap.cjs");
     const pluginHostService = startDevelopmentPluginHost({
@@ -159,6 +160,18 @@ function createBridgeRegistrar(context) {
       contributionService: pluginHostService?.contributionService,
       terminalProviderService: pluginHostService?.terminalProviderService,
       terminalDataPipelineService: pluginHostService?.terminalDataPipelineService,
+      extensionProviderService: pluginHostService?.extensionProviderService,
+      credentialResolver: pluginHostService?.credentialResolver,
+      getTerminalWorkerManager: () => terminalWorkerManager,
+      selectImporterFile: async (event) => {
+        const owner = electronModule.BrowserWindow.fromWebContents(event.sender);
+        const result = await electronModule.dialog.showOpenDialog(owner || undefined, {
+          title: "Select file to import",
+          properties: ["openFile", "showHiddenFiles"],
+          filters: [{ name: "All Files", extensions: ["*"] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
       resolveContributionIcon: (payload) => pluginHostService?.contributionIconService?.resolve(payload),
       viewHost: pluginHostService?.viewHost,
       env: process.env,
@@ -318,7 +331,7 @@ function createBridgeRegistrar(context) {
     const terminalOutputChannel = createTerminalOutputChannel({
       MessageChannelMain: electronModule.MessageChannelMain,
     });
-    const terminalWorkerManager = isTerminalWorkerEnabled({ env: process.env }) && electronModule.utilityProcess
+    terminalWorkerManager = isTerminalWorkerEnabled({ env: process.env }) && electronModule.utilityProcess
       ? createTerminalWorkerManager({
           utilityProcess: electronModule.utilityProcess,
           electronModule,

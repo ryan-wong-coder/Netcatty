@@ -1,6 +1,7 @@
 import type { GroupConfig, Host, ProxyProfile, TerminalSession } from "./models";
 import { applyGroupDefaults, resolveGroupDefaults } from "./groupConfig";
 import { materializeHostProxyProfile } from "./proxyProfiles";
+import { sanitizePluginConnection } from "./pluginConnection";
 
 type LocalOs = Host["os"];
 
@@ -71,6 +72,7 @@ function buildFallbackHostFromSession(
     group: "",
     tags: [],
     protocol: fallbackProtocol,
+    pluginConnection: sanitizePluginConnection(session.pluginConnection, fallbackProtocol),
     moshEnabled: session.moshEnabled,
     etEnabled: session.etEnabled,
     charset: session.charset,
@@ -101,6 +103,8 @@ export function resolveTerminalSessionHost({
   });
 
   const protocol = session.protocol ?? existingHost.protocol;
+  const pluginConnection = sanitizePluginConnection(session.pluginConnection, protocol)
+    ?? sanitizePluginConnection(existingHost.pluginConnection, protocol);
   const port = session.port ?? existingHost.port;
   const moshEnabled = session.moshEnabled ?? existingHost.moshEnabled;
   const etEnabled = session.etEnabled ?? existingHost.etEnabled;
@@ -119,6 +123,7 @@ export function resolveTerminalSessionHost({
     port === existingHost.port &&
     moshEnabled === existingHost.moshEnabled &&
     etEnabled === existingHost.etEnabled &&
+    JSON.stringify(pluginConnection) === JSON.stringify(existingHost.pluginConnection) &&
     backspaceBehavior === existingHost.backspaceBehavior
   ) {
     return suppressDeviceTypeForShellTransport(existingHost);
@@ -130,6 +135,7 @@ export function resolveTerminalSessionHost({
     port,
     moshEnabled,
     etEnabled,
+    pluginConnection,
     backspaceBehavior,
   });
 }

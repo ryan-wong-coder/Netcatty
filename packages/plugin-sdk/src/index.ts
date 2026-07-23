@@ -1,6 +1,22 @@
 import type {
+  AuthenticationBeginPayload,
+  AuthenticationResponsePayload,
+  AuthenticationResult,
+  ConnectionConfigurationPayload,
+  ConnectionControlPayload,
+  ConnectionOpenPayload,
+  ConnectionOpenResult,
+  ConnectionProbeResult,
+  ConnectionResizePayload,
+  ConnectionSignalPayload,
+  ConnectionStatusResult,
+  ConnectionValidateResult,
   CredentialRef,
   FeatureId,
+  ImporterDetectPayload,
+  ImporterDetectResult,
+  ImporterParsePayload,
+  ImporterParseResult,
   JsonValue,
   PluginErrorData,
   PluginErrorName,
@@ -102,6 +118,10 @@ export type PluginProviderHandler<
   TResult extends JsonValue = JsonValue,
 > = (invocation: PluginProviderInvocation<TPayload>) => TResult | void | Promise<TResult | void>;
 
+type TypedPluginProviderInvocation<TPayload> = Omit<PluginProviderInvocation, "payload"> & {
+  readonly payload: TPayload;
+};
+
 type ProviderHandlerForKind<
   K extends ProviderKind,
   TPayload extends JsonValue,
@@ -110,6 +130,12 @@ type ProviderHandlerForKind<
   ? TerminalInterceptorHandler
   : K extends OrdinaryTerminalProviderKind
     ? OrdinaryTerminalProviderHandler<K>
+    : K extends "connection"
+      ? ConnectionProviderHandler
+      : K extends "authentication"
+        ? AuthenticationProviderHandler
+        : K extends "importer"
+          ? ImporterProviderHandler
     : PluginProviderHandler<TPayload, TResult>;
 
 export interface PluginProviders {
@@ -377,6 +403,75 @@ export type OrdinaryTerminalProviderHandler<K extends OrdinaryTerminalProviderKi
   invocation: OrdinaryTerminalProviderInvocation<K>,
 ) => OrdinaryTerminalProviderResultByKind[K] | Promise<OrdinaryTerminalProviderResultByKind[K]>;
 
+export type ConnectionProviderInvocation =
+  | (TypedPluginProviderInvocation<ConnectionConfigurationPayload> & {
+      readonly kind: "connection";
+      readonly operation: "validateConfiguration" | "probe";
+    })
+  | (TypedPluginProviderInvocation<ConnectionOpenPayload> & {
+      readonly kind: "connection";
+      readonly operation: "open";
+      readonly input: Promise<PluginReadableByteStream>;
+      readonly output: PluginWritableByteStream;
+    })
+  | (TypedPluginProviderInvocation<ConnectionResizePayload> & {
+      readonly kind: "connection";
+      readonly operation: "resize";
+    })
+  | (TypedPluginProviderInvocation<ConnectionSignalPayload> & {
+      readonly kind: "connection";
+      readonly operation: "signal";
+    })
+  | (TypedPluginProviderInvocation<ConnectionControlPayload> & {
+      readonly kind: "connection";
+      readonly operation: "reconnect" | "close" | "getStatus";
+    });
+
+export type ConnectionProviderResult =
+  | ConnectionValidateResult
+  | ConnectionProbeResult
+  | ConnectionOpenResult
+  | ConnectionStatusResult
+  | null;
+
+export type ConnectionProviderHandler = (
+  invocation: ConnectionProviderInvocation,
+) => ConnectionProviderResult | Promise<ConnectionProviderResult>;
+
+export type AuthenticationProviderInvocation =
+  | (TypedPluginProviderInvocation<AuthenticationBeginPayload> & {
+      readonly kind: "authentication";
+      readonly operation: "begin";
+    })
+  | (TypedPluginProviderInvocation<AuthenticationResponsePayload> & {
+      readonly kind: "authentication";
+      readonly operation: "respond";
+    })
+  | (TypedPluginProviderInvocation<Readonly<{ operationId: string }>> & {
+      readonly kind: "authentication";
+      readonly operation: "cancel";
+    });
+
+export type AuthenticationProviderHandler = (
+  invocation: AuthenticationProviderInvocation,
+) => AuthenticationResult | Promise<AuthenticationResult>;
+
+export type ImporterProviderInvocation =
+  | (TypedPluginProviderInvocation<ImporterDetectPayload> & {
+      readonly kind: "importer";
+      readonly operation: "detect";
+    })
+  | (TypedPluginProviderInvocation<ImporterParsePayload> & {
+      readonly kind: "importer";
+      readonly operation: "parse";
+      readonly input: Promise<PluginReadableByteStream>;
+      readonly output: PluginWritableByteStream;
+    });
+
+export type ImporterProviderHandler = (
+  invocation: ImporterProviderInvocation,
+) => ImporterDetectResult | ImporterParseResult | Promise<ImporterDetectResult | ImporterParseResult>;
+
 export interface PluginTerminalSessions {
   onDidChange(listener: (event: TerminalSessionEvent) => void): Disposable;
 }
@@ -445,6 +540,13 @@ export interface PluginFilesystemClient {
 
 export interface PluginCompanionRequestOptions {
   readonly timeoutMs?: number;
+  /**
+   * Operation-bound one-use leases consumed by the host immediately before
+   * dispatching this request to the isolated companion. When present, the
+   * companion receives `{ payload, credentials }` instead of the raw params.
+   */
+  readonly credentialLeases?: Readonly<Record<string, SecretLeaseRef>>;
+  readonly operationId?: string;
 }
 
 export interface PluginCompanionHandle extends Disposable {
@@ -459,6 +561,30 @@ export interface PluginCompanionHandle extends Disposable {
 
 export interface PluginCompanionService {
   start(companionId: string): Promise<PluginCompanionHandle>;
+}
+
+export interface PluginReadableByteStream extends Disposable {
+  readonly id: string;
+  /**
+   * Returns the next owned byte chunk or null after a normal end. Calling read
+   * again releases receive credit for the previous chunk, so consumers should
+   * finish processing one chunk before requesting the next.
+   */
+  read(): Promise<Uint8Array | null>;
+  cancel(): void;
+}
+
+export interface PluginWritableByteStream extends Disposable {
+  readonly id: string;
+  write(data: Uint8Array | ArrayBuffer): Promise<void>;
+  end(): Promise<void>;
+  fail(error: Readonly<{ message: string }>): void;
+  cancel(): void;
+}
+
+export interface PluginStreams {
+  acceptReadable(streamId: string): Promise<PluginReadableByteStream>;
+  openWritable(streamId: string, options?: Readonly<{ windowBytes?: number }>): Promise<PluginWritableByteStream>;
 }
 
 export interface PluginContext {
@@ -480,6 +606,7 @@ export interface PluginContext {
   readonly network: PluginNetworkClient;
   readonly filesystem: PluginFilesystemClient;
   readonly companions: PluginCompanionService;
+  readonly streams: PluginStreams;
   readonly logger: PluginLogger;
 }
 

@@ -156,3 +156,21 @@ test("CSV export never writes credentials from skipped serial hosts", () => {
   assert.equal(result.csv.includes("must-not-leak"), false);
   assert.equal(result.csv.includes(sshHost.hostname), true);
 });
+
+test("CSV export skips plugin hosts instead of discarding opaque provider configuration", () => {
+  const pluginHost: Host = {
+    id: "plugin-host",
+    label: "Plugin host",
+    hostname: "com.example.transport.connection",
+    username: "alice",
+    protocol: "plugin:com.example.transport.connection",
+    pluginConnection: {
+      providerId: "com.example.transport.connection",
+      configuration: { endpoint: "opaque://target" },
+    },
+  };
+  const result = exportHostsToCsvWithStats([pluginHost]);
+  assert.equal(result.exportedCount, 0);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.csv.includes("opaque://target"), false);
+});

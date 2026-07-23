@@ -938,4 +938,12 @@ export const zhTWCoreMessages: Messages = {
   'settings.plugins.scopeTarget': '{scope} 目標',
   'settings.plugins.noScopeTargets': '沒有可用的目標',
   'settings.plugins.thisDevice': '此裝置',
+  'plugins.authentication.description': '請在此 Netcatty 對話框中完成驗證要求。',
+  'plugins.authentication.value': '值',
+  'plugins.authentication.password': '密碼',
+  'plugins.authentication.code': '一次性驗證碼',
+  'plugins.authentication.deviceCode': '裝置代碼',
+  'plugins.authentication.openBrowser': '開啟瀏覽器',
+  'plugins.authentication.invalidUrl': '驗證提供者傳回了不安全或無效的網址。',
+  'plugins.authentication.continue': '繼續',
 };

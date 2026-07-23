@@ -114,6 +114,34 @@ test("buildSessionRestorePayload preserves local terminal start directory", () =
   assert.equal(payload.sessions[0].localStartDir, "/Users/alice/project");
 });
 
+test("buildSessionRestorePayload preserves a bounded plugin connection snapshot", () => {
+  const providerId = "com.example.transport.connection";
+  const payload = buildSessionRestorePayload({
+    sessions: [{
+      ...session("plugin"),
+      protocol: `plugin:${providerId}`,
+      pluginConnection: {
+        providerId,
+        configuration: { endpoint: "saved.example", nested: { mode: "safe" } },
+        authenticationProviderId: "com.example.transport.authentication",
+        credentialId: "credential-reference-1234",
+      },
+    }],
+    workspaces: [],
+    tabOrder: ["plugin"],
+    activeTabId: "plugin",
+    now: 123,
+  });
+
+  assert.equal(payload.sessions[0].protocol, `plugin:${providerId}`);
+  assert.deepEqual(payload.sessions[0].pluginConnection, {
+    providerId,
+    configuration: { endpoint: "saved.example", nested: { mode: "safe" } },
+    authenticationProviderId: "com.example.transport.authentication",
+    credentialId: "credential-reference-1234",
+  });
+});
+
 test("buildSessionRestorePayload deeply allowlists serial config fields", () => {
   const payload = buildSessionRestorePayload({
     sessions: [{

@@ -27,6 +27,11 @@ export const useTerminalBackend = () => {
     return !!bridge?.startSerialSession;
   }, []);
 
+  const pluginConnectionAvailable = useCallback(() => {
+    const bridge = netcattyBridge.get();
+    return !!bridge?.startPluginConnection;
+  }, []);
+
   const execAvailable = useCallback(() => {
     const bridge = netcattyBridge.get();
     return !!bridge?.execCommand;
@@ -66,6 +71,26 @@ export const useTerminalBackend = () => {
     const bridge = netcattyBridge.get();
     if (!bridge?.startSerialSession) throw new Error("startSerialSession unavailable");
     return bridge.startSerialSession(options);
+  }, []);
+
+  const startPluginConnection = useCallback(async (options: NetcattyPluginConnectionStartRequest) => {
+    const bridge = netcattyBridge.get();
+    if (!bridge?.startPluginConnection) throw new Error("startPluginConnection unavailable");
+    if (!bridge.invokePluginExtensionProvider) throw new Error("Plugin connection validation unavailable");
+    const validation = await bridge.invokePluginExtensionProvider({
+      providerId: options.providerId,
+      kind: "connection",
+      operation: "validateConfiguration",
+      payload: { configuration: options.configuration },
+      deadlineMs: options.deadlineMs,
+    });
+    if (!validation || typeof validation !== "object" || Array.isArray(validation)
+      || (validation as { valid?: unknown }).valid !== true) {
+      const issues = (validation as { issues?: Array<{ message?: string }> } | null)?.issues;
+      throw new Error(issues?.[0]?.message || "Plugin connection configuration is invalid");
+    }
+    const opened = await bridge.startPluginConnection(options);
+    return opened;
   }, []);
 
   const execCommand = useCallback(async (options: Parameters<NetcattyBridge["execCommand"]>[0]) => {
@@ -414,6 +439,7 @@ export const useTerminalBackend = () => {
         etAvailable,
         localAvailable,
         serialAvailable,
+        pluginConnectionAvailable,
         execAvailable,
         openExternalAvailable,
         startSSHSession,
@@ -422,6 +448,7 @@ export const useTerminalBackend = () => {
         startEtSession,
         startLocalSession,
         startSerialSession,
+        startPluginConnection,
         listSerialPorts,
         serialYmodemAvailable,
         serialYmodemReceiveAvailable,
@@ -491,6 +518,7 @@ export const useTerminalBackend = () => {
       etAvailable,
       localAvailable,
       serialAvailable,
+      pluginConnectionAvailable,
       execAvailable,
       openExternalAvailable,
       startSSHSession,
@@ -499,6 +527,7 @@ export const useTerminalBackend = () => {
       startEtSession,
       startLocalSession,
       startSerialSession,
+      startPluginConnection,
       listSerialPorts,
       serialYmodemAvailable,
       serialYmodemReceiveAvailable,

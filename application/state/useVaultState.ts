@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { migrateHostsFromLegacyLineTimestamps, normalizeDistroId, sanitizeHost } from "../../domain/host";
+import { isEncryptedCredentialPlaceholder } from "../../domain/credentials";
 import { sanitizeGroupConfig } from "../../domain/groupConfig";
 import { normalizeKnownHosts } from "../../domain/knownHosts";
 import { normalizeNoteGroups, normalizeVaultNotes } from "../../domain/notes";
@@ -64,6 +65,11 @@ import {
   encryptKeys,
   encryptProxyProfiles,
 } from "../../infrastructure/persistence/secureFieldAdapter";
+import { pluginExtensionBridge } from "./pluginExtensionBridge";
+import {
+  commitPluginImporterTransaction,
+  recoverPluginImporterTransaction,
+} from "./pluginImporterTransaction";
 
 type ExportableVaultData = {
   hosts: Host[];
@@ -80,6 +86,15 @@ type ExportableVaultData = {
 };
 
 type LegacyKeyRecord = Record<string, unknown> & { id?: string; source?: string };
+
+const PLUGIN_IMPORT_TRANSACTION_KEYS = new Set([
+  STORAGE_KEY_HOSTS,
+  STORAGE_KEY_KEYS,
+  STORAGE_KEY_IDENTITIES,
+  STORAGE_KEY_SNIPPETS,
+  STORAGE_KEY_GROUPS,
+  STORAGE_KEY_GROUP_CONFIGS,
+]);
 
 // Migration helper for old SSHKey format to new format
 const migrateKey = (key: Partial<SSHKey>): SSHKey => {
@@ -218,6 +233,8 @@ export const useVaultState = () => {
   const keysWriteVersion = useRef(0);
   const identitiesWriteVersion = useRef(0);
   const proxyProfilesWriteVersion = useRef(0);
+  const snippetsWriteVersion = useRef(0);
+  const customGroupsWriteVersion = useRef(0);
   const groupConfigsWriteVersion = useRef(0);
 
   // Read-sequence counters for cross-window storage events.  Each incoming
@@ -230,6 +247,7 @@ export const useVaultState = () => {
   const proxyProfilesReadSeq = useRef(0);
   const groupConfigsReadSeq = useRef(0);
   const connectionLogTerminalDataRef = useRef<ConnectionLogTerminalDataMap>({});
+  const pluginCredentialCatalogVersion = useRef(0);
 
   const syncConnectionLogTerminalDataMap = useCallback((
     logs: ConnectionLog[],
@@ -390,6 +408,7 @@ export const useVaultState = () => {
 
   const updateSnippets = useCallback((data: Snippet[]) => {
     const cleaned = normalizeVaultOrder(data);
+    ++snippetsWriteVersion.current;
     setSnippets(cleaned);
     localStorageAdapter.write(STORAGE_KEY_SNIPPETS, cleaned);
   }, []);
@@ -412,6 +431,7 @@ export const useVaultState = () => {
   }, []);
 
   const updateCustomGroups = useCallback((data: string[]) => {
+    ++customGroupsWriteVersion.current;
     setCustomGroups(data);
     localStorageAdapter.write(STORAGE_KEY_GROUPS, data);
 
@@ -621,6 +641,7 @@ export const useVaultState = () => {
   useEffect(() => {
     const init = async () => {
       try {
+        recoverPluginImporterTransaction(localStorageAdapter, PLUGIN_IMPORT_TRANSACTION_KEYS);
         const savedHosts = localStorageAdapter.read<Host[]>(STORAGE_KEY_HOSTS);
 
         if (savedHosts) {
@@ -810,6 +831,41 @@ export const useVaultState = () => {
   }, [updateHosts, updateSnippets]);
 
   useEffect(() => {
+    if (!isInitialized) return;
+    const version = ++pluginCredentialCatalogVersion.current;
+    void pluginExtensionBridge.updateCredentialCatalog([]).then(async () => {
+      if (version !== pluginCredentialCatalogVersion.current) return;
+      const [encryptedIdentities, encryptedKeys] = await Promise.all([
+        encryptIdentities(identities),
+        encryptKeys(keys),
+      ]);
+      if (version !== pluginCredentialCatalogVersion.current) return;
+      const catalog = new Map<string, string | null>();
+      const addCredential = (id: string, ciphertext: string | undefined) => {
+        if (id.length < 16 || id.length > 256 || !isEncryptedCredentialPlaceholder(ciphertext)) return;
+        if (catalog.has(id)) catalog.set(id, null);
+        else catalog.set(id, ciphertext);
+      };
+      for (const identity of encryptedIdentities) {
+        addCredential(identity.id, identity.password);
+      }
+      for (const key of encryptedKeys) {
+        addCredential(key.id, key.privateKey);
+      }
+      const entries = [...catalog.entries()].flatMap(([id, ciphertext]) => (
+        ciphertext ? [{ id, ciphertext }] : []
+      ));
+      if (version === pluginCredentialCatalogVersion.current) {
+        await pluginExtensionBridge.updateCredentialCatalog(entries);
+      }
+    }).catch(() => {
+      // Plugin development mode and OS-backed encryption are both optional.
+      // Clearing happens before asynchronous preparation so removed or stale
+      // Vault credentials cannot remain usable if encryption/update fails.
+    });
+  }, [identities, isInitialized, keys]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
 
     const handleStorage = (event: StorageEvent) => {
@@ -878,12 +934,14 @@ export const useVaultState = () => {
 
       if (key === STORAGE_KEY_SNIPPETS) {
         const next = safeParse<Snippet[]>(event.newValue) ?? [];
+        ++snippetsWriteVersion.current;
         setSnippets(normalizeVaultOrder(next));
         return;
       }
 
       if (key === STORAGE_KEY_GROUPS) {
         const next = safeParse<string[]>(event.newValue) ?? [];
+        ++customGroupsWriteVersion.current;
         setCustomGroups(next);
         return;
       }
@@ -1055,6 +1113,72 @@ export const useVaultState = () => {
     ],
   );
 
+  const commitPluginImporterData = useCallback(async (payload: Pick<
+    ExportableVaultData,
+    "hosts" | "keys" | "identities" | "snippets" | "customGroups"
+  >): Promise<void> => {
+    const nextHosts = normalizeVaultOrder(payload.hosts.map(sanitizeHost));
+    const nextKeys = normalizeVaultOrder(payload.keys);
+    const nextIdentities = normalizeVaultOrder(payload.identities ?? []);
+    const nextSnippets = normalizeVaultOrder(payload.snippets);
+    const nextGroups = [...payload.customGroups];
+    const groupOrderByPath = new Map(nextGroups.map((groupPath, index) => [groupPath, (index + 1) * 1000]));
+    const existingConfigByPath = new Map(groupConfigs.map((config) => [config.path, config]));
+    const nextGroupConfigs = normalizeVaultOrder([
+      ...nextGroups.map((groupPath) => sanitizeGroupConfig({
+        ...(existingConfigByPath.get(groupPath) ?? { path: groupPath }),
+        path: groupPath,
+        order: groupOrderByPath.get(groupPath),
+      })),
+      ...groupConfigs
+        .filter((config) => !groupOrderByPath.has(config.path))
+        .map(sanitizeGroupConfig),
+    ]);
+    const versions = {
+      hosts: hostsWriteVersion.current,
+      keys: keysWriteVersion.current,
+      identities: identitiesWriteVersion.current,
+      snippets: snippetsWriteVersion.current,
+      customGroups: customGroupsWriteVersion.current,
+      groups: groupConfigsWriteVersion.current,
+    };
+    const [encryptedHosts, encryptedKeys, encryptedIdentities, encryptedGroupConfigs] = await Promise.all([
+      encryptHosts(nextHosts),
+      encryptKeys(nextKeys),
+      encryptIdentities(nextIdentities),
+      encryptGroupConfigs(nextGroupConfigs),
+    ]);
+    if (versions.hosts !== hostsWriteVersion.current
+      || versions.keys !== keysWriteVersion.current
+      || versions.identities !== identitiesWriteVersion.current
+      || versions.snippets !== snippetsWriteVersion.current
+      || versions.customGroups !== customGroupsWriteVersion.current
+      || versions.groups !== groupConfigsWriteVersion.current) {
+      throw new Error("Vault changed while preparing the importer transaction; retry the import");
+    }
+    ++hostsWriteVersion.current;
+    ++keysWriteVersion.current;
+    ++identitiesWriteVersion.current;
+    ++snippetsWriteVersion.current;
+    ++customGroupsWriteVersion.current;
+    ++groupConfigsWriteVersion.current;
+    const prepared = [
+      [STORAGE_KEY_HOSTS, encryptedHosts],
+      [STORAGE_KEY_KEYS, encryptedKeys],
+      [STORAGE_KEY_IDENTITIES, encryptedIdentities],
+      [STORAGE_KEY_SNIPPETS, nextSnippets],
+      [STORAGE_KEY_GROUPS, nextGroups],
+      [STORAGE_KEY_GROUP_CONFIGS, encryptedGroupConfigs],
+    ] as const;
+    commitPluginImporterTransaction(localStorageAdapter, prepared);
+    setHosts(nextHosts);
+    setKeys(nextKeys);
+    setIdentities(nextIdentities);
+    setSnippets(nextSnippets);
+    setCustomGroups(nextGroups);
+    setGroupConfigs(nextGroupConfigs);
+  }, [groupConfigs]);
+
   const importDataFromString = useCallback(
     (jsonString: string): Promise<void> => {
       const data = JSON.parse(jsonString);
@@ -1104,6 +1228,7 @@ export const useVaultState = () => {
     convertKnownHostToHost,
     exportData,
     importDataFromString,
+    commitPluginImporterData,
     clearVaultData,
   };
 };
