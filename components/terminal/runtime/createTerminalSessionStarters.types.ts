@@ -123,6 +123,12 @@ export type SessionLogConfig = {
 
 export type TerminalSessionStartersContext = {
   host: Host & Pick<Partial<TerminalSession>, "localStartDir">;
+  /**
+   * Live host snapshot updated every render. Session data handlers close over
+   * boot-time ctx, so mid-session host toggles (e.g. line timestamps) must be
+   * read from this ref rather than the frozen `host` field.
+   */
+  hostRef?: RefObject<Host & Pick<Partial<TerminalSession>, "localStartDir">>;
   keys: SSHKey[];
   identities?: Identity[];
   knownHosts?: KnownHost[];
@@ -153,6 +159,8 @@ export type TerminalSessionStartersContext = {
     active: boolean,
     state: PasswordPromptPickerState | null,
   ) => boolean;
+  /** Actual tab/pane visibility; the renderer may remain active while hidden. */
+  isPaneVisibleRef?: RefObject<boolean>;
   isVisibleRef?: RefObject<boolean>;
   /** False after unmount/teardown so in-flight session starts skip attach. */
   isBootActiveRef?: RefObject<boolean>;

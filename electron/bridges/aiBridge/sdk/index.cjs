@@ -13,6 +13,7 @@ const claude = require("./claudeDriver.cjs");
 const codex = require("./codexDriver.cjs");
 const copilot = require("./copilotDriver.cjs");
 const cursor = require("./cursorDriver.cjs");
+const cursorCli = require("./cursorCliDriver.cjs");
 const codebuddy = require("./codebuddyDriver.cjs");
 const opencode = require("./opencodeDriver.cjs");
 
@@ -85,6 +86,21 @@ const DRIVER_REGISTRY = {
   },
   cursor: {
     async runTurn(ctx) {
+      const authMode = ctx.cursorAuthMode === "cli-login" ? "cli-login" : "api-key";
+      if (authMode === "cli-login") {
+        return cursorCli.runCursorCliTurn({
+          prompt: ctx.prompt,
+          binPath: ctx.cursorCliBinPath || ctx.binPath,
+          cwd: ctx.cwd,
+          model: ctx.model,
+          env: ctx.env,
+          permissionMode: ctx.permissionMode,
+          resumeSessionId: ctx.resumeSessionId,
+          injectedMcpServers: ctx.injectedMcpServers,
+          emitter: ctx.emitter,
+          signal: ctx.signal,
+        });
+      }
       const agentOptions = cursor.buildCursorAgentOptions({
         apiKey: ctx.apiKey,
         env: ctx.env,
@@ -103,6 +119,12 @@ const DRIVER_REGISTRY = {
       });
     },
     async listModels(ctx) {
+      if (ctx.cursorAuthMode === "cli-login") {
+        return cursorCli.listCursorCliModels({
+          binPath: ctx.cursorCliBinPath || ctx.binPath,
+          env: ctx.env,
+        });
+      }
       return cursor.listCursorModels({ env: ctx.env });
     },
   },

@@ -132,11 +132,22 @@ async function buildAgentEnvWithStoredApiKey(
   config: ExternalAgentConfig,
 ): Promise<Record<string, string> | undefined> {
   const env = { ...(config.env ?? {}) };
-  if (sdkBackend === 'cursor' && config.apiKey) {
-    const decrypted = await decryptField(config.apiKey).catch(() => config.apiKey);
-    const apiKey = String(decrypted || '').trim();
-    if (apiKey) {
-      env.CURSOR_API_KEY = apiKey;
+  if (sdkBackend === 'cursor') {
+    const authMode = config.cursorAuthMode === 'cli-login' ? 'cli-login' : 'api-key';
+    env.NETCATTY_CURSOR_AUTH_MODE = authMode;
+    const cliBin = String(config.command || '').trim();
+    if (authMode === 'cli-login') {
+      if (cliBin && cliBin !== 'cursor') {
+        env.NETCATTY_CURSOR_CLI_BIN = cliBin;
+      }
+      return Object.keys(env).length > 0 ? env : undefined;
+    }
+    if (config.apiKey) {
+      const decrypted = await decryptField(config.apiKey).catch(() => config.apiKey);
+      const apiKey = String(decrypted || '').trim();
+      if (apiKey) {
+        env.CURSOR_API_KEY = apiKey;
+      }
     }
   }
   return Object.keys(env).length > 0 ? env : undefined;
@@ -478,6 +489,7 @@ function handleStreamEvent(event: StreamEvent, callbacks: SdkAgentCallbacks): bo
           event.sdkBackend as string | undefined,
           event.binPath as string | undefined,
           event.runtime === 'app-server' ? 'app-server' : 'sdk',
+          event.authMode as string | undefined,
         ));
       }
       return false;

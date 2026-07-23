@@ -141,6 +141,14 @@ function loadBridgeWithMocks(options = {}) {
         typeof options.probeCopilotAuth === "function" ? options.probeCopilotAuth(...args) : { authenticated: false, authSource: null },
       probeCodexAuth: (...args) =>
         typeof options.probeCodexAuth === "function" ? options.probeCodexAuth(...args) : { authenticated: false, authSource: null },
+      probeCodebuddyAuth: (...args) =>
+        typeof options.probeCodebuddyAuth === "function"
+          ? options.probeCodebuddyAuth(...args)
+          : { authenticated: false, authSource: null },
+      probeCursorCliAuth: (...args) =>
+        typeof options.probeCursorCliAuth === "function"
+          ? options.probeCursorCliAuth(...args)
+          : { authenticated: false, authSource: null, email: null, binPath: null },
     },
     "./ai/ptyExec.cjs": {
       execViaPty: async () => {
@@ -616,6 +624,11 @@ test("resolve-cli reports Cursor SDK installed but unavailable without an API ke
       installed: true,
       authenticated: false,
       authSource: null,
+      cliEmail: null,
+      cliBinPath: null,
+      cliLoginOk: false,
+      apiKeyOk: false,
+      sdkInstalled: true,
     });
   } finally {
     restore();
@@ -645,6 +658,11 @@ test("resolve-cli separates Cursor SDK installation from API key availability", 
       installed: true,
       authenticated: false,
       authSource: null,
+      cliEmail: null,
+      cliBinPath: null,
+      cliLoginOk: false,
+      apiKeyOk: false,
+      sdkInstalled: true,
     });
   } finally {
     restore();
@@ -675,6 +693,11 @@ test("resolve-cli ignores custom Cursor paths and stores the SDK sentinel path",
       installed: true,
       authenticated: true,
       authSource: "CURSOR_API_KEY",
+      cliEmail: null,
+      cliBinPath: null,
+      cliLoginOk: false,
+      apiKeyOk: true,
+      sdkInstalled: true,
     });
   } finally {
     restore();
@@ -701,6 +724,11 @@ test("resolve-cli exposes Cursor SDK support when installed and authenticated", 
       installed: true,
       authenticated: true,
       authSource: "CURSOR_API_KEY",
+      cliEmail: null,
+      cliBinPath: null,
+      cliLoginOk: false,
+      apiKeyOk: true,
+      sdkInstalled: true,
     });
   } finally {
     restore();
@@ -729,6 +757,11 @@ test("resolve-cli exposes Cursor SDK support when API key is saved in settings",
       installed: true,
       authenticated: true,
       authSource: "settings",
+      cliEmail: null,
+      cliBinPath: null,
+      cliLoginOk: false,
+      apiKeyOk: true,
+      sdkInstalled: true,
     });
   } finally {
     restore();
@@ -784,6 +817,35 @@ test("resolve-cli can refresh shell env before resolving Cursor", async () => {
   }
 });
 
+test("discover exposes Cursor when CLI login succeeds without API key", async () => {
+  const { bridge, restore } = loadBridgeWithMocks({
+    resolveCliFromPath: () => null,
+    probeCursorCliAuth: () => ({
+      authenticated: true,
+      authSource: "cli-login",
+      email: "user@example.com",
+      binPath: "/Users/me/.local/bin/agent",
+    }),
+  });
+  const ipcMain = createIpcMainStub();
+  bridge.init({ sessions: new Map(), sftpClients: new Map(), electronModule: { app: { getPath: () => process.cwd() } } });
+  bridge.registerHandlers(ipcMain);
+
+  try {
+    const discover = ipcMain.handlers.get("netcatty:ai:agents:discover");
+    const agents = await discover({ sender: { id: 1 } }, {});
+    const cursor = agents.find((agent) => agent.command === "cursor");
+
+    assert.equal(cursor?.available, true);
+    assert.equal(cursor?.authenticated, true);
+    assert.equal(cursor?.authSource, "cli-login");
+    assert.equal(cursor?.path, "/Users/me/.local/bin/agent");
+    assert.equal(cursor?.cliEmail, "user@example.com");
+  } finally {
+    restore();
+  }
+});
+
 test("discover exposes Cursor SDK support when API key is saved in settings", async () => {
   const { bridge, restore } = loadBridgeWithMocks({
     resolveCliFromPath: () => null,
@@ -801,6 +863,33 @@ test("discover exposes Cursor SDK support when API key is saved in settings", as
     assert.equal(cursor?.available, true);
     assert.equal(cursor?.authenticated, true);
     assert.equal(cursor?.authSource, "settings");
+  } finally {
+    restore();
+  }
+});
+
+test("resolve-cli exposes Cursor CLI login without API key", async () => {
+  const { bridge, restore } = loadBridgeWithMocks({
+    resolveCliFromPath: () => null,
+    probeCursorCliAuth: () => ({
+      authenticated: true,
+      authSource: "cli-login",
+      email: "user@example.com",
+      binPath: "/Users/me/.local/bin/agent",
+    }),
+  });
+  const ipcMain = createIpcMainStub();
+  bridge.init({ sessions: new Map(), sftpClients: new Map(), electronModule: { app: { getPath: () => process.cwd() } } });
+  bridge.registerHandlers(ipcMain);
+
+  try {
+    const resolveCli = ipcMain.handlers.get("netcatty:ai:resolve-cli");
+    const result = await resolveCli({ sender: { id: 1 } }, { command: "cursor", customPath: "" });
+    assert.equal(result.available, true);
+    assert.equal(result.authenticated, true);
+    assert.equal(result.authSource, "cli-login");
+    assert.equal(result.path, "/Users/me/.local/bin/agent");
+    assert.equal(result.cliEmail, "user@example.com");
   } finally {
     restore();
   }

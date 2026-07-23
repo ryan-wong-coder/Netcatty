@@ -37,6 +37,17 @@ const incompleteAltScreenCsiByTerm = new WeakMap<XTerm, IncompletePrivateCsi>();
 const pendingAltScreenEntryByTerm = new WeakMap<XTerm, true>();
 /** True once we have observed the alternate buffer live on this term. */
 const observedAltScreenByTerm = new WeakMap<XTerm, true>();
+/** Leave CSI was queued while xterm still reported the alternate buffer. */
+const pendingAltScreenLeaveByTerm = new WeakMap<XTerm, true>();
+/** One-shot: schedule mode consumes a probe already applied for this push. */
+const preappliedAltScreenNeedsRafByTerm = new WeakMap<XTerm, boolean>();
+
+/** Test-only: counts full CSI scans in probeAltScreenScheduling. */
+let altScreenProbeScanCountForTests = 0;
+export const getAltScreenProbeScanCountForTests = (): number => altScreenProbeScanCountForTests;
+export const resetAltScreenProbeScanCountForTests = (): void => {
+  altScreenProbeScanCountForTests = 0;
+};
 
 const isPrivateParamCharCode = (code: number): boolean =>
   (code >= 0x30 && code <= 0x39) || code === 0x3b;
@@ -45,6 +56,10 @@ type AltScreenProbeResult = {
   needsRaf: boolean;
   incomplete: IncompletePrivateCsi | null;
   lastTransition: "enter" | "leave" | null;
+  /** Raw offset where a new alternate-screen frame (or possible split entry) starts. */
+  frameStart: number | null;
+  /** Raw offset immediately after the final transition back to normal screen. */
+  normalScreenStart: number | null;
 };
 
 /**
@@ -56,18 +71,27 @@ const probeAltScreenScheduling = (
   data: string,
   resume: IncompletePrivateCsi | null,
 ): AltScreenProbeResult => {
+  altScreenProbeScanCountForTests += 1;
   let phase: IncompletePrivateCsi["phase"] | null = resume?.phase ?? null;
   let params = resume?.params ?? "";
   let lastTransition: "enter" | "leave" | null = null;
   let incomplete: IncompletePrivateCsi | null = null;
+  let sequenceStart = resume ? 0 : -1;
+  let frameStart: number | null = null;
+  let normalScreenStart: number | null = null;
 
-  const finishPrivate = (final: string): void => {
+  const finishPrivate = (final: string, endOffset: number): void => {
     const parts = params.split(";").filter(Boolean);
     if (parts.some((param) => ALT_SCREEN_DECSET.has(param))) {
       lastTransition = final === "h" ? "enter" : "leave";
+      if (final === "h" && frameStart === null) {
+        frameStart = Math.max(0, sequenceStart);
+      }
+      normalScreenStart = final === "l" ? endOffset : null;
     }
     phase = null;
     params = "";
+    sequenceStart = -1;
   };
 
   for (let i = 0; i < data.length; i += 1) {
@@ -78,11 +102,13 @@ const probeAltScreenScheduling = (
       if (ch === ESC) {
         phase = 0;
         params = "";
+        sequenceStart = i;
         continue;
       }
       if (ch === C1_CSI) {
         phase = 3;
         params = "";
+        sequenceStart = i;
         continue;
       }
       continue;
@@ -97,12 +123,15 @@ const probeAltScreenScheduling = (
       if (ch === "c") {
         // RIS returns the terminal to the normal screen without DECSET leave.
         lastTransition = "leave";
+        normalScreenStart = i + 1;
         phase = null;
         params = "";
+        sequenceStart = -1;
         continue;
       }
       phase = null;
       params = "";
+      sequenceStart = -1;
       i -= 1; // reprocess this char as potential start
       continue;
     }
@@ -116,6 +145,7 @@ const probeAltScreenScheduling = (
       }
       phase = null;
       params = "";
+      sequenceStart = -1;
       i -= 1;
       continue;
     }
@@ -129,6 +159,7 @@ const probeAltScreenScheduling = (
       }
       phase = null;
       params = "";
+      sequenceStart = -1;
       i -= 1;
       continue;
     }
@@ -141,13 +172,14 @@ const probeAltScreenScheduling = (
       continue;
     }
     if (ch === "h" || ch === "l") {
-      finishPrivate(ch);
+      finishPrivate(ch, i + 1);
       continue;
     }
     // Abort incomplete private mode. ESC / C1 start a new sequence (xterm does
     // the same) — reprocess this byte as a fresh introducer.
     phase = null;
     params = "";
+    sequenceStart = -1;
     if (ch === ESC || ch === C1_CSI) {
       i -= 1;
     }
@@ -155,12 +187,17 @@ const probeAltScreenScheduling = (
 
   if (phase !== null) {
     incomplete = { phase, params };
+    if (frameStart === null) {
+      frameStart = Math.max(0, sequenceStart);
+    }
   }
 
   return {
     needsRaf: lastTransition === "enter" || incomplete !== null,
     incomplete,
     lastTransition,
+    frameStart,
+    normalScreenStart,
   };
 };
 
@@ -172,11 +209,26 @@ const isTerminalAlternateScreenActive = (term: XTerm): boolean => {
   }
 };
 
-const noteAltScreenScheduleProbe = (term: XTerm, chunk: string): boolean => {
-  // Always scan the chunk first so leave-alt CSI is observed even while
-  // buffer.active still reports "alternate" (parser lags our write schedule).
-  const resume = incompleteAltScreenCsiByTerm.get(term) ?? null;
-  const probe = probeAltScreenScheduling(chunk, resume);
+/**
+ * Keep a pending write atomic when it is part of an alternate-screen frame.
+ * This includes enter sequences that xterm has not parsed yet, including a
+ * private CSI split across PTY chunks.
+ */
+export const shouldPreserveTerminalWriteFrameBatch = (term: XTerm): boolean => (
+  (!pendingAltScreenLeaveByTerm.has(term) && isTerminalAlternateScreenActive(term))
+  || observedAltScreenByTerm.has(term)
+  || pendingAltScreenEntryByTerm.has(term)
+  || incompleteAltScreenCsiByTerm.has(term)
+);
+
+/**
+ * Apply a completed alt-screen probe to per-term latches.
+ * Returns whether the next write schedule should use rAF.
+ */
+const applyAltScreenScheduleProbeResult = (
+  term: XTerm,
+  probe: AltScreenProbeResult,
+): boolean => {
   if (probe.incomplete) {
     incompleteAltScreenCsiByTerm.set(term, probe.incomplete);
   } else {
@@ -186,12 +238,19 @@ const noteAltScreenScheduleProbe = (term: XTerm, chunk: string): boolean => {
   if (probe.lastTransition === "leave") {
     pendingAltScreenEntryByTerm.delete(term);
     observedAltScreenByTerm.delete(term);
+    pendingAltScreenLeaveByTerm.set(term, true);
   } else if (probe.lastTransition === "enter") {
     // Complete enter CSI observed; xterm may still report normal until parse.
     pendingAltScreenEntryByTerm.set(term, true);
+    pendingAltScreenLeaveByTerm.delete(term);
   }
 
   if (isTerminalAlternateScreenActive(term)) {
+    if (pendingAltScreenLeaveByTerm.has(term)) {
+      // Schedule the leave with the current TUI frame, but do not re-latch the
+      // old alternate state while xterm is still parsing the queued leave.
+      return true;
+    }
     // Buffer realized alternate — drop enter-pending (no longer needed).
     observedAltScreenByTerm.set(term, true);
     pendingAltScreenEntryByTerm.delete(term);
@@ -203,11 +262,20 @@ const noteAltScreenScheduleProbe = (term: XTerm, chunk: string): boolean => {
     observedAltScreenByTerm.delete(term);
     pendingAltScreenEntryByTerm.delete(term);
   }
+  pendingAltScreenLeaveByTerm.delete(term);
 
   return (
     probe.needsRaf
     || pendingAltScreenEntryByTerm.has(term)
   );
+};
+
+const noteAltScreenScheduleProbe = (term: XTerm, chunk: string): boolean => {
+  // Always scan the chunk first so leave-alt CSI is observed even while
+  // buffer.active still reports "alternate" (parser lags our write schedule).
+  const resume = incompleteAltScreenCsiByTerm.get(term) ?? null;
+  const probe = probeAltScreenScheduling(chunk, resume);
+  return applyAltScreenScheduleProbeResult(term, probe);
 };
 
 type CoalescerByteCapResolver = () => number;
@@ -216,6 +284,12 @@ export type CoalescedTerminalWriteOptions = {
   deferStart?: boolean;
   yieldAfter?: boolean;
   preservePerfTrace?: boolean;
+  /** Raw offsets where later PTY chunks begin inside this coalesced batch. */
+  sourceChunkBoundaries?: readonly number[];
+};
+export type EnqueueCoalescedTerminalWriteOptions = {
+  /** Keep original PTY chunks intact when prompt formatting depends on them. */
+  preserveSourceChunkBoundaries?: boolean;
 };
 type CoalescedTerminalWriteNow = (
   data: string,
@@ -226,6 +300,8 @@ type CoalescedTerminalWriteNow = (
 const terminalWriteCoalescers = new WeakMap<XTerm, WriteCoalescer>();
 const terminalWriteCoalescerIngress = new WeakMap<XTerm, number>();
 const terminalWriteCoalescerChunkCounts = new WeakMap<XTerm, number>();
+const terminalWriteCoalescerChunkBoundaries = new WeakMap<XTerm, number[]>();
+const terminalWriteCoalescerPreserveSourceChunks = new WeakSet<XTerm>();
 const terminalWriteCoalescerByteCapResolvers = new WeakMap<XTerm, CoalescerByteCapResolver>();
 const terminalWriteCoalescerFlushGates = new WeakMap<XTerm, CoalescerFlushGate>();
 const terminalWriteCoalescerWriters = new WeakMap<XTerm, CoalescedTerminalWriteNow>();
@@ -248,9 +324,6 @@ const resolveCoalescerByteCap = (term: XTerm): number => {
   return resolver?.() ?? defaultCoalescerByteCap();
 };
 
-const shouldAutoFlushCoalescer = (term: XTerm): boolean =>
-  terminalWriteCoalescerFlushGates.get(term)?.() ?? true;
-
 const getPendingCoalescedBytes = (term: XTerm): number =>
   terminalWriteCoalescers.get(term)?.pendingBytes() ?? 0;
 
@@ -264,6 +337,18 @@ const takePendingChunkCount = (term: XTerm): number => {
   const count = terminalWriteCoalescerChunkCounts.get(term) ?? 1;
   terminalWriteCoalescerChunkCounts.delete(term);
   return count;
+};
+
+const takePendingChunkBoundaries = (term: XTerm): number[] => {
+  const boundaries = terminalWriteCoalescerChunkBoundaries.get(term) ?? [];
+  terminalWriteCoalescerChunkBoundaries.delete(term);
+  return boundaries;
+};
+
+const takePendingPreserveSourceChunks = (term: XTerm): boolean => {
+  const preserve = terminalWriteCoalescerPreserveSourceChunks.has(term);
+  terminalWriteCoalescerPreserveSourceChunks.delete(term);
+  return preserve;
 };
 
 export const setTerminalWriteCoalescerFlushGate = (
@@ -296,6 +381,7 @@ const isPlainTerminalOutput = (data: string): boolean =>
   !data.includes("\x1b") && !data.includes("\x9b");
 
 const LINE_BREAK_SCAN = /[\n\r]/g;
+const SOURCE_BOUNDARY_SLICE_SLACK_BYTES = 1024;
 
 const hasLongUnbrokenRun = (data: string, maxRunBytes: number): boolean => {
   if (data.length <= maxRunBytes) {
@@ -364,16 +450,63 @@ const writeLargeTerminalBatch = (
     options?: CoalescedTerminalWriteOptions,
   ) => void,
   options: CoalescedTerminalWriteOptions = {},
+  preserveSourceChunkBoundaries = false,
 ): void => {
   const batchSize = Math.max(1, maxBatchBytes);
   const isSliced = data.length > batchSize;
   const yieldBudget = resolveSliceYieldBudgetBytes(data, batchSize);
+  const { sourceChunkBoundaries = [], ...baseOptions } = options;
   let offset = 0;
   let remainingIngressBytes = Math.max(0, ingressBytes);
   let bytesSinceYield = 0;
+  let sourceBoundaryIndex = 0;
 
   while (offset < data.length) {
-    const end = Math.min(data.length, offset + batchSize);
+    while (
+      sourceBoundaryIndex < sourceChunkBoundaries.length
+      && sourceChunkBoundaries[sourceBoundaryIndex] <= offset
+    ) {
+      sourceBoundaryIndex += 1;
+    }
+    const idealEnd = Math.min(data.length, offset + batchSize);
+    let end = idealEnd;
+    if (preserveSourceChunkBoundaries && idealEnd < data.length) {
+      // Prompt formatting treats each original PTY chunk as a semantic unit.
+      // Keep one intact when it crosses an otherwise arbitrary bulk slice.
+      let boundaryEndIndex = sourceBoundaryIndex;
+      while (
+        boundaryEndIndex < sourceChunkBoundaries.length
+        && sourceChunkBoundaries[boundaryEndIndex] <= idealEnd
+      ) {
+        boundaryEndIndex += 1;
+      }
+      if (boundaryEndIndex > sourceBoundaryIndex) {
+        end = sourceChunkBoundaries[boundaryEndIndex - 1];
+      }
+      if (end === idealEnd) {
+        const nextBoundary = sourceChunkBoundaries[boundaryEndIndex];
+        const boundarySlack = Math.min(batchSize, SOURCE_BOUNDARY_SLICE_SLACK_BYTES);
+        if (
+          nextBoundary !== undefined
+          && nextBoundary > idealEnd
+          && nextBoundary - idealEnd <= boundarySlack
+        ) {
+          // A prompt can end just after the nominal slice boundary. Extending
+          // by a small bounded amount keeps that PTY chunk intact without
+          // giving up cooperative bulk-write limits.
+          end = nextBoundary;
+        }
+      }
+      // A prompt may share its PTY chunk with preceding output. If no source
+      // boundary helped, leave enough tail for the final prompt to stay whole.
+      if (end === idealEnd) {
+        const minimumFinalSliceBytes = Math.min(batchSize, 1024);
+        const finalSliceStart = data.length - minimumFinalSliceBytes;
+        if (finalSliceStart > offset && idealEnd > finalSliceStart) {
+          end = finalSliceStart;
+        }
+      }
+    }
     const slice = data.slice(offset, end);
     const sliceIngress = end >= data.length
       ? remainingIngressBytes
@@ -390,9 +523,20 @@ const writeLargeTerminalBatch = (
     if (shouldYield) {
       bytesSinceYield = 0;
     }
+    const sliceChunkBoundaries: number[] = [];
+    while (
+      sourceBoundaryIndex < sourceChunkBoundaries.length
+      && sourceChunkBoundaries[sourceBoundaryIndex] < end
+    ) {
+      sliceChunkBoundaries.push(sourceChunkBoundaries[sourceBoundaryIndex] - offset);
+      sourceBoundaryIndex += 1;
+    }
     const nextOptions = {
-      ...options,
+      ...baseOptions,
       ...(shouldYield ? { yieldAfter: true } : {}),
+      ...(sliceChunkBoundaries.length > 0
+        ? { sourceChunkBoundaries: sliceChunkBoundaries }
+        : {}),
     };
     writeNow(
       slice,
@@ -408,22 +552,74 @@ export const enqueueCoalescedTerminalWrite = (
   data: string,
   writeNow: CoalescedTerminalWriteNow,
   ingressBytes: number = data.length,
+  enqueueOptions: EnqueueCoalescedTerminalWriteOptions = {},
 ): void => {
+  const resumedAltScreenCsi = incompleteAltScreenCsiByTerm.has(term);
+  // Single CSI scan for frame split + schedule latch (not a second full pass).
+  const frameProbe = probeAltScreenScheduling(
+    data,
+    incompleteAltScreenCsiByTerm.get(term) ?? null,
+  );
+  const startsNewFrame = frameProbe.frameStart !== null
+    && !(resumedAltScreenCsi && frameProbe.frameStart === 0);
+  const flushAfterAltScreenLeave = frameProbe.normalScreenStart !== null;
+  if (startsNewFrame) {
+    // Keep ordinary shell output out of an alternate-screen frame. Otherwise a
+    // frame held across a clock boundary makes the preceding shell line inherit
+    // the later timestamp when the batch finally drains.
+    flushTerminalWriteCoalescer(term);
+    const frameStart = frameProbe.frameStart!;
+    if (frameStart > 0) {
+      const prefix = data.slice(0, frameStart);
+      const prefixIngress = splitIngressBytes(
+        data.length,
+        ingressBytes,
+        prefix.length,
+        ingressBytes,
+      );
+      // Prefix may not be the enter CSI; re-probe only those bytes.
+      noteAltScreenScheduleProbe(term, prefix);
+      writeLargeTerminalBatch(
+        prefix,
+        prefixIngress,
+        resolveTerminalWriteBatchBytes(prefix, resolveCoalescerByteCap(term)),
+        writeNow,
+        {},
+        enqueueOptions.preserveSourceChunkBoundaries === true,
+      );
+      enqueueCoalescedTerminalWrite(
+        term,
+        data.slice(frameStart),
+        writeNow,
+        Math.max(0, ingressBytes - prefixIngress),
+        enqueueOptions,
+      );
+      return;
+    }
+  }
+
+  // Apply the single full-chunk probe once before schedule/push or oversized write.
+  const needsRafFromProbe = applyAltScreenScheduleProbeResult(term, frameProbe);
+
   const maxPendingBytes = resolveCoalescerByteCap(term);
-  const canAutoFlush = shouldAutoFlushCoalescer(term);
-  if (canAutoFlush && getPendingCoalescedBytes(term) + data.length > maxPendingBytes) {
+  // Size caps always drain, even when the frame gate holds scheduled flushes
+  // (hidden panes). Otherwise continuous logs pile multi-MB joins for the
+  // timed drain window and defeat the original batching bound.
+  // Flush *previous* pending with its existing writer before installing this
+  // call's writeNow — preserves per-chunk writer identity under cap pressure.
+  if (getPendingCoalescedBytes(term) + data.length > maxPendingBytes) {
     flushTerminalWriteCoalescer(term);
   }
   terminalWriteCoalescerWriters.set(term, writeNow);
-  if (canAutoFlush && data.length > maxPendingBytes) {
-    // Oversized batches skip the coalescer frame arm, but still must latch
-    // enter-alt-screen so follow-up repaint chunks use rAF.
-    noteAltScreenScheduleProbe(term, data);
+  if (data.length > maxPendingBytes) {
+    // Oversized batches skip the coalescer frame arm; probe already latched above.
     writeLargeTerminalBatch(
       data,
       ingressBytes,
       resolveTerminalWriteBatchBytes(data, maxPendingBytes),
       writeNow,
+      {},
+      enqueueOptions.preserveSourceChunkBoundaries === true,
     );
     return;
   }
@@ -436,19 +632,40 @@ export const enqueueCoalescedTerminalWrite = (
     term,
     (terminalWriteCoalescerChunkCounts.get(term) ?? 0) + 1,
   );
+  if (enqueueOptions.preserveSourceChunkBoundaries) {
+    terminalWriteCoalescerPreserveSourceChunks.add(term);
+  }
+  const pendingBytesBeforePush = getPendingCoalescedBytes(term);
+  if (
+    terminalWriteCoalescerPreserveSourceChunks.has(term)
+    && pendingBytesBeforePush > 0
+  ) {
+    const boundaries = terminalWriteCoalescerChunkBoundaries.get(term) ?? [];
+    boundaries.push(pendingBytesBeforePush);
+    terminalWriteCoalescerChunkBoundaries.set(term, boundaries);
+  }
+
+  // Hand the already-applied probe result to schedule mode so push() does not
+  // re-scan these bytes.
+  preappliedAltScreenNeedsRafByTerm.set(term, needsRafFromProbe);
 
   let coalescer = terminalWriteCoalescers.get(term);
   if (!coalescer) {
     coalescer = createWriteCoalescer((batch) => {
       const batchIngress = takePendingIngressBytes(term, batch.length);
       const chunkCount = takePendingChunkCount(term);
+      const sourceChunkBoundaries = takePendingChunkBoundaries(term);
+      const preserveSourceChunkBoundaries = takePendingPreserveSourceChunks(term);
       const activeWriteNow = terminalWriteCoalescerWriters.get(term) ?? writeNow;
       writeLargeTerminalBatch(
         batch,
         batchIngress,
         resolveTerminalWriteBatchBytes(batch, resolveCoalescerByteCap(term)),
         activeWriteNow,
-        chunkCount === 1 ? {} : { preservePerfTrace: false },
+        chunkCount === 1
+          ? {}
+          : { preservePerfTrace: false, sourceChunkBoundaries },
+        preserveSourceChunkBoundaries,
       );
     }, {
       getMaxPendingBytes: () => resolveCoalescerByteCap(term),
@@ -459,9 +676,12 @@ export const enqueueCoalescedTerminalWrite = (
       // When rAF is unavailable (Node unit tests), prefer the "raf" mode so the
       // coalescer falls back to an immediate flush (legacy test contract).
       resolveScheduleMode: ({ nextChunk }): WriteCoalesceScheduleMode => {
-        // Probe always runs (handles leave while buffer is still alternate).
-        // O(chunk) parser state — no quadratic pending joins.
-        if (noteAltScreenScheduleProbe(term, nextChunk)) {
+        const preapplied = preappliedAltScreenNeedsRafByTerm.get(term);
+        if (preapplied !== undefined) {
+          preappliedAltScreenNeedsRafByTerm.delete(term);
+          if (preapplied) return "raf";
+        } else if (noteAltScreenScheduleProbe(term, nextChunk)) {
+          // Later pushes (or paths without a preapplied probe) still scan once.
           return "raf";
         }
         // Bulk pressure: prefer rAF so the browser can paint between flushes.
@@ -481,6 +701,14 @@ export const enqueueCoalescedTerminalWrite = (
     terminalWriteCoalescers.set(term, coalescer);
   }
   coalescer.push(data);
+  // If push did not consume the preapplied flag (e.g. empty/disposed), drop it.
+  preappliedAltScreenNeedsRafByTerm.delete(term);
+  if (flushAfterAltScreenLeave) {
+    // Do not let shell output after a TUI exit inherit a later batch timestamp.
+    // Keeping the leave and its same-chunk suffix together also lets the
+    // timestamp parser observe the transition before stamping that suffix.
+    flushTerminalWriteCoalescer(term);
+  }
 };
 
 export const flushTerminalWriteCoalescer = (
@@ -496,12 +724,17 @@ export const flushTerminalWriteCoalescer = (
   coalescer.flushSync((batch) => {
     const batchIngress = takePendingIngressBytes(term, batch.length);
     const chunkCount = takePendingChunkCount(term);
+    const sourceChunkBoundaries = takePendingChunkBoundaries(term);
+    const preserveSourceChunkBoundaries = takePendingPreserveSourceChunks(term);
     writeLargeTerminalBatch(
       batch,
       batchIngress,
       resolveTerminalWriteBatchBytes(batch, resolveCoalescerByteCap(term)),
       writeNow,
-      chunkCount === 1 ? {} : { preservePerfTrace: false },
+      chunkCount === 1
+        ? {}
+        : { preservePerfTrace: false, sourceChunkBoundaries },
+      preserveSourceChunkBoundaries,
     );
   });
 };
@@ -511,12 +744,16 @@ export const resetTerminalWriteCoalescer = (term: XTerm): void => {
   terminalWriteCoalescers.delete(term);
   terminalWriteCoalescerIngress.delete(term);
   terminalWriteCoalescerChunkCounts.delete(term);
+  terminalWriteCoalescerChunkBoundaries.delete(term);
+  terminalWriteCoalescerPreserveSourceChunks.delete(term);
   terminalWriteCoalescerByteCapResolvers.delete(term);
   terminalWriteCoalescerFlushGates.delete(term);
   terminalWriteCoalescerWriters.delete(term);
   incompleteAltScreenCsiByTerm.delete(term);
   pendingAltScreenEntryByTerm.delete(term);
   observedAltScreenByTerm.delete(term);
+  pendingAltScreenLeaveByTerm.delete(term);
+  preappliedAltScreenNeedsRafByTerm.delete(term);
 };
 
 export const getTerminalWriteCoalescerPendingBytes = (term: XTerm): number =>
@@ -536,6 +773,8 @@ export const abortTerminalWriteCoalescer = (
   incompleteAltScreenCsiByTerm.delete(term);
   pendingAltScreenEntryByTerm.delete(term);
   observedAltScreenByTerm.delete(term);
+  pendingAltScreenLeaveByTerm.delete(term);
+  preappliedAltScreenNeedsRafByTerm.delete(term);
 
   const coalescer = terminalWriteCoalescers.get(term);
   if (!coalescer) return;
@@ -544,6 +783,8 @@ export const abortTerminalWriteCoalescer = (
     coalescer.pendingBytes(),
   );
   takePendingChunkCount(term);
+  takePendingChunkBoundaries(term);
+  takePendingPreserveSourceChunks(term);
   coalescer.abort();
   if (ingressDropped > 0) {
     onDropped?.(ingressDropped);

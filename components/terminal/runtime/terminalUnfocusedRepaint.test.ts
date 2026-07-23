@@ -12,7 +12,10 @@ import {
   repaintTerminalAfterReveal,
   scheduleTerminalRepaintWhenUnfocused,
   shouldFlushTerminalWritesForBackgroundOutput,
+  writeLocalTerminalDataInOrder,
 } from "./terminalUnfocusedRepaint.ts";
+import { enqueueCoalescedTerminalWrite } from "./terminalWriteCoalescer.ts";
+import { enqueueTerminalWrite } from "./terminalWriteQueue.ts";
 
 const withDocumentVisibility = (
   visibilityState: "visible" | "hidden",
@@ -166,7 +169,7 @@ test("repaintTerminalAfterReveal repaints again after the reveal reaches a brows
   assert.equal(visibleTail, "__END_1000__");
 });
 
-test("shouldFlushTerminalWritesForBackgroundOutput flushes hidden panes and unfocused pages", () => {
+test("shouldFlushTerminalWritesForBackgroundOutput flushes hidden panes and page-hidden docs", () => {
   withDocumentVisibility("visible", () => {
     assert.equal(shouldFlushTerminalWritesForBackgroundOutput(false), true);
   }, { hasFocus: true });
@@ -174,8 +177,9 @@ test("shouldFlushTerminalWritesForBackgroundOutput flushes hidden panes and unfo
     assert.equal(shouldFlushTerminalWritesForBackgroundOutput(true), true);
     assert.equal(shouldFlushTerminalWritesForBackgroundOutput(false), true);
   });
+  // Unfocused-but-visible keeps normal batching; maybeFlush throttles instead.
   withDocumentVisibility("visible", () => {
-    assert.equal(shouldFlushTerminalWritesForBackgroundOutput(true), true);
+    assert.equal(shouldFlushTerminalWritesForBackgroundOutput(true), false);
     assert.equal(shouldFlushTerminalWritesForBackgroundOutput(false), true);
   }, { hasFocus: false });
   withDocumentVisibility("visible", () => {
@@ -244,6 +248,57 @@ test("flushPendingTerminalWritesOnResume drains coalescer, queue, and xterm writ
   assert.match(source, /flushTerminalWriteCoalescer\(term\)/);
   assert.match(source, /flushTerminalWriteQueueBypassingTimers\(term\)/);
   assert.match(source, /flushTerminalWriteBufferBypassingTimers\(term\)/);
+});
+
+test("direct local writes stay ordered after pending hidden output", () => {
+  const { term, writes } = createBufferedFakeTerm();
+  const captured: string[] = [];
+
+  enqueueCoalescedTerminalWrite(term, "remote-before", (data) => {
+    captured.push(data);
+    term.write(data);
+  });
+  writeLocalTerminalDataInOrder(term, "local-after", (data) => captured.push(data));
+  flushTerminalWriteBufferBypassingTimers(term);
+
+  assert.deepEqual(writes, ["remote-before", "local-after"]);
+  assert.deepEqual(captured, ["remote-before", "local-after"]);
+});
+
+test("repeated local writes stay queued without forcing parser flushes", async () => {
+  const { term, writes } = createBufferedFakeTerm();
+  const captured: string[] = [];
+  const localWrites = Array.from({ length: 100 }, (_, index) => String(index % 10));
+
+  for (const data of localWrites) {
+    writeLocalTerminalDataInOrder(term, data, (capturedData) => captured.push(capturedData));
+  }
+
+  assert.deepEqual(writes, []);
+  assert.equal(hasPendingTerminalWrites(term), true);
+
+  const flushed = await flushPendingTerminalWritesBeforeHibernate(term);
+
+  assert.equal(flushed, true);
+  assert.equal(writes.join(""), localWrites.join(""));
+  assert.deepEqual(captured, localWrites);
+});
+
+test("full close-style flush drains more than the synchronous resume pass limit", async () => {
+  const { term, writes } = createBufferedFakeTerm();
+  const chunks = Array.from({ length: 80 }, (_, index) => String(index % 10));
+
+  for (const chunk of chunks) {
+    enqueueTerminalWrite(term, chunk.length, (done) => {
+      term.write(chunk, done);
+    }, { deferStart: true, yieldAfter: true });
+  }
+
+  const flushed = await flushPendingTerminalWritesBeforeHibernate(term);
+
+  assert.equal(flushed, true);
+  assert.equal(hasPendingTerminalWrites(term), false);
+  assert.equal(writes.join(""), chunks.join(""));
 });
 
 test("flushPendingTerminalWritesBeforeHibernate drains pending xterm output completely", async () => {
@@ -326,7 +381,10 @@ test("writeSessionData bypasses animation-frame coalescing for background output
   );
   assert.match(source, /shouldFlushTerminalWritesForBackgroundOutput\(isPaneVisible\)/);
   assert.match(source, /flushTerminalWriteCoalescer\(term, writeBackgroundOutputData\)/);
-  assert.match(source, /enqueueCoalescedTerminalWrite\(term, data, writeBackgroundOutputData, ingressBytes\)/);
+  assert.match(
+    source,
+    /enqueueCoalescedTerminalWrite\(\s*term,\s*data,\s*writeBackgroundOutputData,\s*ingressBytes,/,
+  );
   assert.match(source, /flushTerminalWriteQueueBypassingTimers\(term\)/);
   assert.match(source, /const deferFlowAck = !writeOptions\.flushXtermWriteBuffer/);
 });
@@ -336,10 +394,9 @@ test("writeSessionDataImmediate schedules unfocused repaint for visible panes on
     new URL("./terminalSessionAttachment.ts", import.meta.url),
     "utf8",
   );
-  // The background fast path must NOT skip this: unfocused-but-visible windows
-  // have no rAF render loop, so the debounced sync repaint is the only way
-  // pixels update (#1761 regression guard).
-  assert.match(source, /if \(ctx\.isVisibleRef\?\.current !== false\) \{[^}]*scheduleTerminalRepaintWhenUnfocused\(term\)/);
+  // Unfocused-but-visible windows have no rAF render loop, so the debounced
+  // sync repaint remains required. Hidden tabs use the batched drain instead.
+  assert.match(source, /if \(isTerminalPaneVisible\(ctx\)\) \{[^}]*scheduleTerminalRepaintWhenUnfocused\(term\)/);
 });
 
 test("app resume recovery flushes pending writes before WebGL recovery", () => {

@@ -5,12 +5,218 @@ import {
   consumeOsc133CommandCompletion,
   createPromptLineBreakState,
   detectTerminalCommandCompletions,
+  findTerminalPromptSourceChunkVisibleStarts,
   insertPromptLineBreakBeforePrompt,
   markPromptLineBreakCommandPending,
   markTerminalCommandCompletionPending,
   prepareTerminalDataForPromptLineBreak,
   syncPromptLineBreakState,
 } from "./promptLineBreak";
+
+test("finds prompt chunks across trailing and leading ANSI sequences", () => {
+  const trailingAnsiData = "file tail\x1b[0m$ ";
+  assert.deepEqual(
+    findTerminalPromptSourceChunkVisibleStarts(
+      trailingAnsiData,
+      "$ ",
+      ["file tail\x1b[0m".length],
+    ),
+    ["file tail".length],
+  );
+
+  const leadingAnsiData = "file tail\x1b[32m$ ";
+  assert.deepEqual(
+    findTerminalPromptSourceChunkVisibleStarts(leadingAnsiData, "$ ", ["file tail".length]),
+    ["file tail".length],
+  );
+  assert.deepEqual(findTerminalPromptSourceChunkVisibleStarts("file tail$ ", "$ ", []), []);
+
+  const clearData = "file tail\x1b[2J$ ";
+  const promptVisibleStarts = findTerminalPromptSourceChunkVisibleStarts(
+    clearData,
+    "$ ",
+    ["file tail\x1b[2J".length],
+  );
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 0) as never,
+      "file tail\x1b[2J\x1b[3J$ ",
+      state,
+      true,
+      promptVisibleStarts,
+    ),
+    "file tail\r\n\x1b[2J\x1b[3J$ ",
+  );
+});
+
+test("keeps cursor movement before a prompt-side line break", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  const output = "foo\x1b[E";
+  const data = `${output}$ `;
+  const promptStarts = findTerminalPromptSourceChunkVisibleStarts(
+    data,
+    state.lastPromptText,
+    [output.length],
+  );
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 0) as never,
+      data,
+      state,
+      true,
+      promptStarts,
+    ),
+    data,
+  );
+});
+
+test("measures cursor-only prompt prefixes before deciding on a line break", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  const cursorForward = "\x1b[10C";
+  const data = `${cursorForward}$ `;
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 0) as never,
+      data,
+      state,
+      true,
+      findTerminalPromptSourceChunkVisibleStarts(data, "$ ", [cursorForward.length]),
+    ),
+    `${cursorForward}\r\n$ `,
+  );
+});
+
+test("does not move a clear-screen prompt away from cursor home", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  const data = "\x1b[H\x1b[2J$ ";
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 5) as never,
+      data,
+      state,
+      true,
+      findTerminalPromptSourceChunkVisibleStarts(data, "$ "),
+    ),
+    data,
+  );
+});
+
+test("does not add a second break after carriage return", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  const output = "foo\r";
+  const data = `${output}$ `;
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 5) as never,
+      data,
+      state,
+      true,
+      findTerminalPromptSourceChunkVisibleStarts(data, "$ ", [output.length]),
+    ),
+    data,
+  );
+});
+
+test("does not move prompts after row-positioning controls", () => {
+  for (const control of ["\x1b[r", "\x1b[A", "\x1b[B", "\x1b[d", "\x1b[e"]) {
+    const state = createPromptLineBreakState();
+    state.lastPromptText = "$ ";
+    state.pendingCommand = true;
+    const data = `${control}$ `;
+
+    assert.equal(
+      prepareTerminalDataForPromptLineBreak(
+        createFakeTerm("", 0) as never,
+        data,
+        state,
+        true,
+        findTerminalPromptSourceChunkVisibleStarts(data, "$ ", [control.length]),
+      ),
+      data,
+      JSON.stringify(control),
+    );
+  }
+});
+
+test("keeps non-moving mode toggles on the prompt side of an inserted break", () => {
+  for (const control of ["\x1b[?2004h", "\x1b[?25h", "\x1b[?25l"]) {
+    const stateAtLineStart = createPromptLineBreakState();
+    stateAtLineStart.lastPromptText = "$ ";
+    stateAtLineStart.pendingCommand = true;
+    const data = `${control}$ `;
+    const promptStarts = findTerminalPromptSourceChunkVisibleStarts(
+      data,
+      stateAtLineStart.lastPromptText,
+      [control.length],
+    );
+
+    assert.equal(
+      prepareTerminalDataForPromptLineBreak(
+        createFakeTerm("", 0) as never,
+        data,
+        stateAtLineStart,
+        true,
+        promptStarts,
+      ),
+      data,
+      JSON.stringify(control),
+    );
+
+    const stateMidLine = createPromptLineBreakState();
+    stateMidLine.lastPromptText = "$ ";
+    stateMidLine.pendingCommand = true;
+    assert.equal(
+      prepareTerminalDataForPromptLineBreak(
+        createFakeTerm("output", 6) as never,
+        data,
+        stateMidLine,
+        true,
+        promptStarts,
+      ),
+      `\r\n${data}`,
+      JSON.stringify(control),
+    );
+  }
+});
+
+test("inserts a prompt line break after leaving the alternate screen", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  const leaveAlternateScreen = "\x1b[?1049l";
+  const data = `${leaveAlternateScreen}$ `;
+  const promptStarts = findTerminalPromptSourceChunkVisibleStarts(
+    data,
+    state.lastPromptText,
+    [leaveAlternateScreen.length],
+  );
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 5) as never,
+      data,
+      state,
+      true,
+      promptStarts,
+    ),
+    `${leaveAlternateScreen}\r\n$ `,
+  );
+});
 
 function createFakeTerm(lineText = "", cursorX = lineText.length) {
   return {
@@ -203,6 +409,24 @@ test("does not refresh cached prompt from output that only ends with the prompt 
 
   assert.equal(state.lastPromptText, "$ ");
   assert.equal(state.pendingCommand, true);
+  assert.equal(state.suppressNextPromptCache, false);
+});
+
+test("uses a preserved PTY chunk boundary to separate a short prompt", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      createFakeTerm("", 0) as never,
+      "file tail$ ",
+      state,
+      true,
+      ["file tail".length],
+    ),
+    "file tail\r\n$ ",
+  );
   assert.equal(state.suppressNextPromptCache, false);
 });
 
@@ -976,4 +1200,35 @@ test("does not refresh cached prompt from an unchanged mid-line write without a 
   assert.equal(state.lastPromptText, "old$ ");
   assert.equal(state.pendingCommand, true);
   assert.equal(state.suppressNextPromptCache, false);
+});
+
+test("does not insert a blank line after a full-width prefix that already wrapped", () => {
+  const state = createPromptLineBreakState();
+  state.lastPromptText = "$ ";
+  state.pendingCommand = true;
+  const cols = 10;
+  const fullWidth = "x".repeat(cols);
+  const term = createWrappedFakeTerm([fullWidth], 0, 0, cols);
+
+  assert.equal(
+    prepareTerminalDataForPromptLineBreak(
+      term as never,
+      `${fullWidth}$ `,
+      state,
+      true,
+      [fullWidth.length],
+    ),
+    `${fullWidth}$ `,
+  );
+});
+
+test("finds prompt starts on the display string after identity transforms", () => {
+  const prompt = "$ ";
+  const data = `file tail${prompt}`;
+  const starts = findTerminalPromptSourceChunkVisibleStarts(
+    data,
+    prompt,
+    ["file tail".length],
+  );
+  assert.deepEqual(starts, ["file tail".length]);
 });

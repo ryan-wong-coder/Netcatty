@@ -36,6 +36,13 @@ test("SDK session keys include backend and resolved CLI path", () => {
   );
 });
 
+test("Cursor session keys isolate CLI login from API key auth modes", () => {
+  assert.notEqual(
+    buildSdkSessionKey("chat-1", "cursor", "/usr/bin/agent", "sdk", "cli-login"),
+    buildSdkSessionKey("chat-1", "cursor", "cursor", "sdk", "api-key"),
+  );
+});
+
 test("SDK model cache keys include resolved CLI path", () => {
   assert.notEqual(
     buildSdkModelCacheKey("claude", "/usr/local/bin/claude"),
@@ -185,6 +192,57 @@ test("SDK resume keeps legacy session ids only when no manual command is configu
       backendKey: "codex",
       binPath: "/manual/codex",
       hasConfiguredCommand: true,
+    }),
+    undefined,
+  );
+});
+
+test("Cursor CLI login sessions do not resume on the API key SDK path", () => {
+  const cliIdentity = `netcatty-sdk-session:${encodeURIComponent(JSON.stringify({
+    v: 1,
+    id: "61668441-bfcb-4795-a575-c46d70ad01fe",
+    backend: "cursor",
+    binPath: "/usr/bin/agent",
+    runtime: "sdk",
+    authMode: "cli-login",
+  }))}`;
+
+  assert.equal(
+    resolveSdkResumeSessionId({
+      sdkSessionIds: new Map(),
+      sdkSessionKey: buildSdkSessionKey("chat-1", "cursor", "cursor", "sdk", "api-key"),
+      existingSessionId: cliIdentity,
+      backendKey: "cursor",
+      binPath: "cursor",
+      runtime: "sdk",
+      authMode: "api-key",
+      hasConfiguredCommand: false,
+    }),
+    undefined,
+  );
+  assert.equal(
+    resolveSdkResumeSessionId({
+      sdkSessionIds: new Map(),
+      sdkSessionKey: buildSdkSessionKey("chat-1", "cursor", "/usr/bin/agent", "sdk", "cli-login"),
+      existingSessionId: cliIdentity,
+      backendKey: "cursor",
+      binPath: "/usr/bin/agent",
+      runtime: "sdk",
+      authMode: "cli-login",
+      hasConfiguredCommand: false,
+    }),
+    "61668441-bfcb-4795-a575-c46d70ad01fe",
+  );
+  assert.equal(
+    resolveSdkResumeSessionId({
+      sdkSessionIds: new Map(),
+      sdkSessionKey: buildSdkSessionKey("chat-1", "cursor", "cursor", "sdk", "cli-login"),
+      existingSessionId: "61668441-bfcb-4795-a575-c46d70ad01fe",
+      backendKey: "cursor",
+      binPath: "cursor",
+      runtime: "sdk",
+      authMode: "cli-login",
+      hasConfiguredCommand: false,
     }),
     undefined,
   );

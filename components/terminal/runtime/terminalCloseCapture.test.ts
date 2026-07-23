@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   isTerminalCloseGenerationCurrent,
@@ -59,4 +60,20 @@ test("scheduleTerminalCloseTeardown runs teardown asynchronously", async () => {
 test("isTerminalCloseGenerationCurrent rejects stale close generations", () => {
   assert.equal(isTerminalCloseGenerationCurrent(1, 1), true);
   assert.equal(isTerminalCloseGenerationCurrent(1, 2), false);
+});
+
+test("terminal close fully drains pending output before finalizing capture", () => {
+  const source = readFileSync(
+    new URL("../useTerminalEffects.ts", import.meta.url),
+    "utf8",
+  );
+  const cleanupStart = source.indexOf("return () => {", source.indexOf("boot();"));
+  const flushIndex = source.indexOf("await flushPendingTerminalWritesBeforeHibernate(term)", cleanupStart);
+  const incompleteIndex = source.indexOf("if (!flushed)", flushIndex);
+  const finalizeIndex = source.indexOf("resolveConnectionLogCapturePayload(finalizeTerminalLogData)", cleanupStart);
+
+  assert.ok(cleanupStart >= 0);
+  assert.ok(flushIndex > cleanupStart);
+  assert.ok(incompleteIndex > flushIndex);
+  assert.ok(finalizeIndex > flushIndex);
 });

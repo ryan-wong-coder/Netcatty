@@ -60,6 +60,36 @@ export interface AgentPathInfo {
   installed?: boolean;
   authenticated?: boolean;
   authSource?: string | null;
+  cliEmail?: string | null;
+  cliBinPath?: string | null;
+  /** True when local Cursor Agent CLI is logged in (subscription session). */
+  cliLoginOk?: boolean;
+  /** True when settings or env API key is present. */
+  apiKeyOk?: boolean;
+  /** True when @cursor/sdk platform package is importable. */
+  sdkInstalled?: boolean;
+}
+
+/** Mode-aware Cursor availability for Settings enablement. */
+export function isCursorAvailableForMode(
+  pathInfo: AgentPathInfo | null | undefined,
+  mode: "api-key" | "cli-login",
+  options?: { hasStoredApiKey?: boolean },
+): boolean {
+  if (!pathInfo) return false;
+  if (mode === "cli-login") {
+    return Boolean(pathInfo.cliLoginOk || pathInfo.authSource === "cli-login");
+  }
+  const hasKey = Boolean(
+    options?.hasStoredApiKey
+    || pathInfo.apiKeyOk
+    || pathInfo.authSource === "settings"
+    || pathInfo.authSource === "CURSOR_API_KEY",
+  );
+  const sdkOk = pathInfo.sdkInstalled !== undefined
+    ? Boolean(pathInfo.sdkInstalled)
+    : Boolean(pathInfo.installed);
+  return hasKey && sdkOk;
 }
 
 export interface UserSkillStatusItem {

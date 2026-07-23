@@ -18,3 +18,21 @@ test('SDK session identities preserve Codex runtime and default legacy values to
   const legacyWithoutRuntime = `netcatty-sdk-session:${encodeURIComponent(JSON.stringify(payload))}`;
   assert.equal(parseSdkSessionIdentity(legacyWithoutRuntime)?.runtime, 'sdk');
 });
+
+test('SDK session identities preserve Cursor auth mode', () => {
+  const encoded = encodeSdkSessionIdentity(
+    '61668441-bfcb-4795-a575-c46d70ad01fe',
+    'cursor',
+    '/usr/bin/agent',
+    'sdk',
+    'cli-login',
+  );
+  assert.deepEqual(parseSdkSessionIdentity(encoded), {
+    v: 1,
+    id: '61668441-bfcb-4795-a575-c46d70ad01fe',
+    backend: 'cursor',
+    binPath: '/usr/bin/agent',
+    runtime: 'sdk',
+    authMode: 'cli-login',
+  });
+});

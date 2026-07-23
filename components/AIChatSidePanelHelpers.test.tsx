@@ -34,6 +34,7 @@ test('shouldLoadSdkRuntimeModels includes SDK agents with model catalogs', () =>
 
   assert.equal(shouldLoadSdkRuntimeModels(agent('claude')), true);
   assert.equal(shouldLoadSdkRuntimeModels(agent('copilot')), true);
+  assert.equal(shouldLoadSdkRuntimeModels(agent('cursor')), true);
   assert.equal(shouldLoadSdkRuntimeModels(agent('codebuddy')), true);
   assert.equal(shouldLoadSdkRuntimeModels(agent('opencode')), true);
   assert.equal(shouldLoadSdkRuntimeModels(agent('codex')), false);

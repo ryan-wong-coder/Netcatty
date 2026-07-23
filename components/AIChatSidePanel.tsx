@@ -830,7 +830,10 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
       return [];
     }
     if (runtimePresets) return runtimePresets;
-    const presets = getAgentModelPresets(currentAgentConfig?.command);
+    const presets = getAgentModelPresets(
+      currentAgentConfig?.command,
+      getExternalAgentSdkBackend(currentAgentConfig),
+    );
     // BYO Codex CLI: hide GPT-5.6 when CLI < 0.144.0 (stored probe or discovery).
     const cliVersion = resolveAgentCliVersion(currentAgentConfig, discoveredAgents);
     return filterAgentModelPresetsForCliVersion(presets, cliVersion);
@@ -849,6 +852,11 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
       return stored;
     }
     if (agentModelPresets.length > 0) {
+      // Cursor CLI login defaults to `auto` (subscription quota routing).
+      if (currentAgentConfig?.cursorAuthMode === 'cli-login') {
+        const autoPreset = agentModelPresets.find((preset) => preset.id === 'auto');
+        if (autoPreset) return resolveAgentModelSelection(autoPreset);
+      }
       // Use catalog defaultThinkingLevel — do not pick last array entry
       // (that made GPT-5.6 Sol default to ultra).
       return resolveAgentModelSelection(agentModelPresets[0]);

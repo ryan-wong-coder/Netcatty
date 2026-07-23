@@ -231,6 +231,7 @@ export interface AgentInfo {
 
 // External agent config. Managed agents route through official SDK backends.
 export type CodexRuntime = 'sdk' | 'app-server';
+export type CursorAuthMode = 'api-key' | 'cli-login';
 
 export interface ExternalAgentConfig {
   id: string;
@@ -244,6 +245,8 @@ export interface ExternalAgentConfig {
   available?: boolean;
   /** SDK backend key for managed agents (claude|codex|copilot|cursor|codebuddy|opencode). */
   sdkBackend?: string;
+  /** Cursor only: mutually exclusive auth — API key vs local `agent` CLI login. */
+  cursorAuthMode?: CursorAuthMode;
   /** Experimental Codex transport. Missing values keep the existing SDK behavior. */
   codexRuntime?: CodexRuntime;
   /** Internal: whether the managed command was set manually or auto-detected. */
@@ -635,7 +638,8 @@ export function resolveAgentCliVersion(
 }
 
 export const CURSOR_MODEL_PRESETS: AgentModelPreset[] = [
-  { id: 'composer-2.5', name: 'Composer 2.5', description: 'Recommended' },
+  { id: 'auto', name: 'Auto', description: 'Recommended for CLI login / subscription quota' },
+  { id: 'composer-2.5', name: 'Composer 2.5', description: 'Recommended for API key' },
   { id: 'gpt-5.5', name: 'GPT-5.5' },
   { id: 'gpt-5.2', name: 'GPT-5.2' },
   { id: 'gpt-5.1', name: 'GPT-5.1' },
@@ -668,7 +672,19 @@ export const OPENCODE_MODEL_PRESETS: AgentModelPreset[] = [
   { id: 'ollama/llama3.3', name: 'Ollama Llama 3.3' },
 ];
 
-export function getAgentModelPresets(agentCommand?: string): AgentModelPreset[] {
+export function getAgentModelPresets(
+  agentCommand?: string,
+  sdkBackend?: string,
+): AgentModelPreset[] {
+  // Prefer sdkBackend: CLI login stores the real `agent` binary path, which
+  // does not start with "cursor" and would otherwise yield an empty preset list.
+  const backend = String(sdkBackend || '').trim().toLowerCase();
+  if (backend === 'claude') return CLAUDE_MODEL_PRESETS;
+  if (backend === 'codex') return CODEX_MODEL_PRESETS;
+  if (backend === 'cursor') return CURSOR_MODEL_PRESETS;
+  if (backend === 'codebuddy') return CODEBUDDY_MODEL_PRESETS;
+  if (backend === 'opencode') return OPENCODE_MODEL_PRESETS;
+
   if (!agentCommand) return [];
   // Split on both POSIX (/) and Windows (\) separators so command paths like
   // "C:\\Users\\foo\\codex.cmd" resolve to the right basename. Splitting only
@@ -677,7 +693,15 @@ export function getAgentModelPresets(agentCommand?: string): AgentModelPreset[] 
   const basename = agentCommand.split(/[\\/]/).pop()?.toLowerCase() ?? '';
   if (basename.startsWith('claude')) return CLAUDE_MODEL_PRESETS;
   if (basename.startsWith('codex')) return CODEX_MODEL_PRESETS;
-  if (basename.startsWith('cursor')) return CURSOR_MODEL_PRESETS;
+  // Cursor CLI login may resolve to `agent` / `cursor-agent` on PATH.
+  if (
+    basename.startsWith('cursor')
+    || basename === 'agent'
+    || basename.startsWith('agent.')
+    || basename.startsWith('cursor-agent')
+  ) {
+    return CURSOR_MODEL_PRESETS;
+  }
   if (basename.startsWith('codebuddy')) return CODEBUDDY_MODEL_PRESETS;
   if (basename.startsWith('opencode')) return OPENCODE_MODEL_PRESETS;
   return [];

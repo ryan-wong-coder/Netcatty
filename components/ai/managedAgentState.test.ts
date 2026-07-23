@@ -194,9 +194,66 @@ test('buildManagedAgentState preserves a saved Cursor API key when SDK is not re
 
   assert.equal(state.agents[0].id, 'discovered_cursor');
   assert.equal(state.agents[0].apiKey, 'enc:v1:test');
-  assert.equal(state.agents[0].enabled, false);
+  // Keep enabled so a later mode/path that becomes available is not sticky-disabled.
+  assert.equal(state.agents[0].enabled, true);
   assert.equal(state.agents[0].available, false);
   assert.equal(state.defaultAgentId, 'catty');
+});
+
+test('buildManagedAgentState preserves enabled when CLI login probe is temporarily unavailable', () => {
+  const agents: ExternalAgentConfig[] = [
+    {
+      id: 'discovered_cursor',
+      name: 'Cursor',
+      command: '/bin/cursor-agent',
+      enabled: true,
+      available: true,
+      sdkBackend: 'cursor',
+      cursorAuthMode: 'cli-login',
+      apiKey: 'enc:v1:test',
+    },
+  ];
+
+  const unavailable = buildManagedAgentState(
+    agents,
+    'discovered_cursor',
+    'cursor',
+    {
+      path: 'cursor',
+      version: 'Cursor Agent CLI',
+      available: false,
+      installed: true,
+      cliLoginOk: false,
+      apiKeyOk: true,
+      sdkInstalled: true,
+    },
+  );
+  assert.equal(unavailable.agents[0].enabled, true);
+  assert.equal(unavailable.agents[0].available, false);
+  assert.equal(unavailable.agents[0].apiKey, 'enc:v1:test');
+  assert.equal(unavailable.agents[0].cursorAuthMode, 'cli-login');
+
+  // When CLI login returns, mode-aware available becomes true and enabled stays on.
+  const recovered = buildManagedAgentState(
+    unavailable.agents,
+    'catty',
+    'cursor',
+    {
+      path: '/bin/cursor-agent',
+      cliBinPath: '/bin/cursor-agent',
+      version: 'Cursor Agent CLI',
+      available: true,
+      installed: true,
+      cliLoginOk: true,
+      apiKeyOk: true,
+      sdkInstalled: true,
+      authSource: 'cli-login',
+    },
+  );
+  assert.equal(recovered.agents[0].enabled, true);
+  assert.equal(recovered.agents[0].available, true);
+  assert.equal(recovered.agents[0].cursorAuthMode, 'cli-login');
+  assert.equal(recovered.agents[0].command, '/bin/cursor-agent');
 });
 
 test('buildManagedAgentState stores CODEBUDDY_CODE_PATH for codebuddy', () => {

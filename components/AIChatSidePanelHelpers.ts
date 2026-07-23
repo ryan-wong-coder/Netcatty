@@ -33,6 +33,8 @@ const MODEL_CACHE_ENV_HINTS = [
   'CLAUDE_CODE_EXECUTABLE',
   'CODEBUDDY_CODE_PATH',
   'CURSOR_API_KEY',
+  'NETCATTY_CURSOR_AUTH_MODE',
+  'NETCATTY_CURSOR_CLI_BIN',
 ] as const;
 
 function cloneCatalog(catalog: SdkRuntimeModelCatalog): SdkRuntimeModelCatalog {
@@ -127,6 +129,7 @@ export function shouldLoadSdkRuntimeModels(agent?: ExternalAgentConfig): boolean
   return (sdkBackend === 'codex' && agent?.codexRuntime === 'app-server')
     || sdkBackend === 'claude'
     || sdkBackend === 'copilot'
+    || sdkBackend === 'cursor'
     || sdkBackend === 'codebuddy'
     || sdkBackend === 'opencode';
 }

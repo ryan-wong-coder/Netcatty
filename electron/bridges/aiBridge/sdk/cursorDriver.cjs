@@ -197,6 +197,11 @@ function formatCursorErrorForUser(message) {
   return text || "Cursor turn failed";
 }
 
+function isCursorAgentNotFoundError(error) {
+  const message = String(error?.message || error || "");
+  return /\bAgent\b.+\bnot found\b/i.test(message);
+}
+
 function translateCursorEvent(event, emitter, state = {}) {
   if (!event || typeof event !== "object") return;
 
@@ -316,9 +321,24 @@ async function runCursorTurn({
   try {
     const restoreCreateEnv = applyTemporaryProcessEnv(runtimeEnv);
     try {
-      const agentPromise = resumeSessionId && typeof Agent.resume === "function"
-        ? Agent.resume(resumeSessionId, agentOptions)
-        : Agent.create(agentOptions);
+      const createAgent = () => Agent.create(agentOptions);
+      let agentPromise;
+      if (resumeSessionId && typeof Agent.resume === "function") {
+        agentPromise = Agent.resume(resumeSessionId, agentOptions).catch((error) => {
+          // Stale Cursor agent IDs (expired local store, or a CLI session UUID
+          // resumed on the SDK path) should start a fresh agent instead of
+          // failing the whole turn with "Agent … not found".
+          if (!isCursorAgentNotFoundError(error)) throw error;
+          console.warn("[Cursor SDK] resume missed; creating a new agent", {
+            resumeSessionId,
+            message: error?.message || String(error),
+          });
+          sessionId = null;
+          return createAgent();
+        });
+      } else {
+        agentPromise = createAgent();
+      }
       agent = await abortable(agentPromise, signal, (lateAgent) => {
         try { lateAgent?.close?.(); } catch { /* best effort */ }
       });
@@ -447,6 +467,7 @@ module.exports = {
   buildCursorAgentOptions,
   buildCursorSendMessage,
   formatCursorErrorForUser,
+  isCursorAgentNotFoundError,
   listCursorModels,
   mapCursorModels,
   parseCursorModelSelection,

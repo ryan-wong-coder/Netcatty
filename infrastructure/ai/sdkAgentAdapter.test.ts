@@ -302,9 +302,51 @@ test('runSdkAgentTurn forwards Cursor API key as agent environment', async () =>
   );
 
   assert.deepEqual(streamArgs[13], {
+    NETCATTY_CURSOR_AUTH_MODE: 'api-key',
     CURSOR_API_KEY: 'cur-test-key',
   });
   assert.equal(streamArgs[2], 'cursor');
+});
+
+test('runSdkAgentTurn in cursor cli-login mode does not inject CURSOR_API_KEY', async () => {
+  let streamArgs: unknown[] = [];
+  let done: (() => void) | null = null;
+  const bridge: Record<string, (...args: unknown[]) => unknown> = {
+    aiSdkAgentStream: async (...args: unknown[]) => {
+      streamArgs = args;
+      queueMicrotask(() => done?.());
+      return { ok: true };
+    },
+    aiSdkAgentCancel: async () => ({ ok: true }),
+    onAiSdkAgentEvent: () => () => {},
+    onAiSdkAgentDone: (_requestId: unknown, cb: unknown) => {
+      done = cb as () => void;
+      return () => {};
+    },
+    onAiSdkAgentError: () => () => {},
+  };
+
+  await runSdkAgentTurn(
+    bridge,
+    'request-cursor-cli',
+    'chat-cursor-cli',
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      command: '/Users/me/.local/bin/agent',
+      enabled: true,
+      sdkBackend: 'cursor',
+      cursorAuthMode: 'cli-login',
+      apiKey: 'should-not-inject',
+    },
+    'hello',
+    createCallbacks([]),
+  );
+
+  assert.deepEqual(streamArgs[13], {
+    NETCATTY_CURSOR_AUTH_MODE: 'cli-login',
+    NETCATTY_CURSOR_CLI_BIN: '/Users/me/.local/bin/agent',
+  });
 });
 
 

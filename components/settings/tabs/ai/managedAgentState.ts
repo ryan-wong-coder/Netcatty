@@ -4,7 +4,7 @@ import {
   isPathLikeCommand,
 } from "../../../../infrastructure/ai/managedAgents";
 import type { AgentPathInfo } from "./types";
-import { AGENT_DEFAULTS } from "./types";
+import { AGENT_DEFAULTS, isCursorAvailableForMode } from "./types";
 import { buildCodebuddyEnv } from "./codebuddyConfigEnv";
 
 function getAutoManagedAgentStoredPath(
@@ -37,7 +37,7 @@ export function buildManagedAgentState(
 
   if (!pathInfo?.available || !pathInfo.path) {
     const existingManaged = managedAgents.find((agent) => agent.id === managedId);
-    if (agentKey === "cursor" && existingManaged?.apiKey) {
+    if (agentKey === "cursor" && (existingManaged?.apiKey || existingManaged?.cursorAuthMode === "cli-login")) {
       const defaults = AGENT_DEFAULTS[agentKey];
       const {
         acpCommand: _legacyCommand,
@@ -52,9 +52,13 @@ export function buildManagedAgentState(
             ...defaults,
             id: managedId,
             command: pathInfo?.path || existingManaged.command || "cursor",
-            enabled: false,
+            // Preserve enable preference when probe is temporarily unavailable
+            // (e.g. wrong apiKeyPresent gating). Send requires available too.
+            enabled: existingManaged.enabled ?? true,
             available: false,
-            apiKey: existingManaged.apiKey,
+            // Preserve stored API key across mode / temporary unavailability.
+            ...(existingManaged.apiKey ? { apiKey: existingManaged.apiKey } : {}),
+            cursorAuthMode: existingManaged.cursorAuthMode === "cli-login" ? "cli-login" : "api-key",
           },
         ],
         defaultAgentId: existingManaged.id === defaultAgentId ? "catty" : defaultAgentId,
@@ -100,21 +104,40 @@ export function buildManagedAgentState(
         : agentKey === "opencode"
           ? { ...(existingManaged?.env ?? {}), OPENCODE_BIN: pathInfo.path }
           : existingManaged?.env;
+  const cursorAuthMode = agentKey === "cursor"
+    ? (existingManaged?.cursorAuthMode
+      ?? (pathInfo.authSource === "cli-login" || pathInfo.cliLoginOk ? "cli-login" : "api-key"))
+    : undefined;
+  const cursorModeAvailable = agentKey === "cursor"
+    ? isCursorAvailableForMode(pathInfo, cursorAuthMode === "cli-login" ? "cli-login" : "api-key", {
+      hasStoredApiKey: Boolean(existingManaged?.apiKey),
+    })
+    : true;
+
   const nextManagedAgent: ExternalAgentConfig = {
     ...existingManagedWithoutLegacy,
     ...defaults,
     id: managedId,
-    command: pathInfo.path,
+    command: agentKey === "cursor" && cursorAuthMode === "cli-login"
+      ? (pathInfo.cliBinPath || pathInfo.path)
+      : pathInfo.path,
     commandSource,
     // Persist probed --version so the chat model picker can gate GPT-5.6+
     // even when this custom path is not the PATH discovery binary.
     ...(pathInfo.version ? { cliVersion: pathInfo.version } : {}),
     ...(managedEnv ? { env: managedEnv } : {}),
-    available: true,
+    available: cursorModeAvailable,
+    // Do not force-disable when only the current auth mode is temporarily
+    // unavailable (user may switch modes). Send paths already require available.
     enabled: managedAgents.length === 0
       || (agentKey === "codebuddy" && existingManaged && !isPathLikeCommand(existingManaged.command))
       ? true
       : managedAgents.some((agent) => agent.enabled) || managedAgents.every((agent) => agent.available === false),
+    ...(agentKey === "cursor" ? {
+      cursorAuthMode,
+      // Keep stored API key in both modes; CLI turns omit it via env wiring.
+      ...(existingManaged?.apiKey ? { apiKey: existingManaged.apiKey } : {}),
+    } : {}),
   };
 
   return {

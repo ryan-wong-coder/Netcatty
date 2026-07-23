@@ -184,7 +184,10 @@ import {
 import {
   releaseTerminalFlowBeforeHibernate,
 } from "./terminal/runtime/terminalSessionAttachment";
-import { flushPendingTerminalWritesBeforeHibernate } from "./terminal/runtime/terminalUnfocusedRepaint";
+import {
+  flushPendingTerminalWritesBeforeHibernate,
+  writeLocalTerminalDataInOrder,
+} from "./terminal/runtime/terminalUnfocusedRepaint";
 import {
   isTerminalFileTransferActive,
   resolveHibernateKeepRendererCount,
@@ -460,6 +463,8 @@ const TerminalComponent: React.FC<TerminalProps> = ({
 
   const terminalSettingsRef = useRef(terminalSettings);
   terminalSettingsRef.current = terminalSettings;
+  const hostRef = useRef(host);
+  hostRef.current = host;
   // The protocol capability is connection-scoped. A settings change applies
   // to newly mounted terminals so an already-negotiated remote never sees the
   // parser and encoder disagree or disappear during hibernation/reconnect.
@@ -517,7 +522,22 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     }
 
     const range = normalizeTerminalContextRange(request.range);
-    const term = termRef.current;
+    let term = termRef.current;
+    let liveContextReady = !term;
+    for (let attempt = 0; term && attempt < 2; attempt += 1) {
+      const targetTerm = term;
+      const flushed = await flushPendingTerminalWritesBeforeHibernate(targetTerm);
+      term = termRef.current;
+      if (term !== targetTerm) continue;
+      if (!flushed) {
+        return { ok: false, error: "Terminal output is still draining; retry the context read." };
+      }
+      liveContextReady = true;
+      break;
+    }
+    if (term && !liveContextReady) {
+      return { ok: false, error: "Terminal changed while reading its context; retry the request." };
+    }
     if (term) {
       const alternateScreen = isTerminalAlternateScreenActive(term);
       const activeBuffer = term.buffer.active as typeof term.buffer.active & {
@@ -615,9 +635,9 @@ const TerminalComponent: React.FC<TerminalProps> = ({
   }, [onProgrammaticCommandLogRewriteChange, queueProgrammaticCommandLogRewrite, sessionId]);
 
   const writeLocalTerminalData = useCallback((data: string) => {
-    if (!data) return;
-    captureTerminalLogData(data);
-    termRef.current?.write(data);
+    const term = termRef.current;
+    if (!term) return;
+    writeLocalTerminalDataInOrder(term, data, captureTerminalLogData);
   }, [captureTerminalLogData]);
 
   const hotkeySchemeRef = useRef(hotkeyScheme);
@@ -1964,6 +1984,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
 
   const sessionStarters = createTerminalSessionStarters({
     host,
+    hostRef,
     keys,
     identities,
     knownHosts,
@@ -1981,6 +2002,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     terminalBackend,
     serialConfig,
     telnetLocalEchoRef,
+    isPaneVisibleRef: isVisibleRef,
     isVisibleRef: isRendererActiveRef,
     isBootActiveRef,
     pendingOutputScrollRef,

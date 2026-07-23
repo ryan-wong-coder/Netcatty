@@ -5,6 +5,7 @@ const {
   buildCursorAgentOptions,
   buildCursorSendMessage,
   formatCursorErrorForUser,
+  isCursorAgentNotFoundError,
   mapCursorModels,
   runCursorTurn,
   toCursorMcpServers,
@@ -214,6 +215,57 @@ test("formatCursorErrorForUser points users to the settings API key", () => {
     formatCursorErrorForUser("unauthorized"),
     "Cursor authentication failed. Update the Cursor API Key in Settings -> AI.",
   );
+});
+
+test("isCursorAgentNotFoundError detects stale resume ids", () => {
+  assert.equal(isCursorAgentNotFoundError(new Error("Agent 61668441-bfcb-4795-a575-c46d70ad01fe not found")), true);
+  assert.equal(isCursorAgentNotFoundError(new Error("unauthorized")), false);
+});
+
+test("runCursorTurn falls back to create when resume agent is missing", async () => {
+  const emitter = makeEmitter();
+  const observed = [];
+  const sdkModule = {
+    Agent: {
+      async resume(id) {
+        observed.push(["resume", id]);
+        throw new Error(`Agent ${id} not found`);
+      },
+      async create() {
+        observed.push(["create"]);
+        return {
+          agentId: "agent-fresh",
+          async send() {
+            return {
+              async *stream() {
+                yield { type: "assistant", message: { content: [{ type: "text", text: "ok" }] } };
+              },
+            };
+          },
+          close() {},
+        };
+      },
+    },
+  };
+
+  const result = await runCursorTurn({
+    prompt: "hi",
+    resumeSessionId: "61668441-bfcb-4795-a575-c46d70ad01fe",
+    agentOptions: { apiKey: "key", model: { id: "composer-2.5" }, local: { cwd: "/repo" } },
+    emitter,
+    sdkModule,
+  });
+
+  assert.deepEqual(observed, [
+    ["resume", "61668441-bfcb-4795-a575-c46d70ad01fe"],
+    ["create"],
+  ]);
+  assert.equal(result.sessionId, "agent-fresh");
+  assert.deepEqual(emitter.calls, [
+    ["sessionId", "agent-fresh"],
+    ["text", "ok"],
+    ["done"],
+  ]);
 });
 
 test("runCursorTurn creates or resumes an agent, streams events, and emits done", async () => {

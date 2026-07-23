@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import type { Terminal as XTerm } from "@xterm/xterm";
 
 import {
@@ -18,6 +19,8 @@ import {
   tryAttachSessionToTerminal,
   writeSessionData,
 } from "./terminalSessionAttachment.ts";
+import { getVisibleTerminalLineTimestampRows } from "./terminalLineTimestamps.ts";
+import { noteTerminalOutputPressureData } from "./terminalOutputPressure.ts";
 
 import {
   clearTerminalSessionFlowAck,
@@ -28,7 +31,9 @@ import {
   resetTerminalWriteCoalescer,
 } from "./terminalWriteCoalescer.ts";
 import {
+  cancelScheduledUnfocusedRepaint,
   flushPendingTerminalWritesOnResume,
+  flushTerminalWriteBufferBypassingTimers,
 } from "./terminalUnfocusedRepaint.ts";
 import {
   clearDeferredTerminalWriteAck,
@@ -52,12 +57,45 @@ const createFakeTerm = (activeType = "normal") => {
   const markerLines: number[] = [];
   const disposedMarkerLines: number[] = [];
   let cursorLine = 0;
+  const active: {
+    type: string;
+    viewportY: number;
+    cursorX: number;
+    baseY: number;
+    cursorY: number;
+    length: number;
+    getLine: () => { isWrapped: boolean };
+  } = {
+    type: activeType,
+    viewportY: 0,
+    cursorX: 0,
+    baseY: 0,
+    get cursorY() {
+      return cursorLine;
+    },
+    set cursorY(value: number) {
+      cursorLine = Math.max(0, value);
+    },
+    get length() {
+      return cursorLine + 1;
+    },
+    getLine: () => ({ isWrapped: false }),
+  };
   const term = {
+    rows: 24,
+    cols: 80,
+    options: { scrollback: 1000 },
     buffer: {
-      active: { type: activeType },
+      active,
     },
     write(data: string, callback?: () => void) {
       writes.push(data);
+      if (data.includes("\x1b[?1049h") || data.includes("\x1b[?47h") || data.includes("\x1b[?1047h")) {
+        active.type = "alternate";
+      }
+      if (data.includes("\x1b[?1049l") || data.includes("\x1b[?47l") || data.includes("\x1b[?1047l")) {
+        active.type = "normal";
+      }
       for (const char of data) {
         if (char === "\n") {
           cursorLine += 1;
@@ -84,24 +122,31 @@ const createFakeTerm = (activeType = "normal") => {
   return { term, writes, markerLines, disposedMarkerLines };
 };
 
-const createContext = (showLineTimestamps: boolean, host: Record<string, unknown> = {}) => ({
-  host,
-  terminalSettingsRef: {
-    current: {
+const createContext = (showLineTimestamps: boolean, host: Record<string, unknown> = {}) => {
+  // Production gates markers on host.showLineTimestamps; keep the first arg as
+  // the host default unless the test overrides host explicitly.
+  const liveHost = { showLineTimestamps, ...host };
+  return {
+    host: liveHost,
+    // Mirror Terminal.tsx: write path reads hostRef.current for live toggles.
+    hostRef: { current: liveHost },
+    terminalSettingsRef: {
+      current: {
+        showLineTimestamps,
+        scrollOnOutput: false,
+        forcePromptNewLine: false,
+      },
+    },
+    terminalSettings: {
       showLineTimestamps,
       scrollOnOutput: false,
       forcePromptNewLine: false,
     },
-  },
-  terminalSettings: {
-    showLineTimestamps,
-    scrollOnOutput: false,
-    forcePromptNewLine: false,
-  },
-  terminalBackend: {},
-  sessionRef: { current: "session-1" },
-  promptLineBreakStateRef: { current: undefined },
-});
+    terminalBackend: {},
+    sessionRef: { current: "session-1" },
+    promptLineBreakStateRef: { current: undefined },
+  };
+};
 
 test("terminal output publishes one completion for each pending command at the next prompt", () => {
   const { term } = createFakeTerm();
@@ -319,7 +364,7 @@ test("writeSessionData flushes xterm writes while the page is hidden", () => {
   clearTerminalSessionFlowAck("session-1");
 });
 
-test("writeSessionData flushes xterm writes while the window is unfocused but visible", () => {
+test("writeSessionData batches while unfocused-but-visible then drains on idle flush", async () => {
   clearTerminalSessionFlowAck("session-1");
   const payload = "x".repeat(FLOW_CHAR_COUNT_ACK_SIZE + 1);
   const writes: string[] = [];
@@ -355,6 +400,14 @@ test("writeSessionData flushes xterm writes while the window is unfocused but vi
   withDocumentVisibility("visible", () => {
     writeSessionData(ctx as never, term, payload);
   }, { hasFocus: false });
+
+  // Unfocused-but-visible no longer force-flushes every chunk (preserves
+  // batching / alt-screen frames). Microtask/idle/unfocused timers drain it.
+  await new Promise((resolve) => { setTimeout(resolve, 90); });
+  flushTerminalWriteCoalescer(term);
+  flushTerminalWriteBufferBypassingTimers(term);
+  flushTerminalWriteQueueBypassingTimers(term);
+  flushTerminalWriteBufferBypassingTimers(term);
   flushTerminalSessionFlowAck("session-1");
 
   assert.equal(writes.join(""), payload);
@@ -362,6 +415,8 @@ test("writeSessionData flushes xterm writes while the window is unfocused but vi
   assert.equal(getFlowController(ctx as never, term).pendingBytes(), 0);
   assert.equal(getDeferredTerminalWriteAckBytes(term), 0);
   assert.equal(acked.reduce((total, bytes) => total + bytes, 0), payload.length);
+  cancelScheduledUnfocusedRepaint(term);
+  resetTerminalWriteCoalescer(term);
   clearTerminalSessionFlowAck("session-1");
 });
 
@@ -430,7 +485,7 @@ test("writeSessionData flushes pending coalesced output with the background fast
   clearTerminalSessionFlowAck("session-1");
 });
 
-test("hidden tab output is written completely while the tab remains hidden", () => {
+test("hidden tab output is written completely while the tab remains hidden", async () => {
   clearTerminalSessionFlowAck("session-1");
   const lines: string[] = [];
   let payloadLength = 0;
@@ -467,12 +522,526 @@ test("hidden tab output is written completely while the tab remains hidden", () 
   withAnimationFrameQueue(() => {
     writeSessionData(ctx as never, term, payload);
   });
+  assert.deepEqual(writes, []);
+
+  await new Promise((resolve) => { setTimeout(resolve, 190); });
   flushTerminalSessionFlowAck("session-1");
 
   assert.equal(writes.join(""), payload);
   assert.equal(getFlowController(ctx as never, term).pendingBytes(), 0);
   assert.equal(acked.reduce((total, bytes) => total + bytes, 0), payload.length);
   clearTerminalSessionFlowAck("session-1");
+});
+
+test("frequent hidden log lines are drained in one complete terminal write", async () => {
+  const { term, writes, markerLines } = createFakeTerm();
+  const ctx = {
+    ...createContext(false),
+    // The renderer stays active when hidden-tab hibernation is disabled, but
+    // the pane itself is not visible. This is the normal multi-tab runtime.
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+  };
+  const chunks = Array.from(
+    { length: 8 },
+    (_, index) => `line-${String(index + 1).padStart(2, "0")}\r\n`,
+  );
+
+  for (const chunk of chunks) {
+    writeSessionData(ctx as never, term, chunk);
+  }
+
+  assert.deepEqual(writes, []);
+
+  await new Promise((resolve) => { setTimeout(resolve, 190); });
+
+  assert.deepEqual(writes, [chunks.join("")]);
+  // Host timestamps off still records the per-second ledger; sparse anchors
+  // only (≤1/sec), never per-line markers for 8 short lines.
+  assert.ok(markerLines.length <= 1);
+  assert.equal(getFlowController(ctx as never, term).pendingBytes(), 0);
+  resetTerminalWriteCoalescer(term);
+});
+
+test("large hidden bursts yield between terminal write slices", () => {
+  type FakeTimer = {
+    active: boolean;
+    callback: () => void;
+    delay: number;
+    unref: () => void;
+  };
+
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalDateNow = Date.now;
+  const timers: FakeTimer[] = [];
+  globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay = 0, ...args: unknown[]) => {
+    const timer: FakeTimer = {
+      active: true,
+      callback: () => callback(...args),
+      delay: Number(delay),
+      unref() {},
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer: FakeTimer | undefined) => {
+    if (timer) timer.active = false;
+  }) as unknown as typeof clearTimeout;
+
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(false),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+  };
+  const chunks = Array.from({ length: 96 }, () => "x".repeat(4096));
+  const nextSecondChunk = "y";
+  const payload = `${chunks.join("")}${nextSecondChunk}`;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    for (const chunk of chunks) {
+      writeSessionData(ctx as never, term, chunk);
+    }
+    fakeNow += 1_000;
+    writeSessionData(ctx as never, term, nextSecondChunk);
+    assert.deepEqual(writes, []);
+
+    const hiddenDrain = timers.find((timer) => timer.active && timer.delay === 160);
+    assert.ok(hiddenDrain);
+    hiddenDrain.active = false;
+    hiddenDrain.callback();
+
+    assert.deepEqual(writes, []);
+    const firstQueueDrain = timers.find((timer) => timer.active && timer.delay === 0);
+    assert.ok(firstQueueDrain);
+    firstQueueDrain.active = false;
+    firstQueueDrain.callback();
+
+    assert.equal(writes.length, 1);
+    assert.ok(writes[0]!.length <= MAX_TERMINAL_PLAIN_WRITE_CHUNK_BYTES);
+    assert.ok(writes.join("").length < payload.length);
+    assert.ok(timers.some((timer) => timer.active && timer.delay === 0));
+
+    flushPendingTerminalWritesOnResume(term);
+    assert.equal(writes.join(""), payload);
+
+    const followupDrain = timers.find((timer) => timer.active && timer.delay === 160);
+    if (followupDrain) {
+      followupDrain.active = false;
+      followupDrain.callback();
+    }
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("hidden output keeps its arrival second when a batch crosses a clock boundary", () => {
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    writeSessionData(ctx as never, term, "first\r\n");
+    fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+    writeSessionData(ctx as never, term, "second\r\n");
+    flushPendingTerminalWritesOnResume(term);
+
+    assert.deepEqual(writes, ["first\r\n", "second\r\n"]);
+    // Paint only through real content lines (not the empty cursor row after \n).
+    assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+      { row: 0, label: "12:00:59" },
+      { row: 1, label: "12:01:00" },
+    ]);
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("visible pressure-batched output keeps its arrival second across a clock boundary", () => {
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: true },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    withAnimationFrameQueue((schedule) => {
+      noteTerminalOutputPressureData(term, "x".repeat(20_000));
+      writeSessionData(ctx as never, term, "first\r\n");
+      assert.ok(schedule.scheduledCount() >= 1);
+      assert.deepEqual(writes, []);
+
+      fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+      writeSessionData(ctx as never, term, "second\r\n");
+      schedule.flushScheduled();
+
+      assert.deepEqual(writes, ["first\r\n", "second\r\n"]);
+      assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+        { row: 0, label: "12:00:59" },
+        { row: 1, label: "12:01:00" },
+      ]);
+    });
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("visible alternate-screen output stays frame-batched across a clock boundary", () => {
+  const { term, writes } = createFakeTerm("alternate");
+  const ctx = {
+    ...createContext(false),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: true },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    withAnimationFrameQueue((schedule) => {
+      writeSessionData(ctx as never, term, "frame-a");
+      assert.ok(schedule.scheduledCount() >= 1);
+      assert.deepEqual(writes, []);
+
+      fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+      writeSessionData(ctx as never, term, "frame-b");
+      assert.deepEqual(writes, []);
+
+      schedule.flushScheduled();
+      assert.equal(writes.join(""), "frame-aframe-b");
+    });
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("normal output before an alternate-screen frame keeps its earlier timestamp", () => {
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: true },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    withAnimationFrameQueue((schedule) => {
+      writeSessionData(ctx as never, term, "before\r\n\x1b[?1049hframe-a");
+      assert.deepEqual(writes, ["before\r\n"]);
+
+      fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+      writeSessionData(ctx as never, term, "frame-b\x1b[?1049lafter");
+      schedule.flushScheduled();
+
+      assert.equal(
+        writes.join(""),
+        "before\r\n\x1b[?1049hframe-aframe-b\x1b[?1049lafter",
+      );
+      // before @ :59; after leave alt "after" @ :00 (same buffer line count).
+      assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+        { row: 0, label: "12:00:59" },
+        { row: 1, label: "12:01:00" },
+      ]);
+    });
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("normal output after an alternate-screen frame keeps its earlier timestamp", () => {
+  const { term, writes } = createFakeTerm("alternate");
+  const activeBuffer = term.buffer.active as { type: string };
+  const originalWrite = term.write.bind(term);
+  term.write = (data: string | Uint8Array, callback?: () => void) => {
+    const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+    if (text.includes("\x1b[?1049l")) {
+      activeBuffer.type = "normal";
+    }
+    originalWrite(data, callback);
+  };
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    writeSessionData(ctx as never, term, "\x1b[?1049lafter\r\n");
+    fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+    writeSessionData(ctx as never, term, "next\r\n");
+    flushPendingTerminalWritesOnResume(term);
+
+    assert.equal(writes.join(""), "\x1b[?1049lafter\r\nnext\r\n");
+    assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+      { row: 0, label: "12:00:59" },
+      { row: 1, label: "12:01:00" },
+    ]);
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("hiding a pane preserves the arrival second of already queued output", () => {
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: true },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    withAnimationFrameQueue(() => {
+      writeSessionData(ctx as never, term, "first\r\n");
+      assert.deepEqual(writes, []);
+
+      ctx.isPaneVisibleRef.current = false;
+      fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+      writeSessionData(ctx as never, term, "second\r\n");
+      flushPendingTerminalWritesOnResume(term);
+
+      assert.deepEqual(writes, ["first\r\n", "second\r\n"]);
+      assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+        { row: 0, label: "12:00:59" },
+        { row: 1, label: "12:01:00" },
+      ]);
+    });
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("hiding the page preserves the arrival second of already queued output", () => {
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: true },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    withAnimationFrameQueue(() => {
+      withDocumentVisibility("visible", () => {
+        writeSessionData(ctx as never, term, "first\r\n");
+      });
+      assert.deepEqual(writes, []);
+
+      fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+      withDocumentVisibility("hidden", () => {
+        writeSessionData(ctx as never, term, "second\r\n");
+      });
+      flushPendingTerminalWritesOnResume(term);
+
+      assert.deepEqual(writes, ["first\r\n", "second\r\n"]);
+      assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+        { row: 0, label: "12:00:59" },
+        { row: 1, label: "12:01:00" },
+      ]);
+    });
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("showing a pane preserves the background arrival second still queued with visible output", () => {
+  const { term, writes } = createFakeTerm();
+  const ctx = {
+    ...createContext(true),
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+  };
+  const originalDateNow = Date.now;
+  let fakeNow = new Date(2026, 0, 1, 12, 0, 59, 800).getTime();
+  Date.now = () => fakeNow;
+
+  try {
+    withAnimationFrameQueue(() => {
+      writeSessionData(ctx as never, term, "hidden\r\n");
+      ctx.isPaneVisibleRef.current = true;
+      writeSessionData(ctx as never, term, "visible-same-second\r\n");
+
+      fakeNow = new Date(2026, 0, 1, 12, 1, 0, 20).getTime();
+      writeSessionData(ctx as never, term, "visible-next-second\r\n");
+      flushPendingTerminalWritesOnResume(term);
+
+      assert.deepEqual(writes, [
+        "hidden\r\nvisible-same-second\r\n",
+        "visible-next-second\r\n",
+      ]);
+      // Per-second ledger + fill-forward through content only (no empty cursor row).
+      assert.deepEqual(getVisibleTerminalLineTimestampRows(term), [
+        { row: 0, label: "12:00:59" },
+        { row: 1, label: "12:00:59" },
+        { row: 2, label: "12:01:00" },
+      ]);
+    });
+  } finally {
+    Date.now = originalDateNow;
+    resetTerminalWriteCoalescer(term);
+  }
+});
+
+test("hidden prompt formatting preserves PTY chunk boundaries", () => {
+  const require = createRequire(import.meta.url);
+  const { Terminal } = require("@xterm/xterm") as {
+    Terminal: new (options: Record<string, unknown>) => XTerm;
+  };
+  const term = new Terminal({ cols: 80, rows: 5, scrollback: 20, allowProposedApi: true });
+  const originalWrite = term.write.bind(term);
+  let writeCalls = 0;
+  term.write = ((data: string | Uint8Array, callback?: () => void) => {
+    writeCalls += 1;
+    return originalWrite(data, callback);
+  }) as XTerm["write"];
+  const promptState = createPromptLineBreakState();
+  promptState.lastPromptText = "$ ";
+  promptState.pendingCommand = true;
+  const settings = {
+    showLineTimestamps: false,
+    scrollOnOutput: false,
+    forcePromptNewLine: true,
+  };
+  const ctx = {
+    ...createContext(false),
+    terminalSettingsRef: { current: settings },
+    terminalSettings: settings,
+    promptLineBreakStateRef: { current: promptState },
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+  };
+
+  try {
+    withAnimationFrameQueue(() => {
+      writeSessionData(ctx as never, term, "foo");
+      writeSessionData(ctx as never, term, "$ ");
+      writeSessionData(ctx as never, term, "notice\r\n");
+      writeSessionData(ctx as never, term, "bar");
+      writeSessionData(ctx as never, term, "$ ");
+      flushPendingTerminalWritesOnResume(term);
+    });
+
+    assert.equal(term.buffer.active.getLine(0)?.translateToString(true), "foo");
+    assert.equal(term.buffer.active.getLine(1)?.translateToString(true), "$ notice");
+    assert.equal(term.buffer.active.getLine(2)?.translateToString(true), "bar");
+    assert.equal(term.buffer.active.getLine(3)?.translateToString(true), "$");
+    assert.equal(term.buffer.active.cursorX, 2);
+    assert.equal(writeCalls, 1);
+  } finally {
+    resetTerminalWriteCoalescer(term);
+    term.dispose();
+  }
+});
+
+test("hidden prompt formatting respects cursor movement before a bare line feed", () => {
+  const require = createRequire(import.meta.url);
+  const { Terminal } = require("@xterm/xterm") as {
+    Terminal: new (options: Record<string, unknown>) => XTerm;
+  };
+  const scenarios: Array<{
+    convertEol: boolean;
+    output: string;
+    promptRow: number;
+    promptLine?: string;
+    setup?: string;
+  }> = [
+    { convertEol: false, output: "foo\n", promptRow: 2 },
+    { convertEol: true, output: "foo\n", promptRow: 1 },
+    { convertEol: false, output: "\x1b[10C\n", promptRow: 2 },
+    { convertEol: false, output: "foo\x1b[1G\n", promptRow: 1 },
+    { convertEol: false, output: "你好\r\n", promptRow: 1 },
+    { convertEol: false, output: "你好\n", promptRow: 2 },
+    { convertEol: false, output: "foo\x1b[20h\n", promptRow: 1 },
+    { convertEol: true, output: "foo\x1b[20l\n", promptRow: 2 },
+    { convertEol: false, output: "foo\x1b[E", promptRow: 1 },
+    { convertEol: false, output: "foo\x1b[L\n", promptRow: 1, promptLine: "$ o" },
+    { convertEol: false, output: "foo\x1b[M\n", promptRow: 1 },
+    {
+      convertEol: false,
+      setup: "\x1b[3g\x1b[6G\x1bH\x1b[1G",
+      output: "\x1b[I\n",
+      promptRow: 2,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const term = new Terminal({
+      cols: 80,
+      rows: 5,
+      scrollback: 20,
+      allowProposedApi: true,
+      convertEol: scenario.convertEol,
+    });
+    const promptState = createPromptLineBreakState();
+    promptState.lastPromptText = "$ ";
+    promptState.pendingCommand = true;
+    const settings = {
+      showLineTimestamps: false,
+      scrollOnOutput: false,
+      forcePromptNewLine: true,
+    };
+    const ctx = {
+      ...createContext(false),
+      terminalSettingsRef: { current: settings },
+      terminalSettings: settings,
+      promptLineBreakStateRef: { current: promptState },
+      isVisibleRef: { current: true },
+      isPaneVisibleRef: { current: false },
+    };
+
+    try {
+      if (scenario.setup) {
+        term.write(scenario.setup);
+        flushPendingTerminalWritesOnResume(term);
+      }
+      withAnimationFrameQueue(() => {
+        writeSessionData(ctx as never, term, scenario.output);
+        writeSessionData(ctx as never, term, "$ ");
+        flushPendingTerminalWritesOnResume(term);
+      });
+
+      assert.equal(
+        term.buffer.active.getLine(scenario.promptRow)?.translateToString(true),
+        scenario.promptLine ?? "$",
+        JSON.stringify(scenario),
+      );
+      assert.equal(term.buffer.active.cursorX, 2);
+    } finally {
+      resetTerminalWriteCoalescer(term);
+      term.dispose();
+    }
+  }
 });
 
 test("writeSessionData keeps the current perf trace when hidden output is flushed", () => {
@@ -562,7 +1131,7 @@ test("writeSessionData drains output after the pane hides before the scheduled f
   clearTerminalSessionFlowAck("session-1");
 });
 
-test("writeSessionData drains hidden pane output without waiting for reveal", () => {
+test("writeSessionData drains hidden pane output without waiting for reveal", async () => {
   clearTerminalSessionFlowAck("session-1");
   const payload = "x".repeat(XTERM_WRITE_CALLBACK_FAST_PATH_MAX_BYTES + 1);
   const writes: string[] = [];
@@ -587,6 +1156,9 @@ test("writeSessionData drains hidden pane output without waiting for reveal", ()
   };
 
   writeSessionData(ctx as never, term, payload);
+  assert.deepEqual(writes, []);
+
+  await new Promise((resolve) => { setTimeout(resolve, 190); });
   flushTerminalSessionFlowAck("session-1");
 
   assert.equal(writes.join(""), payload);
@@ -645,7 +1217,7 @@ test("writeSessionData keeps the hidden flush gate after coalescer reset and flu
   clearTerminalSessionFlowAck("session-1");
 });
 
-test("hidden tab output marks pending scroll without scrolling immediately", () => {
+test("hidden tab output marks pending scroll without scrolling immediately", async () => {
   const writes: string[] = [];
   let scrollCalls = 0;
   const term = {
@@ -678,6 +1250,10 @@ test("hidden tab output marks pending scroll without scrolling immediately", () 
   };
 
   writeSessionData(ctx as never, term, "fresh output");
+
+  assert.equal(writes.join(""), "");
+  assert.equal(ctx.pendingOutputScrollRef.current, false);
+  await new Promise((resolve) => { setTimeout(resolve, 190); });
 
   assert.equal(writes.join(""), "fresh output");
   assert.equal(ctx.pendingOutputScrollRef.current, true);
@@ -927,15 +1503,19 @@ test("writeSessionData records terminal output timestamps without changing outpu
 
   assert.equal(writes.join(""), "hello\r\nnext");
   assert.equal((writes.join("").match(/\[\d{2}:\d{2}:\d{2}\]/g) ?? []).length, 0);
-  assert.deepEqual(markerLines, [0, 1]);
+  // Per-second sparse reflow anchor (not per output line).
+  assert.equal(markerLines.length, 1);
 });
 
-test("writeSessionData keeps timestamp metadata when the host gutter is disabled", () => {
+test("writeSessionData uses sparse reflow anchors not per-line markers", () => {
   const { term, writes, markerLines } = createFakeTerm();
-  writeSessionData(createContext(true, { showLineTimestamps: false }) as never, term, "hello");
+  writeSessionData(createContext(true, { showLineTimestamps: false }) as never, term, "hello\r\nnext");
+  writeSessionData(createContext(false, { showLineTimestamps: true }) as never, term, "more\r\n");
 
-  assert.deepEqual(writes, ["hello"]);
-  assert.deepEqual(markerLines, [0]);
+  assert.ok(writes.join("").includes("hello"));
+  // At most one anchor per stamped wall-clock second across both writes.
+  assert.ok(markerLines.length <= 2);
+  assert.ok(markerLines.length >= 1);
 });
 
 test("writeSessionData records timestamps for hosts with timestamps enabled", () => {
@@ -943,7 +1523,8 @@ test("writeSessionData records timestamps for hosts with timestamps enabled", ()
   writeSessionData(createContext(false, { showLineTimestamps: true }) as never, term, "hello");
 
   assert.equal(writes.join(""), "hello");
-  assert.deepEqual(markerLines, [0]);
+  assert.equal(markerLines.length, 1);
+  assert.ok(getVisibleTerminalLineTimestampRows(term).length >= 1);
 });
 
 test("writeSessionData skips timestamps on the alternate screen", () => {
@@ -967,7 +1548,8 @@ test("writeSessionData resumes timestamps after leaving alternate screen in the 
   writeSessionData(createContext(false, { showLineTimestamps: true }) as never, term, "\x1b[?1049lprompt");
 
   assert.equal(writes.join(""), "\x1b[?1049lprompt");
-  assert.deepEqual(markerLines, [0]);
+  assert.equal(markerLines.length, 1);
+  assert.ok(getVisibleTerminalLineTimestampRows(term).length >= 1);
 });
 
 test("writeSessionData inserts erase-scrollback immediately after normal full clear", () => {
@@ -1032,35 +1614,74 @@ test("writeSessionData does not wipe scrollback for delayed sync clears after re
   assert.equal(output.includes("\x1b[H\x1b[2Jframe"), true, output);
 });
 
-test("writeSessionData preserves timestamps across host gutter visibility changes", () => {
-  const { term, writes, markerLines, disposedMarkerLines } = createFakeTerm();
+test("writeSessionData always uses ledger recording regardless of gutter toggle", () => {
+  const { term, writes, markerLines } = createFakeTerm();
   const ctx = createContext(false, { showLineTimestamps: false });
 
   writeSessionData(ctx as never, term, "before\r\n");
+  // Per-second sparse reflow anchors (not per-line markers).
+  assert.equal(markerLines.length, 1);
+
   ctx.host = { showLineTimestamps: true };
+  ctx.hostRef.current = ctx.host;
   writeSessionData(ctx as never, term, "enabled\r\n");
+  // Same wall-clock second in real runs may still be one stamp; here two writes
+  // share one second unless Date.now advances — allow ≤2 sparse anchors total.
+  assert.ok(markerLines.length <= 2, `expected sparse anchors, got ${markerLines.length}`);
+
   ctx.host = { showLineTimestamps: false };
+  ctx.hostRef.current = ctx.host;
   writeSessionData(ctx as never, term, "disabled");
 
   assert.equal(writes.join(""), "before\r\nenabled\r\ndisabled");
-  assert.deepEqual(markerLines, [0, 1, 2]);
-  assert.deepEqual(disposedMarkerLines, []);
+  // Ledger still has stamps for paint when gutter is shown.
+  assert.ok(getVisibleTerminalLineTimestampRows(term).length >= 1);
+});
+
+test("writeSessionData follows live hostRef toggles without replacing boot host snapshot", () => {
+  const { term, writes, markerLines } = createFakeTerm();
+  const bootHost = { showLineTimestamps: false as boolean };
+  const hostRef = { current: bootHost };
+  const ctx = {
+    ...createContext(false),
+    host: bootHost,
+    hostRef,
+  };
+
+  writeSessionData(ctx as never, term, "boot-off\r\n");
+  assert.ok(markerLines.length <= 1);
+
+  hostRef.current = { showLineTimestamps: true };
+  assert.equal(bootHost.showLineTimestamps, false);
+  assert.equal(ctx.host.showLineTimestamps, false);
+
+  writeSessionData(ctx as never, term, "live-on\r\n");
+  assert.equal(writes.join(""), "boot-off\r\nlive-on\r\n");
+  // Sparse anchors only (≤1 per stamped second).
+  assert.ok(markerLines.length <= 2);
+  assert.ok(getVisibleTerminalLineTimestampRows(term).length >= 1);
+
+  hostRef.current = { showLineTimestamps: false };
+  writeSessionData(ctx as never, term, "live-off");
+  assert.equal(writes.join(""), "boot-off\r\nlive-on\r\nlive-off");
 });
 
 test("writeSessionData batches timestamp bookkeeping for bulk line output", () => {
   const { term, writes, markerLines } = createFakeTerm();
-  // Stay under large-output pressure so timestamp markers still record; bulk
-  // batching of markers is covered without degrading the flood fast-path.
   const payload = `${Array.from({ length: 40 }, () => "x".repeat(80)).join("\n")}\n`;
 
-  writeSessionData(createContext(false, { showLineTimestamps: false }) as never, term, payload, payload.length);
+  writeSessionData(createContext(false, { showLineTimestamps: true }) as never, term, payload, payload.length);
   flushTerminalWriteCoalescer(term);
   for (let guard = 0; guard < 1000 && flushTerminalWriteQueueBypassingTimers(term); guard += 1) {
     // Drain cooperative bulk-output timers so the assertion observes the full write plan.
   }
 
   assert.equal(writes.join(""), payload);
-  assert.equal(markerLines.length, 40);
+  // One wall-clock second → one ledger stamp + one sparse reflow anchor.
+  assert.equal(markerLines.length, 1);
+  const painted = getVisibleTerminalLineTimestampRows(term);
+  assert.ok(painted.length >= 1);
+  assert.ok(painted.every((row) => row.label.length > 0));
   assert.ok(writes.length >= 1);
 });
 
@@ -1144,6 +1765,54 @@ test("attachSessionToTerminal clears the backend id before reporting exit", () =
 
   assert.equal(sessionRef.current, null);
   assert.equal(sessionIdSeenByConsumer, null);
+});
+
+test("attachSessionToTerminal drains hidden final output before exit capture", () => {
+  const { term, writes } = createFakeTerm();
+  let onData: ((data: string) => void) | null = null;
+  let onExit: ((evt: { reason?: string }) => void) | null = null;
+  let captured = "";
+  const ctx = {
+    ...createContext(false),
+    sessionId: "session-1",
+    sessionRef: { current: null as string | null },
+    isVisibleRef: { current: true },
+    isPaneVisibleRef: { current: false },
+    hasConnectedRef: { current: true },
+    hasRunStartupCommandRef: { current: false },
+    disposeDataRef: { current: null },
+    disposeExitRef: { current: null },
+    fitAddonRef: { current: null },
+    serializeAddonRef: { current: { serialize: () => writes.join("") } },
+    pendingAuthRef: { current: null },
+    terminalBackend: {
+      onSessionData: (_id: string, callback: (data: string) => void) => {
+        onData = callback;
+        return () => {};
+      },
+      onSessionExit: (_id: string, callback: (evt: { reason?: string }) => void) => {
+        onExit = callback;
+        return () => {};
+      },
+    },
+    updateStatus: () => {},
+    setError: () => {},
+    onTerminalDataCapture: (_sessionId: string, data: string) => {
+      captured = data;
+    },
+    onSessionExit: () => {},
+  };
+
+  attachSessionToTerminal(ctx as never, term, "session-1");
+  onData?.("final output\r\n");
+  assert.deepEqual(writes, []);
+
+  onExit?.({ reason: "closed" });
+
+  const expected = "final output\r\n\r\n[session closed]\r\n";
+  assert.equal(writes.join(""), expected);
+  assert.equal(captured, expected);
+  resetTerminalWriteCoalescer(term);
 });
 
 test("attachSessionToTerminal keeps interrupt-time output visible", () => {
