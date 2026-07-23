@@ -5,19 +5,28 @@ import { localStorageAdapter } from "../../../infrastructure/persistence/localSt
 import { netcattyBridge } from "../../../infrastructure/services/netcattyBridge";
 import { logger } from "../../../lib/logger";
 import { runSftpTransferWorkers } from "./transferConcurrency";
+import { globalSftpTransferScheduler } from "./globalTransferScheduler";
 import { joinPath } from "./utils";
 
 interface UseSftpDirectoryTransferOpsParams {
+  ownerId: string;
   cancelledTasksRef: MutableRefObject<Set<string>>;
+  pausedTasksRef: MutableRefObject<Set<string>>;
+  waitUntilTransferResumed: (taskId: string) => Promise<void>;
   activeChildIdsRef: MutableRefObject<Map<string, Set<string>>>;
+  transfersRef: MutableRefObject<TransferTask[]>;
   setTransfers: Dispatch<SetStateAction<TransferTask[]>>;
   listLocalFiles: (path: string) => Promise<SftpFileEntry[]>;
   listRemoteFiles: (sftpId: string, path: string, encoding?: SftpFilenameEncoding) => Promise<SftpFileEntry[]>;
 }
 
 export function useSftpDirectoryTransferOps({
+  ownerId,
   cancelledTasksRef,
+  pausedTasksRef,
+  waitUntilTransferResumed,
   activeChildIdsRef,
+  transfersRef,
   setTransfers,
   listLocalFiles,
   listRemoteFiles,
@@ -119,7 +128,18 @@ export function useSftpDirectoryTransferOps({
       throw new Error("Transfer cancelled");
     }
 
-    return new Promise((resolve, reject) => {
+    setTransfers((prev) => prev.map((candidate) => candidate.id === task.id
+      ? { ...candidate, status: "queued" as TransferStatus }
+      : candidate));
+    return globalSftpTransferScheduler.run(
+      ownerId,
+      task.id,
+      () => localStorageAdapter.readNumber(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY),
+      () => {
+        setTransfers((prev) => prev.map((candidate) => candidate.id === task.id
+          ? { ...candidate, status: "transferring" as TransferStatus }
+          : candidate));
+        return new Promise((resolve, reject) => {
       const options = {
         transferId: task.id,
         sourcePath: task.sourcePath,
@@ -132,6 +152,13 @@ export function useSftpDirectoryTransferOps({
         sourceEncoding: sourceIsLocal ? undefined : sourceEncoding,
         targetEncoding: targetIsLocal ? undefined : targetEncoding,
         sameHost: sameHost || undefined,
+        resumable: task.resumable !== false,
+        checkpointBytes: task.checkpointBytes,
+        resumeStage: task.resumeStage,
+        downloadCheckpointBytes: task.downloadCheckpointBytes,
+        uploadCheckpointBytes: task.uploadCheckpointBytes,
+        sourceFingerprint: task.sourceFingerprint,
+        globalConcurrency: localStorageAdapter.readNumber(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY) ?? undefined,
       };
 
       let lastProgressUpdate = 0;
@@ -139,6 +166,15 @@ export function useSftpDirectoryTransferOps({
         transferred: number,
         total: number,
         speed: number,
+        checkpoint?: {
+          resumeStage?: TransferTask["resumeStage"];
+          checkpointBytes?: number;
+          downloadCheckpointBytes?: number;
+          uploadCheckpointBytes?: number;
+          sourceFingerprint?: string;
+          resumable?: boolean;
+          pauseUnavailableReason?: string;
+        },
       ) => {
         // Bubble up streaming progress to parent (for directory transfers)
         onStreamProgress?.(transferred, total, speed);
@@ -162,6 +198,13 @@ export function useSftpDirectoryTransferOps({
             return {
               ...t,
               transferredBytes: normalizedTransferred,
+              checkpointBytes: normalizedTransferred,
+              resumeStage: checkpoint?.resumeStage ?? t.resumeStage,
+              downloadCheckpointBytes: checkpoint?.downloadCheckpointBytes ?? t.downloadCheckpointBytes,
+              uploadCheckpointBytes: checkpoint?.uploadCheckpointBytes ?? t.uploadCheckpointBytes,
+              sourceFingerprint: checkpoint?.sourceFingerprint ?? t.sourceFingerprint,
+              resumable: checkpoint?.resumable ?? t.resumable,
+              pauseUnavailableReason: checkpoint?.pauseUnavailableReason ?? t.pauseUnavailableReason,
               totalBytes: normalizedTotal,
               speed: Number.isFinite(speed) && speed > 0 ? speed : 0,
             };
@@ -183,7 +226,9 @@ export function useSftpDirectoryTransferOps({
         onComplete,
         onError,
       ).catch(reject);
-    });
+        });
+      },
+    );
   };
 
   /** Recursively count all files under a directory (for progress display). */
@@ -348,12 +393,23 @@ export function useSftpDirectoryTransferOps({
         regularFiles,
         () => localStorageAdapter.readNumber(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY),
         async (file) => {
+          if (pausedTasksRef.current.has(rootTaskId)) {
+            await waitUntilTransferResumed(rootTaskId);
+          }
           if (cancelledTasksRef.current.has(task.id) || cancelledTasksRef.current.has(rootTaskId)) {
             throw new Error("Transfer cancelled");
           }
 
-          const fileId = crypto.randomUUID();
           const fileSize = getEntrySize(file);
+          const sourcePath = joinPath(task.sourcePath, file.name);
+          const targetPath = joinPath(task.targetPath, file.name);
+          const persistedChild = transfersRef.current.find((candidate) => (
+            candidate.parentTaskId === rootTaskId
+            && candidate.sourcePath === sourcePath
+            && candidate.targetPath === targetPath
+          ));
+          if (persistedChild?.status === "completed") return;
+          const fileId = persistedChild?.id ?? crypto.randomUUID();
 
           // Track child ID outside React state for immediate cancellation visibility
           if (!activeChildIdsRef.current.has(rootTaskId)) {
@@ -363,11 +419,12 @@ export function useSftpDirectoryTransferOps({
 
           const childTask: TransferTask = {
             ...task,
+            ...persistedChild,
             id: fileId,
             fileName: file.name,
             originalFileName: file.name,
-            sourcePath: joinPath(task.sourcePath, file.name),
-            targetPath: joinPath(task.targetPath, file.name),
+            sourcePath,
+            targetPath,
             isDirectory: false,
             progressMode: "bytes",
             parentTaskId: rootTaskId,
@@ -378,13 +435,21 @@ export function useSftpDirectoryTransferOps({
           };
 
           // Register child in transfers array so UI can render it
-          setTransfers((prev) => [...prev, {
-            ...childTask,
-            status: "transferring" as TransferStatus,
-            transferredBytes: 0,
-            speed: 0,
-            startTime: Date.now(),
-          }]);
+          setTransfers((prev) => persistedChild
+            ? prev.map((candidate) => candidate.id === fileId ? {
+                ...childTask,
+                status: "queued" as TransferStatus,
+                speed: 0,
+                error: undefined,
+                endTime: undefined,
+              } : candidate)
+            : [...prev, {
+                ...childTask,
+                status: "queued" as TransferStatus,
+                transferredBytes: 0,
+                speed: 0,
+                startTime: Date.now(),
+              }]);
 
           try {
             await transferFile(

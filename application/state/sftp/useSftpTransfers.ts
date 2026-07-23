@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FileConflict,
   FileConflictAction,
@@ -13,16 +13,21 @@ import {
   describeSftpIncomingKind,
   getSftpConflictTypeKey,
 } from "../../../domain/sftpConflict";
+import { validateTransferResumeSource } from "../../../domain/sftpTransferCenter";
 import { netcattyBridge } from "../../../infrastructure/services/netcattyBridge";
 import { logger } from "../../../lib/logger";
+import { sftpTransferCenterStore } from "../sftpTransferCenterStore";
 import { SftpPane } from "./types";
 import { useSftpDirectoryTransferOps } from "./transferDirectoryOps";
 import { useSftpTransferConflictOps } from "./transferConflictOps";
 import { useSftpTransferTaskOps } from "./transferTaskOps";
+import { globalSftpTransferScheduler } from "./globalTransferScheduler";
 import type { TransferResult, UseSftpTransfersParams, UseSftpTransfersResult } from "./useSftpTransfers.types";
 import { getParentPath, joinPath } from "./utils";
 
 export const useSftpTransfers = ({
+  ownerId,
+  canPrepareAdoption,
   getActivePane,
   getPaneByConnectionId,
   getTabByConnectionId,
@@ -35,11 +40,16 @@ export const useSftpTransfers = ({
   listRemoteFiles,
   handleSessionError,
 }: UseSftpTransfersParams): UseSftpTransfersResult => {
-  const [transfers, setTransfers] = useState<TransferTask[]>([]);
-  const [conflicts, setConflicts] = useState<FileConflict[]>([]);
+  const [transfers, setTransfers] = useState<TransferTask[]>(() => sftpTransferCenterStore.getOwnerTasks(ownerId));
+  const [conflicts, setConflicts] = useState<FileConflict[]>(() => sftpTransferCenterStore
+    .getOwnerTasks(ownerId)
+    .map((task) => task.conflict)
+    .filter((conflict): conflict is FileConflict => !!conflict));
 
   // Track cancelled task IDs for checking during async operations
   const cancelledTasksRef = useRef<Set<string>>(new Set());
+  const pausedTasksRef = useRef<Set<string>>(new Set());
+  const pauseWaitersRef = useRef<Map<string, Set<() => void>>>(new Map());
   // Track active child transfer IDs per parent (outside React state for immediate visibility)
   const activeChildIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const transfersRef = useRef(transfers);
@@ -51,6 +61,22 @@ export const useSftpTransfers = ({
 
   const clearCancelledTask = useCallback((taskId: string) => {
     cancelledTasksRef.current.delete(taskId);
+  }, []);
+
+  const waitUntilTransferResumed = useCallback(async (taskId: string) => {
+    if (!pausedTasksRef.current.has(taskId)) return;
+    await new Promise<void>((resolve) => {
+      const waiters = pauseWaitersRef.current.get(taskId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      pauseWaitersRef.current.set(taskId, waiters);
+    });
+  }, []);
+
+  const releasePausedTransfer = useCallback((taskId: string) => {
+    pausedTasksRef.current.delete(taskId);
+    const waiters = pauseWaitersRef.current.get(taskId);
+    pauseWaitersRef.current.delete(taskId);
+    for (const resolve of waiters ?? []) resolve();
   }, []);
 
   const resolveTaskEndpoints = useCallback((task: TransferTask) => {
@@ -67,6 +93,22 @@ export const useSftpTransfers = ({
       targetPane: targetTab.pane,
     };
   }, [getTabByConnectionId]);
+
+  const cleanupTaskArtifacts = useCallback(async (task: TransferTask) => {
+    const endpoints = resolveTaskEndpoints(task);
+    const targetPane = endpoints?.targetPane;
+    const targetSftpId = targetPane?.connection && !targetPane.connection.isLocal
+      ? sftpSessionsRef.current.get(targetPane.connection.id)
+      : undefined;
+    await netcattyBridge.get()?.cleanupTransferArtifacts?.({
+      transferId: task.id,
+      sourcePath: task.sourcePath,
+      targetPath: task.targetPath,
+      targetSftpId,
+      targetEncoding: targetPane?.filenameEncoding,
+      stagedTargetPath: task.stagedTargetPath,
+    });
+  }, [resolveTaskEndpoints, sftpSessionsRef]);
 
   const isTransferCancelledError = useCallback(
     (error: unknown): boolean =>
@@ -95,11 +137,15 @@ export const useSftpTransfers = ({
     setTransfers,
   });
 
-  const { statTargetPath, getDuplicateTarget, deleteTargetPath } = useSftpTransferConflictOps();
+  const { statTargetPath, getDuplicateTarget } = useSftpTransferConflictOps();
 
   const { estimateDirectoryBytes, transferFile, countDirectoryFiles, transferDirectory } = useSftpDirectoryTransferOps({
+    ownerId,
     cancelledTasksRef,
+    pausedTasksRef,
+    waitUntilTransferResumed,
     activeChildIdsRef,
+    transfersRef,
     setTransfers,
     listLocalFiles,
     listRemoteFiles,
@@ -228,8 +274,10 @@ export const useSftpTransfers = ({
       updateTask({
         status: "transferring",
         totalBytes: Math.max(task.totalBytes, 0),
-        transferredBytes: 0,
+        transferredBytes: task.checkpointBytes ?? 0,
         startTime: Date.now(),
+        phase: "transferring",
+        resumable: task.resumable !== false,
       });
 
       // Run size discovery and conflict check in parallel
@@ -354,19 +402,18 @@ export const useSftpTransfers = ({
 
         setConflicts((prev) => [...prev, conflict]);
         updateTask({
-          status: "pending",
+          status: "attention",
           totalBytes: conflict.newSize || task.totalBytes || 0,
+          conflict,
         });
-        return "pending";
+        return "attention";
       }
 
       logger.debug(`[SFTP:perf] starting actual transfer — file=${task.fileName} isDir=${task.isDirectory} — ${(performance.now() - t0).toFixed(0)}ms since start`);
+      await waitUntilTransferResumed(task.id);
+      if (cancelledTasksRef.current.has(task.id)) return "cancelled";
 
       let dirPartialFailure = false;
-
-      if (task.replaceExistingTarget) {
-        await deleteTargetPath(task, targetPane, targetSftpId, targetEncoding);
-      }
 
       // Same-host exec-based paths are only safe for UTF-8 compatible encodings.
       // "auto" is allowed here — the backend resolves it to the actual encoding
@@ -378,7 +425,7 @@ export const useSftpTransfers = ({
       // Try same-host directory optimization first; falls back to recursive transfer
       // if remote cp is unavailable (e.g. Windows SSH servers).
       let dirHandledBySameHost = false;
-      if (task.isDirectory && sameHost && encodingSafeForExec && sourceSftpId) {
+      if (task.isDirectory && task.resumable === false && sameHost && encodingSafeForExec && sourceSftpId) {
         if (cancelledTasksRef.current.has(task.id)) {
           throw new Error("Transfer cancelled");
         }
@@ -414,8 +461,14 @@ export const useSftpTransfers = ({
           }
         }).catch(() => {});
 
+        const stagedTargetPath = task.replaceExistingTarget
+          ? `${task.targetPath}.netcatty-${task.id.replace(/[^A-Za-z0-9_-]/g, "_")}.part`
+          : undefined;
+        const directoryTask = stagedTargetPath ? { ...task, targetPath: stagedTargetPath } : task;
+        if (stagedTargetPath) updateTask({ stagedTargetPath });
+
         const dirErrors = await transferDirectory(
-          task,
+          directoryTask,
           sourceSftpId,
           targetSftpId,
           sourcePane.connection!.isLocal,
@@ -428,6 +481,40 @@ export const useSftpTransfers = ({
 
         if (dirErrors > 0) {
           dirPartialFailure = true;
+        } else if (stagedTargetPath) {
+          const bridge = netcattyBridge.require();
+          const backupPath = `${task.targetPath}.netcatty-${task.id.replace(/[^A-Za-z0-9_-]/g, "_")}.backup`;
+          let backedUp = false;
+          try {
+            if (targetPane.connection!.isLocal) {
+              if (!bridge.renameLocalFile || !bridge.deleteLocalFile) throw new Error("Local directory replacement is unavailable");
+              try {
+                await bridge.renameLocalFile(task.targetPath, backupPath);
+                backedUp = true;
+              } catch { /* target may not exist */ }
+              await bridge.renameLocalFile(stagedTargetPath, task.targetPath);
+              if (backedUp) await bridge.deleteLocalFile(backupPath);
+            } else if (targetSftpId) {
+              if (!bridge.renameSftp || !bridge.deleteSftp) throw new Error("Remote directory replacement is unavailable");
+              try {
+                await bridge.renameSftp(targetSftpId, task.targetPath, backupPath, targetEncoding);
+                backedUp = true;
+              } catch { /* target may not exist */ }
+              try {
+                await bridge.renameSftp(targetSftpId, stagedTargetPath, task.targetPath, targetEncoding);
+              } catch (error) {
+                if (backedUp) await bridge.renameSftp(targetSftpId, backupPath, task.targetPath, targetEncoding).catch(() => {});
+                throw error;
+              }
+              if (backedUp) await bridge.deleteSftp(targetSftpId, backupPath, targetEncoding);
+            }
+            updateTask({ stagedTargetPath: undefined });
+          } catch (error) {
+            if (backedUp && targetPane.connection!.isLocal) {
+              await bridge.renameLocalFile?.(backupPath, task.targetPath).catch(() => {});
+            }
+            throw error;
+          }
         }
       } else if (!task.isDirectory) {
         await transferFile(
@@ -572,6 +659,7 @@ export const useSftpTransfers = ({
       const targetPath = options?.targetPath ?? targetPane.connection.currentPath;
       const sourceConnectionId = options?.sourceConnectionId ?? sourcePane.connection.id;
       const batchId = crypto.randomUUID();
+      const usesLegacyScp = sourcePane.connection.fileProtocol === "scp" || targetPane.connection.fileProtocol === "scp";
 
       const newTasks: TransferTask[] = [];
 
@@ -604,6 +692,10 @@ export const useSftpTransfers = ({
           targetPath: joinPath(targetPath, file.name),
           sourceConnectionId,
           targetConnectionId: targetPane.connection!.id,
+          sourceHostId: sourcePane.connection!.isLocal ? undefined : sourcePane.connection!.hostId,
+          sourceHostLabel: sourcePane.connection!.isLocal ? "Local" : sourcePane.connection!.hostLabel,
+          targetHostId: targetPane.connection!.isLocal ? undefined : targetPane.connection!.hostId,
+          targetHostLabel: targetPane.connection!.isLocal ? "Local" : targetPane.connection!.hostLabel,
           direction,
           status: "pending" as TransferStatus,
           totalBytes: fileSize,
@@ -613,6 +705,10 @@ export const useSftpTransfers = ({
           isDirectory: file.isDirectory,
           progressMode: file.isDirectory ? "files" : "bytes",
           sourceLastModified,
+          origin: "manual",
+          resumable: !usesLegacyScp,
+          pauseUnavailableReason: usesLegacyScp ? "This server uses legacy SCP; cancel and retry from the beginning instead" : undefined,
+          phase: file.isDirectory ? "scanning" : "transferring",
         });
       }
 
@@ -624,17 +720,15 @@ export const useSftpTransfers = ({
         }
       }
 
-      const results: TransferResult[] = [];
-
-      for (const task of newTasks) {
+      const results = await Promise.all(newTasks.map(async (task): Promise<TransferResult> => {
         const status = await processTransfer(task, sourcePane, targetPane, targetSide);
-        results.push({
+        return {
           id: task.id,
           fileName: task.fileName,
           originalFileName: task.originalFileName ?? task.fileName,
           status,
-        });
-      }
+        };
+      }));
 
       return results;
     },
@@ -644,8 +738,11 @@ export const useSftpTransfers = ({
 
   const cancelTransfer = useCallback(
     async (transferId: string) => {
+      const taskToCancel = transfersRef.current.find((task) => task.id === transferId);
       // Add to cancelled set so async operations can check
       cancelledTasksRef.current.add(transferId);
+      releasePausedTransfer(transferId);
+      globalSftpTransferScheduler.cancel(transferId);
 
       // Cancel parent + remove child tasks
       setTransfers((prev) => {
@@ -653,12 +750,13 @@ export const useSftpTransfers = ({
         const childIds = prev.filter((t) => t.parentTaskId === transferId && (t.status === "transferring" || t.status === "pending")).map((t) => t.id);
         for (const cid of childIds) {
           cancelledTasksRef.current.add(cid);
+          globalSftpTransferScheduler.cancel(cid);
         }
         return prev
           .filter((t) => t.parentTaskId !== transferId)
           .map((t) =>
             t.id === transferId
-              ? { ...t, status: "cancelled" as TransferStatus, endTime: Date.now() }
+              ? { ...t, status: "cancelled" as TransferStatus, endTime: Date.now(), conflict: undefined }
               : t,
           );
       });
@@ -666,15 +764,237 @@ export const useSftpTransfers = ({
       setConflicts((prev) => prev.filter((c) => c.transferId !== transferId));
 
       await cancelBackendTransfers([transferId]);
+      if (taskToCancel) await cleanupTaskArtifacts(taskToCancel);
 
     },
-    [cancelBackendTransfers],
+    [cancelBackendTransfers, cleanupTaskArtifacts, releasePausedTransfer],
   );
+
+  const pauseTransfer = useCallback(async (transferId: string) => {
+    const task = transfersRef.current.find((candidate) => candidate.id === transferId);
+    if (!task || task.status === "completed" || task.status === "cancelled") return;
+    const commitPauseState = (update: (candidate: TransferTask) => TransferTask) => {
+      const next = transfersRef.current.map((candidate) => candidate.id === transferId ? update(candidate) : candidate);
+      transfersRef.current = next;
+      setTransfers(next);
+      sftpTransferCenterStore.publishOwner(ownerId, next);
+    };
+    pausedTasksRef.current.add(transferId);
+    if (task.resumable === false) {
+      commitPauseState((candidate) => ({
+        ...candidate,
+        pauseUnavailableReason: candidate.pauseUnavailableReason ?? "Pause is unavailable for this transfer",
+      }));
+      return;
+    }
+    if (task.status === "pending" || task.status === "queued" || task.status === "interrupted") {
+      globalSftpTransferScheduler.pause(transferId);
+      commitPauseState((candidate) => ({ ...candidate, status: "paused" as TransferStatus, speed: 0 }));
+      return;
+    }
+    commitPauseState((candidate) => ({ ...candidate, status: "pausing" as TransferStatus }));
+    const isCompressedUpload = task.isDirectory && (
+      task.fileName.endsWith(" (compressed)")
+      || task.phase === "compressing"
+      || task.phase === "uploading"
+      || task.phase === "extracting"
+    );
+    if (isCompressedUpload) {
+      const result = await (netcattyBridge.get()?.pauseCompressedUpload?.(transferId)
+        ?? { success: false, reason: "Pause unavailable" });
+      commitPauseState((candidate) => (
+        result.success
+          ? { ...candidate, status: "paused" as TransferStatus, speed: 0, checkpointBytes: candidate.transferredBytes }
+          : { ...candidate, status: "transferring" as TransferStatus, pauseUnavailableReason: result.reason }
+      ));
+      return;
+    }
+    const childIds = [...(activeChildIdsRef.current.get(transferId) ?? [])];
+    const activeIds = task.isDirectory ? childIds : [transferId, ...childIds];
+    const backendIds = activeIds.filter((id) => !globalSftpTransferScheduler.pause(id));
+    if (activeIds.length === 0) {
+      commitPauseState((candidate) => ({ ...candidate, status: "paused" as TransferStatus, speed: 0 }));
+      return;
+    }
+    const results = await Promise.all(backendIds.map(async (id) => (
+      netcattyBridge.get()?.pauseTransfer?.(id) ?? { success: false, reason: "Pause unavailable" }
+    )));
+    const failed = results.find((result) => !result.success);
+    const checkpoint = results.find((result) => result.checkpointBytes !== undefined)?.checkpointBytes;
+    if (task.isDirectory) {
+      const backendResults = new Map(backendIds.map((id, index) => [id, results[index]]));
+      const next = transfersRef.current.map((candidate) => {
+        if (!activeIds.includes(candidate.id)) return candidate;
+        const result = backendResults.get(candidate.id);
+        if (result && !result.success) {
+          return {
+            ...candidate,
+            resumable: false,
+            pauseUnavailableReason: result.reason,
+          };
+        }
+        return {
+          ...candidate,
+          status: "paused" as TransferStatus,
+          speed: 0,
+          checkpointBytes: result?.checkpointBytes ?? candidate.checkpointBytes ?? candidate.transferredBytes,
+          resumeStage: result?.resumeStage ?? candidate.resumeStage,
+          downloadCheckpointBytes: result?.downloadCheckpointBytes ?? candidate.downloadCheckpointBytes,
+          uploadCheckpointBytes: result?.uploadCheckpointBytes ?? candidate.uploadCheckpointBytes,
+          sourceFingerprint: result?.sourceFingerprint ?? candidate.sourceFingerprint,
+        };
+      });
+      transfersRef.current = next;
+      setTransfers(next);
+      sftpTransferCenterStore.publishOwner(ownerId, next);
+    }
+    commitPauseState((candidate) => (
+      failed
+        ? {
+            ...candidate,
+            status: "transferring" as TransferStatus,
+            resumable: false,
+            pauseUnavailableReason: failed.reason,
+          }
+        : task.isDirectory
+          ? {
+            ...candidate,
+            status: "paused" as TransferStatus,
+            speed: 0,
+            checkpointBytes: undefined,
+            resumeStage: undefined,
+            downloadCheckpointBytes: undefined,
+            uploadCheckpointBytes: undefined,
+            sourceFingerprint: undefined,
+          }
+          : {
+            ...candidate,
+            status: "paused" as TransferStatus,
+            speed: 0,
+            checkpointBytes: checkpoint ?? candidate.transferredBytes,
+            resumeStage: results[0]?.resumeStage ?? candidate.resumeStage,
+            downloadCheckpointBytes: results[0]?.downloadCheckpointBytes ?? candidate.downloadCheckpointBytes,
+            uploadCheckpointBytes: results[0]?.uploadCheckpointBytes ?? candidate.uploadCheckpointBytes,
+            sourceFingerprint: results[0]?.sourceFingerprint ?? candidate.sourceFingerprint,
+          }
+    ));
+  }, [activeChildIdsRef, ownerId]);
+
+  const resumeTransfer = useCallback(async (transferId: string) => {
+    const task = transfersRef.current.find((candidate) => candidate.id === transferId);
+    if (!task || (
+      task.status !== "paused"
+      && task.status !== "interrupted"
+      && !(task.status === "failed" && (task.checkpointBytes ?? 0) > 0)
+    )) return;
+    releasePausedTransfer(transferId);
+    if (globalSftpTransferScheduler.resume(transferId)) {
+      setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+        ? { ...candidate, status: "queued" as TransferStatus, error: undefined }
+        : candidate));
+      return;
+    }
+    const isCompressedUpload = task.isDirectory && (
+      task.fileName.endsWith(" (compressed)")
+      || task.phase === "compressing"
+      || task.phase === "uploading"
+      || task.phase === "extracting"
+    );
+    if (isCompressedUpload) {
+      const result = await (netcattyBridge.get()?.resumeCompressedUpload?.(transferId)
+        ?? { success: false, reason: "Resume unavailable" });
+      if (result.success) {
+        setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+          ? { ...candidate, status: "transferring" as TransferStatus, pauseUnavailableReason: undefined }
+          : candidate));
+        return;
+      }
+      // After an app restart there is no in-memory compression worker. Rebuild
+      // the directory transfer from its persisted source, target, and child
+      // checkpoints instead of leaving it permanently stuck.
+    }
+    const childIds = [...(activeChildIdsRef.current.get(transferId) ?? [])];
+    const activeIds = task.isDirectory ? childIds : [transferId, ...childIds];
+    const backendIds = activeIds.filter((id) => !globalSftpTransferScheduler.resume(id));
+    if (activeIds.length === 0) {
+      const endpoints = resolveTaskEndpoints(task);
+      if (!endpoints) {
+        setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+          ? { ...candidate, status: "attention" as TransferStatus, error: "Reconnect the source and target before resuming" }
+          : candidate));
+        return;
+      }
+      const restartedTask = { ...task, status: "queued" as TransferStatus, error: undefined };
+      setTransfers((prev) => prev.map((candidate) => candidate.id === transferId ? restartedTask : candidate));
+      void processTransfer(restartedTask, endpoints.sourcePane, endpoints.targetPane, endpoints.targetSide);
+      return;
+    }
+    const results = await Promise.all(backendIds.map(async (id) => (
+      netcattyBridge.get()?.resumeTransfer?.(id) ?? { success: false, reason: "Resume unavailable" }
+    )));
+    if (backendIds.length < activeIds.length || results.some((result) => result.success)) {
+      setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+        ? { ...candidate, status: "transferring" as TransferStatus, pauseUnavailableReason: undefined }
+        : candidate));
+      return;
+    }
+
+    const endpoints = resolveTaskEndpoints(task);
+    if (!endpoints) {
+      setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+        ? { ...candidate, status: "attention" as TransferStatus, error: "Reconnect the source and target before resuming" }
+        : candidate));
+      return;
+    }
+    try {
+      const sourcePane = endpoints.sourcePane;
+      const sourceStat = sourcePane.connection?.isLocal
+        ? await netcattyBridge.get()?.statLocal?.(task.sourcePath)
+        : await (() => {
+            const sourceSftpId = sourcePane.connection
+              ? sftpSessionsRef.current.get(sourcePane.connection.id)
+              : undefined;
+            return sourceSftpId
+              ? netcattyBridge.get()?.statSftp?.(sourceSftpId, task.sourcePath, sourcePane.filenameEncoding)
+              : undefined;
+          })();
+      if (!sourceStat) throw new Error("Source is unavailable");
+      const validationError = validateTransferResumeSource(task, {
+        size: sourceStat.size,
+        lastModified: sourceStat.lastModified,
+      });
+      if (validationError) {
+        setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+          ? { ...candidate, status: "attention" as TransferStatus, error: validationError }
+          : candidate));
+        return;
+      }
+    } catch (error) {
+      setTransfers((prev) => prev.map((candidate) => candidate.id === transferId
+        ? { ...candidate, status: "attention" as TransferStatus, error: error instanceof Error ? error.message : String(error) }
+        : candidate));
+      return;
+    }
+    clearCancelledTask(task.id);
+    const resumedTask = { ...task, status: "queued" as TransferStatus, error: undefined, speed: 0 };
+    setTransfers((prev) => prev.map((candidate) => candidate.id === transferId ? resumedTask : candidate));
+    await processTransfer(resumedTask, endpoints.sourcePane, endpoints.targetPane, endpoints.targetSide);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- processTransfer reads current transfer refs
+  }, [activeChildIdsRef, clearCancelledTask, releasePausedTransfer, resolveTaskEndpoints]);
+
+  const prioritizeTransfer = useCallback((transferId: string) => {
+    globalSftpTransferScheduler.prioritize(transferId);
+    setTransfers((prev) => {
+      const nextPriority = prev.reduce((max, task) => Math.max(max, task.priority ?? 0), 0) + 1;
+      return prev.map((task) => task.id === transferId ? { ...task, priority: nextPriority } : task);
+    });
+  }, []);
 
   const retryTransfer = useCallback(
     async (transferId: string) => {
       const task = transfersRef.current.find((t) => t.id === transferId);
       if (!task || task.retryable === false) return;
+      await cleanupTaskArtifacts(task);
 
       const retriedTask: TransferTask = {
         ...task,
@@ -682,6 +1002,10 @@ export const useSftpTransfers = ({
         status: "pending" as TransferStatus,
         error: undefined,
         transferredBytes: 0,
+        checkpointBytes: 0,
+        resumeStage: undefined,
+        downloadCheckpointBytes: undefined,
+        uploadCheckpointBytes: undefined,
         speed: 0,
         startTime: Date.now(),
         endTime: undefined,
@@ -707,7 +1031,7 @@ export const useSftpTransfers = ({
       await processTransfer(retriedTask, sourcePane, targetPane, targetSide);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- processTransfer is defined inline
-    [resolveTaskEndpoints],
+    [cleanupTaskArtifacts, resolveTaskEndpoints],
   );
 
   const clearCompletedTransfers = useCallback(() => {
@@ -717,8 +1041,10 @@ export const useSftpTransfers = ({
   }, []);
 
   const dismissTransfer = useCallback((transferId: string) => {
+    const task = transfersRef.current.find((candidate) => candidate.id === transferId);
+    if (task) void cleanupTaskArtifacts(task);
     setTransfers((prev) => prev.filter((t) => t.id !== transferId && t.parentTaskId !== transferId));
-  }, []);
+  }, [cleanupTaskArtifacts]);
 
   const isTransferCancelled = useCallback((transferId: string) => {
     return cancelledTasksRef.current.has(transferId);
@@ -728,6 +1054,11 @@ export const useSftpTransfers = ({
     // Filter out any pending scanning tasks before adding the new task.
     // This ensures that even if dismissExternalUpload's state update hasn't been applied yet
     // (due to React state batching), the scanning placeholder will still be removed.
+    if (task.parentTaskId) {
+      const childIds = activeChildIdsRef.current.get(task.parentTaskId) ?? new Set<string>();
+      childIds.add(task.id);
+      activeChildIdsRef.current.set(task.parentTaskId, childIds);
+    }
     setTransfers((prev) => [
       ...prev.filter(t => !(t.status === "pending" && t.fileName === "Scanning files...")),
       task
@@ -735,8 +1066,23 @@ export const useSftpTransfers = ({
   }, []);
 
   const updateExternalUpload = useCallback((taskId: string, updates: Partial<TransferTask>) => {
+    const currentTask = transfersRef.current.find((task) => task.id === taskId);
+    if (currentTask?.parentTaskId && updates.status && ["completed", "failed", "cancelled"].includes(updates.status)) {
+      activeChildIdsRef.current.get(currentTask.parentTaskId)?.delete(taskId);
+    }
     setTransfers((prev) =>
       prev.map((t) => {
+        if (
+          currentTask?.parentTaskId
+          && t.id === currentTask.parentTaskId
+          && updates.resumable === false
+        ) {
+          return {
+            ...t,
+            resumable: false,
+            pauseUnavailableReason: updates.pauseUnavailableReason,
+          };
+        }
         if (t.id !== taskId) return t;
 
         const merged: TransferTask = { ...t, ...updates };
@@ -879,6 +1225,7 @@ export const useSftpTransfers = ({
                 endTime: Date.now(),
                 error: blockedErrors.get(t.id),
                 retryable: false,
+                conflict: undefined,
               }
             : t,
           ),
@@ -890,7 +1237,7 @@ export const useSftpTransfers = ({
         prev.map((t) => {
           const updatedTask = updatedTaskMap.get(t.id);
           return updatedTask
-            ? { ...updatedTask, status: "pending" as TransferStatus }
+            ? { ...updatedTask, status: "pending" as TransferStatus, conflict: undefined }
             : t;
         }),
       );
@@ -915,7 +1262,7 @@ export const useSftpTransfers = ({
   );
 
   const activeTransfersCount = useMemo(() => transfers.filter(
-    (t) => (t.status === "pending" || t.status === "transferring") && !t.parentTaskId,
+    (t) => !(["completed", "cancelled"] as TransferStatus[]).includes(t.status) && !t.parentTaskId,
   ).length, [transfers]);
 
   const downloadToLocal = useCallback(
@@ -946,6 +1293,9 @@ export const useSftpTransfers = ({
         isDirectory: params.isDirectory,
         progressMode: params.isDirectory ? "files" : "bytes",
         retryable: false,
+        origin: "manual",
+        resumable: true,
+        phase: "transferring",
       };
 
       setTransfers((prev) => [...prev, task]);
@@ -1048,6 +1398,52 @@ export const useSftpTransfers = ({
     [sftpSessionsRef],
   );
 
+  useEffect(() => {
+    sftpTransferCenterStore.publishOwner(ownerId, transfers);
+  }, [ownerId, transfers]);
+
+  const resolveAdoptionPanes = useCallback((task: TransferTask) => {
+    const panes = [getActivePane("left"), getActivePane("right")].filter((pane): pane is SftpPane => !!pane?.connection);
+    const sourcePane = panes.find((pane) => task.sourceHostId
+      ? pane.connection?.hostId === task.sourceHostId
+      : pane.connection?.isLocal);
+    const targetPane = panes.find((pane) => task.targetHostId
+      ? pane.connection?.hostId === task.targetHostId
+      : pane.connection?.isLocal);
+    return sourcePane && targetPane ? { sourcePane, targetPane } : null;
+  }, [getActivePane]);
+
+  const adoptInterruptedTransfer = useCallback(async (task: TransferTask) => {
+    const panes = resolveAdoptionPanes(task);
+    if (!panes?.sourcePane.connection || !panes.targetPane.connection) return;
+    const adoptedTask: TransferTask = {
+      ...task,
+      ownerId,
+      sourceConnectionId: panes.sourcePane.connection.id,
+      targetConnectionId: panes.targetPane.connection.id,
+    };
+    const nextTransfers = [
+      ...transfersRef.current.filter((candidate) => candidate.id !== task.id),
+      adoptedTask,
+    ];
+    transfersRef.current = nextTransfers;
+    setTransfers(nextTransfers);
+    if (task.status !== "attention") await resumeTransfer(task.id);
+  }, [ownerId, resolveAdoptionPanes, resumeTransfer]);
+
+  useEffect(() => sftpTransferCenterStore.registerOwner(ownerId, {
+    pause: pauseTransfer,
+    resume: resumeTransfer,
+    cancel: cancelTransfer,
+    retry: retryTransfer,
+    prioritize: prioritizeTransfer,
+    dismiss: dismissTransfer,
+    resolveConflict,
+    canAdopt: (task) => resolveAdoptionPanes(task) !== null,
+    canPrepareAdoption,
+    adopt: adoptInterruptedTransfer,
+  }), [adoptInterruptedTransfer, canPrepareAdoption, cancelTransfer, dismissTransfer, ownerId, pauseTransfer, prioritizeTransfer, resolveAdoptionPanes, resolveConflict, resumeTransfer, retryTransfer]);
+
   return {
     transfers,
     conflicts,
@@ -1057,6 +1453,9 @@ export const useSftpTransfers = ({
     addExternalUpload,
     updateExternalUpload,
     cancelTransfer,
+    pauseTransfer,
+    resumeTransfer,
+    prioritizeTransfer,
     isTransferCancelled,
     retryTransfer,
     clearCompletedTransfers,

@@ -30,12 +30,15 @@ export function listInvalidSftpPanelTabIds(params: {
   cleanupTimerTabIds: Iterable<string>;
   validTabIds: ReadonlySet<string>;
 }): string[] {
+  const activeTransferTabIds = new Set(params.activeTransferTabIds);
   const trackedTabIds = new Set([
     ...params.mountedTabIds,
-    ...params.activeTransferTabIds,
+    ...activeTransferTabIds,
     ...params.retainedTabIds,
     ...params.openingTabIds,
     ...params.cleanupTimerTabIds,
   ]);
-  return [...trackedTabIds].filter((tabId) => !params.validTabIds.has(tabId));
+  return [...trackedTabIds].filter((tabId) => (
+    !params.validTabIds.has(tabId) && !activeTransferTabIds.has(tabId)
+  ));
 }

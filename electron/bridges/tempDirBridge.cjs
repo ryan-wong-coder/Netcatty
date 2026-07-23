@@ -342,6 +342,13 @@ function getTempFilePath(fileName) {
   return path.join(tempDir, `${timestamp}_${tempFileCounter}_${safeFileName}`);
 }
 
+function getTransferTempFilePath(transferId, fileName) {
+  const tempDir = getTempDir();
+  const safeTransferId = String(transferId || "transfer").replace(/[^A-Za-z0-9_-]/g, "_");
+  const safeFileName = String(fileName || "file").replace(/[<>:"/\\|?*]/g, "_");
+  return path.join(tempDir, `.transfer_${safeTransferId}_${safeFileName}.part`);
+}
+
 function isNetcattyTempPath(filePath) {
   if (typeof filePath !== "string" || !filePath) return false;
   const tempDir = path.resolve(getTempDir());
@@ -1020,6 +1027,7 @@ module.exports = {
   getTempDirInfo,
   clearTempDir,
   getTempFilePath,
+  getTransferTempFilePath,
   cleanupExpiredToolOutputFiles,
   registerHandlers,
   resolvePrivateTempDir,

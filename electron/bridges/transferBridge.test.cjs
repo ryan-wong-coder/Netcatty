@@ -3,9 +3,12 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { EventEmitter } = require("node:events");
+const { PassThrough, Readable, Writable } = require("node:stream");
 
 const transferBridge = require("./transferBridge.cjs");
+const tempDirBridge = require("./tempDirBridge.cjs");
 
 function createSender() {
   return {
@@ -588,4 +591,282 @@ test("SFTP downloads cancelled while opening do not block the session", async (t
   ]);
   assert.equal(next.error, undefined);
   assert.equal(openCalls, 2);
+});
+
+test("resumable stream transfers pause without losing their checkpoint and continue", async (t) => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-pause-test-"));
+  t.after(async () => {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const source = new PassThrough();
+  const sink = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+  let readStreamCalls = 0;
+  const sftp = createFastSftp({
+    createReadStream() {
+      readStreamCalls += 1;
+      return readStreamCalls === 1 ? source : Readable.from(Buffer.from("abcdef"));
+    },
+    createWriteStream() { return sink; },
+  });
+  const client = {
+    sftp,
+    stat() { return Promise.resolve({ size: 6 }); },
+    client: { sftp(callback) { callback(new Error("isolated channel unavailable")); } },
+  };
+  transferBridge.init({ sftpClients: new Map([["source", client]]) });
+
+  const sender = createSender();
+  const running = transferBridge.startTransfer(
+    { sender },
+    {
+      transferId: "download-paused",
+      sourcePath: "/tmp/source.bin",
+      targetPath: path.join(tempDir, "target.bin"),
+      sourceType: "sftp",
+      targetType: "local",
+      sourceSftpId: "source",
+      totalBytes: 6,
+      resumable: true,
+    },
+  );
+
+  const readyDeadline = Date.now() + 1000;
+  while (source.listenerCount("data") === 0 && Date.now() < readyDeadline) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(source.listenerCount("data") > 0);
+  source.write(Buffer.from("abc"));
+  await new Promise((resolve) => setImmediate(resolve));
+  const paused = await transferBridge.pauseTransfer(null, { transferId: "download-paused" });
+  assert.deepEqual(paused, {
+    success: true,
+    checkpointBytes: 3,
+    resumeStage: "direct",
+    downloadCheckpointBytes: 0,
+    uploadCheckpointBytes: 0,
+    sourceFingerprint: `sha256:${crypto.createHash("sha256").update("abcdef").digest("hex")}`,
+  });
+
+  source.write(Buffer.from("def"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    await transferBridge.pauseTransfer(null, { transferId: "download-paused" }),
+    {
+      success: true,
+      checkpointBytes: 3,
+      resumeStage: "direct",
+      downloadCheckpointBytes: 0,
+      uploadCheckpointBytes: 0,
+      sourceFingerprint: `sha256:${crypto.createHash("sha256").update("abcdef").digest("hex")}`,
+    },
+  );
+
+  assert.deepEqual(await transferBridge.resumeTransfer(null, { transferId: "download-paused" }), { success: true });
+  source.end();
+  assert.equal((await running).error, undefined);
+});
+
+test("resumable downloads never promote a partial staged file", async (t) => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-partial-test-"));
+  t.after(async () => {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const targetPath = path.join(tempDir, "target.bin");
+  await fs.promises.writeFile(targetPath, Buffer.from("original"));
+  const source = new PassThrough();
+  const sftp = createFastSftp({ createReadStream() { return source; } });
+  const client = {
+    sftp,
+    stat() { return Promise.resolve({ size: 6 }); },
+    client: { sftp(callback) { callback(new Error("isolated channel unavailable")); } },
+  };
+  transferBridge.init({ sftpClients: new Map([["source", client]]) });
+
+  const sender = createSender();
+  const running = transferBridge.startTransfer(
+    { sender },
+    {
+      transferId: "download-partial",
+      sourcePath: "/tmp/source.bin",
+      targetPath,
+      sourceType: "sftp",
+      targetType: "local",
+      sourceSftpId: "source",
+      totalBytes: 6,
+      resumable: true,
+    },
+  );
+  const readyDeadline = Date.now() + 1000;
+  while (source.listenerCount("data") === 0 && Date.now() < readyDeadline) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  source.end(Buffer.from("abc"));
+
+  const result = await running;
+  assert.match(result.error || "", /full source|size mismatch/i);
+  assert.equal(await fs.promises.readFile(targetPath, "utf8"), "original");
+  assert.equal(sender.sent.some((entry) => entry.channel === "netcatty:transfer:complete"), false);
+});
+
+test("old-style transfers explicitly reject pause", async () => {
+  transferBridge.init({ sftpClients: new Map() });
+  assert.deepEqual(
+    await transferBridge.pauseTransfer(null, { transferId: "missing" }),
+    { success: false, reason: "Transfer is no longer active" },
+  );
+});
+
+test("server-to-server upload resume uses its own checkpoint instead of overall progress", async (t) => {
+  const transferId = `server-copy-${crypto.randomUUID()}`;
+  const sourcePath = "/source/payload.bin";
+  const targetPath = "/target/payload.bin";
+  const payload = Buffer.from("abcdef");
+  const localStage = tempDirBridge.getTransferTempFilePath(transferId, "payload.bin");
+  await fs.promises.writeFile(localStage, payload);
+  t.after(async () => { await fs.promises.unlink(localStage).catch(() => {}); });
+
+  let remote = Buffer.alloc(0);
+  let promoted = false;
+  const targetSftp = createFastSftp({
+    createWriteStream(_path, options = {}) {
+      const start = options.start || 0;
+      return new Writable({
+        write(chunk, _encoding, callback) {
+          if (remote.length < start) remote = Buffer.concat([remote, Buffer.alloc(start - remote.length)]);
+          remote = Buffer.concat([remote.subarray(0, start), Buffer.from(chunk)]);
+          callback();
+        },
+      });
+    },
+  });
+  const sourceClient = { sftp: createFastSftp({}), stat: async () => ({ size: payload.length }) };
+  const targetClient = {
+    sftp: targetSftp,
+    stat: async () => ({ size: remote.length }),
+    rename: async () => { promoted = true; },
+    delete: async () => {},
+  };
+  transferBridge.init({ sftpClients: new Map([["source", sourceClient], ["target", targetClient]]) });
+
+  const result = await transferBridge.startTransfer({ sender: createSender() }, {
+    transferId,
+    sourcePath,
+    targetPath,
+    sourceType: "sftp",
+    targetType: "sftp",
+    sourceSftpId: "source",
+    targetSftpId: "target",
+    totalBytes: payload.length,
+    resumable: true,
+    resumeStage: "upload",
+    checkpointBytes: payload.length / 2,
+    downloadCheckpointBytes: payload.length,
+    uploadCheckpointBytes: 0,
+  });
+
+  assert.equal(result.error, undefined);
+  assert.deepEqual(remote, payload);
+  assert.equal(promoted, true);
+});
+
+test("resume rejects a same-size temporary prefix that does not match the source", async (t) => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-prefix-test-"));
+  t.after(async () => { await fs.promises.rm(tempDir, { recursive: true, force: true }); });
+  const transferId = `prefix-${crypto.randomUUID()}`;
+  const sourcePath = path.join(tempDir, "source.bin");
+  const targetPath = path.join(tempDir, "target.bin");
+  const stagedPath = tempDirBridge.getTransferTempFilePath(transferId, "target.bin");
+  await fs.promises.writeFile(sourcePath, Buffer.from("abcdef"));
+  await fs.promises.writeFile(stagedPath, Buffer.from("xyz"));
+  t.after(async () => { await fs.promises.unlink(stagedPath).catch(() => {}); });
+
+  transferBridge.init({ sftpClients: new Map() });
+  const result = await transferBridge.startTransfer({ sender: createSender() }, {
+    transferId,
+    sourcePath,
+    targetPath,
+    sourceType: "local",
+    targetType: "local",
+    totalBytes: 6,
+    resumable: true,
+    checkpointBytes: 3,
+  });
+
+  assert.match(result.error || "", /saved content does not match/i);
+  assert.equal(await fs.promises.readFile(sourcePath, "utf8"), "abcdef");
+});
+
+test("bridge admission applies one global concurrency limit across callers", async (t) => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-admission-test-"));
+  t.after(async () => { await fs.promises.rm(tempDir, { recursive: true, force: true }); });
+  const firstSource = new PassThrough();
+  const secondSource = new PassThrough();
+  const sftp = createFastSftp({
+    createReadStream(remotePath) {
+      return remotePath === "/first" ? firstSource : secondSource;
+    },
+  });
+  const client = { sftp, stat: async () => ({ size: 1 }) };
+  transferBridge.init({ sftpClients: new Map([["source", client]]) });
+
+  const start = (id, remotePath) => transferBridge.startTransfer({ sender: createSender() }, {
+    transferId: id,
+    sourcePath: remotePath,
+    targetPath: path.join(tempDir, `${id}.bin`),
+    sourceType: "sftp",
+    targetType: "local",
+    sourceSftpId: "source",
+    totalBytes: 1,
+    resumable: true,
+    globalConcurrency: 1,
+  });
+  const first = start("admission-first", "/first");
+  while (firstSource.listenerCount("data") === 0) await new Promise((resolve) => setImmediate(resolve));
+  const second = start("admission-second", "/second");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(secondSource.listenerCount("data"), 0);
+  firstSource.end(Buffer.from("a"));
+  assert.equal((await first).error, undefined);
+  while (secondSource.listenerCount("data") === 0) await new Promise((resolve) => setImmediate(resolve));
+  secondSource.end(Buffer.from("b"));
+  assert.equal((await second).error, undefined);
+});
+
+test("queued admission jobs can be paused, resumed, prioritized, and cancelled before opening a stream", async (t) => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-queued-controls-"));
+  t.after(async () => { await fs.promises.rm(tempDir, { recursive: true, force: true }); });
+  const firstSource = new PassThrough();
+  const secondSource = new PassThrough();
+  const sftp = createFastSftp({
+    createReadStream(remotePath) {
+      return remotePath === "/first" ? firstSource : secondSource;
+    },
+  });
+  transferBridge.init({ sftpClients: new Map([["source", { sftp, stat: async () => ({ size: 1 }) }]]) });
+  const start = (id, remotePath) => transferBridge.startTransfer({ sender: createSender() }, {
+    transferId: id,
+    sourcePath: remotePath,
+    targetPath: path.join(tempDir, `${id}.bin`),
+    sourceType: "sftp",
+    targetType: "local",
+    sourceSftpId: "source",
+    totalBytes: 1,
+    resumable: true,
+    globalConcurrency: 1,
+  });
+
+  const first = start("queued-control-first", "/first");
+  while (firstSource.listenerCount("data") === 0) await new Promise((resolve) => setImmediate(resolve));
+  const second = start("queued-control-second", "/second");
+  assert.equal((await transferBridge.pauseTransfer(null, { transferId: "queued-control-second" })).success, true);
+  assert.equal(secondSource.listenerCount("data"), 0);
+  assert.equal((await transferBridge.resumeTransfer(null, { transferId: "queued-control-second" })).success, true);
+  assert.equal((await transferBridge.prioritizeTransfer(null, { transferId: "queued-control-second" })).success, true);
+  assert.equal((await transferBridge.cancelTransfer(null, { transferId: "queued-control-second" })).success, true);
+  assert.equal((await second).cancelled, true);
+  firstSource.end(Buffer.from("a"));
+  assert.equal((await first).error, undefined);
+  assert.equal(secondSource.listenerCount("data"), 0);
 });

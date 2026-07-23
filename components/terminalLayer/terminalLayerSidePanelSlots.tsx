@@ -148,6 +148,7 @@ function SidePanelSftpSlotInner({
   return (
     <div className={sidePanelHiddenPanelClassName(!isVisible)}>
       <SftpSidePanel
+        transferOwnerId={`terminal:${tabId}`}
         hosts={effectiveHosts}
         writableHosts={hosts}
         sessions={sessions}

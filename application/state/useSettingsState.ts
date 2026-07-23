@@ -319,6 +319,9 @@ export const useSettingsState = (options: { enableSettingsSync?: boolean; enable
       localStorageAdapter.readNumber(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY),
     );
   });
+  useEffect(() => {
+    void netcattyBridge.get()?.setGlobalTransferConcurrency?.(sftpTransferConcurrency);
+  }, [sftpTransferConcurrency]);
 
   // Editor Settings
   const [editorWordWrap, setEditorWordWrapState] = useState<boolean>(() => {
@@ -585,6 +588,7 @@ export const useSettingsState = (options: { enableSettingsSync?: boolean; enable
     const clamped = Math.max(1, Math.min(16, Math.round(value)));
     setSftpTransferConcurrencyState(clamped);
     localStorageAdapter.writeString(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY, String(clamped));
+    void netcattyBridge.get()?.setGlobalTransferConcurrency?.(clamped);
     notifySettingsChanged(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY, clamped);
   }, [notifySettingsChanged]);
 

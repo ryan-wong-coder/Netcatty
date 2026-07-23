@@ -674,7 +674,15 @@ ipcRenderer.on("netcatty:transfer:progress", (_event, payload) => {
   const cb = transferProgressListeners.get(payload.transferId);
   if (cb) {
     try {
-      cb(payload.transferred, payload.totalBytes, payload.speed);
+      cb(payload.transferred, payload.totalBytes, payload.speed, {
+        resumeStage: payload.resumeStage,
+        checkpointBytes: payload.checkpointBytes,
+        downloadCheckpointBytes: payload.downloadCheckpointBytes,
+        uploadCheckpointBytes: payload.uploadCheckpointBytes,
+        sourceFingerprint: payload.sourceFingerprint,
+        resumable: payload.resumable,
+        pauseUnavailableReason: payload.pauseUnavailableReason,
+      });
     } catch (err) {
       console.error("Transfer progress callback failed", err);
     }

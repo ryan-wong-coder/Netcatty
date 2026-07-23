@@ -36,6 +36,7 @@ export const useSftpState = (
   identities: Identity[],
   options?: SftpStateOptions
 ) => {
+  const transferOwnerIdRef = useRef(options?.transferOwnerId ?? crypto.randomUUID());
   const createPane = useCallback(
     (id?: string, showHiddenFiles = options?.defaultShowHiddenFiles ?? false) =>
       createEmptyPane(id, showHiddenFiles),
@@ -304,12 +305,17 @@ export const useSftpState = (
     addExternalUpload,
     updateExternalUpload,
     cancelTransfer,
+    pauseTransfer,
+    resumeTransfer,
+    prioritizeTransfer,
     isTransferCancelled,
     retryTransfer,
     clearCompletedTransfers,
     dismissTransfer,
     resolveConflict: resolveTransferConflict,
   } = useSftpTransfers({
+    ownerId: transferOwnerIdRef.current,
+    canPrepareAdoption: options?.canPrepareTransferAdoption,
     getActivePane,
     getPaneByConnectionId,
     getTabByConnectionId,
@@ -340,6 +346,7 @@ export const useSftpState = (
     uploadConflicts,
     resolveUploadConflict,
   } = useSftpExternalOperations({
+    ownerId: transferOwnerIdRef.current,
     getActivePane,
     getPaneByConnectionId,
     refresh,
@@ -421,6 +428,9 @@ export const useSftpState = (
     addExternalUpload,
     updateExternalUpload,
     cancelTransfer,
+    pauseTransfer,
+    resumeTransfer,
+    prioritizeTransfer,
     retryTransfer,
     clearCompletedTransfers,
     dismissTransfer,
@@ -561,6 +571,9 @@ export const useSftpState = (
     addExternalUpload: (...args: Parameters<typeof addExternalUpload>) => methodsRef.current.addExternalUpload(...args),
     updateExternalUpload: (...args: Parameters<typeof updateExternalUpload>) => methodsRef.current.updateExternalUpload(...args),
     cancelTransfer: (...args: Parameters<typeof cancelTransfer>) => methodsRef.current.cancelTransfer(...args),
+    pauseTransfer: (...args: Parameters<typeof pauseTransfer>) => methodsRef.current.pauseTransfer(...args),
+    resumeTransfer: (...args: Parameters<typeof resumeTransfer>) => methodsRef.current.resumeTransfer(...args),
+    prioritizeTransfer: (...args: Parameters<typeof prioritizeTransfer>) => methodsRef.current.prioritizeTransfer(...args),
     retryTransfer: (...args: Parameters<typeof retryTransfer>) => methodsRef.current.retryTransfer(...args),
     clearCompletedTransfers: () => methodsRef.current.clearCompletedTransfers(),
     dismissTransfer: (...args: Parameters<typeof dismissTransfer>) => methodsRef.current.dismissTransfer(...args),

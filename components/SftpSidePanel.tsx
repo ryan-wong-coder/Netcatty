@@ -60,6 +60,7 @@ import { listSftpConnectedHosts, sftpPickerSessionsEqual } from "../domain/sftpC
 import type { TerminalSession } from "../domain/models";
 
 interface SftpSidePanelProps {
+  transferOwnerId: string;
   hosts: Host[];
   writableHosts?: Host[];
   sessions?: TerminalSession[];
@@ -108,6 +109,7 @@ interface SftpSidePanelProps {
 }
 
 const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
+  transferOwnerId,
   hosts,
   writableHosts,
   sessions = [],
@@ -166,13 +168,15 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
 
   const sftpOptions = useMemo(() => ({
     ...fileWatchHandlers,
+    transferOwnerId,
+    canPrepareTransferAdoption: true,
     useCompressedUpload: sftpUseCompressedUpload,
     defaultShowHiddenFiles: sftpShowHiddenFiles,
     autoConnectLocalOnMount: false,
     terminalSettings,
     knownHosts,
     onAddKnownHost,
-  }), [fileWatchHandlers, sftpUseCompressedUpload, sftpShowHiddenFiles, terminalSettings, knownHosts, onAddKnownHost]);
+  }), [fileWatchHandlers, transferOwnerId, sftpUseCompressedUpload, sftpShowHiddenFiles, terminalSettings, knownHosts, onAddKnownHost]);
 
   const sftp = useSftpState(hosts, keys, identities, sftpOptions);
   const {
@@ -189,6 +193,41 @@ const SftpSidePanelInner: React.FC<SftpSidePanelProps> = ({
 
   const sftpRef = useRef(sftp);
   sftpRef.current = sftp;
+
+  useEffect(() => {
+    let connecting = false;
+    const handler = async (event: Event) => {
+      if (connecting) return;
+      const detail = (event as CustomEvent<{ task: TransferTask; targetOwnerId: string }>).detail;
+      if (detail?.targetOwnerId !== transferOwnerId) return;
+      const task = detail.task;
+      if (!task) return;
+      const source = task.sourceHostId
+        ? hosts.find((host) => host.id === task.sourceHostId)
+        : "local";
+      const target = task.targetHostId
+        ? hosts.find((host) => host.id === task.targetHostId)
+        : "local";
+      if (!source || !target) return;
+      connecting = true;
+      try {
+        const sourceDirectory = task.isDirectory ? task.sourcePath : getParentPath(task.sourcePath);
+        const targetDirectory = task.isDirectory ? task.targetPath : getParentPath(task.targetPath);
+        await sftpRef.current.connect("left", source, {
+          forceNewTab: true,
+          initialPath: sourceDirectory,
+        });
+        await sftpRef.current.connect("right", target, {
+          forceNewTab: true,
+          initialPath: targetDirectory,
+        });
+      } finally {
+        connecting = false;
+      }
+    };
+    window.addEventListener("netcatty:prepare-sftp-transfer-resume", handler);
+    return () => window.removeEventListener("netcatty:prepare-sftp-transfer-resume", handler);
+  }, [hosts, transferOwnerId]);
 
   useLayoutEffect(() => {
     onActiveTransfersChange?.(sftp.activeTransfersCount);

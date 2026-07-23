@@ -1,4 +1,4 @@
-import type { RemoteFile, SftpFilenameEncoding } from "../../types";
+import type { RemoteFile, SftpFilenameEncoding, TransferDirection } from "../../types";
 
 declare global {
   interface NetcattyBridge {
@@ -53,6 +53,8 @@ declare global {
       onError?: (error: string) => void
     ): Promise<{ compressionId: string; success?: boolean; error?: string }>;
     cancelCompressedUpload?(compressionId: string): Promise<{ success: boolean }>;
+    pauseCompressedUpload?(compressionId: string): Promise<{ success: boolean; deferred?: boolean; reason?: string }>;
+    resumeCompressedUpload?(compressionId: string): Promise<{ success: boolean; reason?: string }>;
     checkCompressedUploadSupport?(sftpId: string): Promise<{
       supported: boolean;
       localTar: boolean;
@@ -76,11 +78,65 @@ declare global {
         sourceEncoding?: SftpFilenameEncoding;
         targetEncoding?: SftpFilenameEncoding;
         sameHost?: boolean;
+        resumable?: boolean;
+        checkpointBytes?: number;
+        resumeStage?: 'direct' | 'download' | 'upload';
+        downloadCheckpointBytes?: number;
+        uploadCheckpointBytes?: number;
+        sourceFingerprint?: string;
+        resumable?: boolean;
+        pauseUnavailableReason?: string;
+        globalConcurrency?: number;
       },
-      onProgress?: (transferred: number, total: number, speed: number) => void,
+      onProgress?: (transferred: number, total: number, speed: number, checkpoint?: {
+        resumeStage?: 'direct' | 'download' | 'upload';
+        checkpointBytes?: number;
+        downloadCheckpointBytes?: number;
+        uploadCheckpointBytes?: number;
+        sourceFingerprint?: string;
+      }) => void,
       onComplete?: () => void,
       onError?: (error: string) => void
     ): Promise<{ transferId: string; totalBytes?: number; error?: string }>;
+    pauseTransfer?(transferId: string): Promise<{
+      success: boolean;
+      checkpointBytes?: number;
+      resumeStage?: 'direct' | 'download' | 'upload';
+      downloadCheckpointBytes?: number;
+      uploadCheckpointBytes?: number;
+      sourceFingerprint?: string;
+      sessionId?: string;
+      reason?: string;
+    }>;
+    resumeTransfer?(transferId: string): Promise<{ success: boolean; reason?: string }>;
+    prioritizeTransfer?(transferId: string): Promise<{ success: boolean }>;
+    setGlobalTransferConcurrency?(limit: number): Promise<{ success: boolean; limit: number }>;
+    cleanupTransferArtifacts?(payload: {
+      transferId: string;
+      sourcePath: string;
+      targetPath: string;
+      targetSftpId?: string;
+      targetEncoding?: SftpFilenameEncoding;
+      stagedTargetPath?: string;
+    }): Promise<{ success: boolean }>;
+    onGlobalSftpTransferEvent?(callback: (event: {
+      type: 'queued' | 'started' | 'progress' | 'paused' | 'resumed' | 'cancelled' | 'completed' | 'failed';
+      transferId: string;
+      direction?: TransferDirection;
+      sourcePath?: string;
+      targetPath?: string;
+      startedAt?: number;
+      endedAt?: number;
+      error?: string;
+      transferred?: number;
+      totalBytes?: number;
+      speed?: number;
+      checkpointBytes?: number;
+      resumeStage?: 'direct' | 'download' | 'upload';
+      downloadCheckpointBytes?: number;
+      uploadCheckpointBytes?: number;
+      sourceFingerprint?: string;
+    }) => void): () => void;
 
     // Local filesystem operations
     listLocalDir?(path: string): Promise<RemoteFile[]>;

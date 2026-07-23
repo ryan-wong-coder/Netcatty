@@ -50,6 +50,17 @@ test("closing a terminal tab finds every retained SFTP resource for cleanup", ()
   }), ["closed-tab"]);
 });
 
+test("closing a terminal tab keeps its hidden SFTP owner mounted until active transfers finish", () => {
+  assert.deepEqual(listInvalidSftpPanelTabIds({
+    mountedTabIds: ["closed-tab"],
+    activeTransferTabIds: ["closed-tab"],
+    retainedTabIds: [],
+    openingTabIds: [],
+    cleanupTimerTabIds: [],
+    validTabIds: new Set(),
+  }), []);
+});
+
 test("a reopening panel is not cleared before its open state commits", () => {
   assert.equal(shouldClearSftpPanelAfterTransferChange({
     activeTransfersCount: 0,

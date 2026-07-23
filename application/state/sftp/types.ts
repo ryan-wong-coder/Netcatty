@@ -75,6 +75,8 @@ export interface FileWatchErrorEvent {
 }
 
 export interface SftpStateOptions {
+  transferOwnerId?: string;
+  canPrepareTransferAdoption?: boolean;
   onFileWatchSynced?: (event: FileWatchSyncedEvent) => void;
   onFileWatchError?: (event: FileWatchErrorEvent) => void;
   useCompressedUpload?: boolean;

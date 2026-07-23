@@ -5,6 +5,7 @@ import type { DropEntry } from "../../../lib/sftpFileUtils";
 import type { SftpPane } from "./types";
 
 export interface UseSftpExternalOperationsParams {
+  ownerId: string;
   getActivePane: (side: "left" | "right") => SftpPane | null;
   getPaneByConnectionId: (connectionId: string) => SftpPane | null;
   refresh: (side: "left" | "right", options?: { tabId?: string }) => Promise<void>;

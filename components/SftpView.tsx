@@ -117,6 +117,7 @@ const SftpViewInner: React.FC<SftpViewProps> = ({
 
   const sftpOptions = useMemo(() => ({
     ...fileWatchHandlers,
+    transferOwnerId: "main-sftp-view",
     useCompressedUpload: sftpUseCompressedUpload,
     defaultShowHiddenFiles: sftpShowHiddenFiles,
     terminalSettings,

@@ -35,6 +35,8 @@ const renderTransferItem = (
       React.createElement(SftpTransferItem, {
         task,
         onCancel: () => {},
+        onPause: () => {},
+        onResume: () => {},
         onRetry: () => {},
         onDismiss: () => {},
         ...props,
@@ -59,6 +61,18 @@ test("renders active transfer cancel action with an item-specific label", () => 
   });
 
   assert.match(markup, /aria-label="Cancel: archive\.tar\.gz"/);
+  assert.match(markup, /aria-label="Pause: archive\.tar\.gz"/);
+});
+
+test("renders paused transfer resume action", () => {
+  const markup = renderTransferItem({
+    ...baseTask,
+    status: "paused",
+    error: undefined,
+    resumable: true,
+  });
+
+  assert.match(markup, /aria-label="Resume: archive\.tar\.gz"/);
 });
 
 test("renders child resize handle as a keyboard-reachable separator", () => {

@@ -40,6 +40,15 @@ const formatUploadError = (error: unknown): string =>
 const getDropEntrySize = (entry: DropEntry): number => entry.file?.size ?? entry.size ?? 0;
 const getDropEntryLocalPath = (entry: DropEntry): string | undefined =>
   entry.localPath ?? (entry.file as (File & { path?: string }) | null | undefined)?.path;
+const getRootDropLocalPath = (rootName: string, entries: DropEntry[]): string | undefined => {
+  const entry = entries.find((candidate) => getDropEntryLocalPath(candidate));
+  const localPath = entry ? getDropEntryLocalPath(entry) : undefined;
+  if (!entry || !localPath) return undefined;
+  const normalizedLocal = localPath.replace(/\\/g, "/");
+  const normalizedRelative = entry.relativePath.replace(/\\/g, "/");
+  if (!normalizedLocal.endsWith(normalizedRelative)) return localPath;
+  return `${normalizedLocal.slice(0, -normalizedRelative.length)}${rootName}`;
+};
 const isUploadableFileEntry = (entry: DropEntry): boolean =>
   !entry.isDirectory && (!!entry.file || !!getDropEntryLocalPath(entry));
 
@@ -611,6 +620,7 @@ async function uploadEntries(
         speed: 0,
         fileCount,
         completedCount: 0,
+        sourcePath: getRootDropLocalPath(rootName, groupEntries),
       });
       pendingTaskIds.add(bundleTaskId);
     }
@@ -637,12 +647,21 @@ async function uploadEntries(
 
     // Progress callback factory for both stream and memory paths
     const makeOnProgress = () => {
-      let pendingProgressUpdate: { transferred: number; total: number; speed: number } | null = null;
+      let pendingProgressUpdate: {
+        transferred: number;
+        total: number;
+        speed: number;
+        resumable?: boolean;
+        pauseUnavailableReason?: string;
+      } | null = null;
       let rafScheduled = false;
 
-      return (transferred: number, total: number, speed: number) => {
+      return (transferred: number, total: number, speed: number, capability?: {
+        resumable?: boolean;
+        pauseUnavailableReason?: string;
+      }) => {
         if (controller?.isCancelled()) return;
-        pendingProgressUpdate = { transferred, total, speed };
+        pendingProgressUpdate = { transferred, total, speed, ...capability };
 
         if (!rafScheduled) {
           rafScheduled = true;
@@ -658,6 +677,8 @@ async function uploadEntries(
                 total: update.total,
                 speed: update.speed,
                 percent: update.total > 0 ? (update.transferred / update.total) * 100 : 0,
+                resumable: update.resumable,
+                pauseUnavailableReason: update.pauseUnavailableReason,
               });
             }
           });
@@ -667,7 +688,7 @@ async function uploadEntries(
 
     if (localFilePath && bridge.startStreamTransfer && (!isLocal ? !!sftpId : true)) {
         const onProgress = makeOnProgress();
-        const fileTransferId = crypto.randomUUID();
+        const fileTransferId = standaloneTransferId;
         controller?.addActiveTransfer(fileTransferId);
 
         let streamResult: { transferId: string; totalBytes?: number; error?: string; cancelled?: boolean } | undefined;
@@ -681,6 +702,8 @@ async function uploadEntries(
               targetType: isLocal ? 'local' : 'sftp',
               targetSftpId: isLocal ? undefined : sftpId,
               totalBytes: fileTotalBytes,
+              resumable: true,
+              checkpointBytes: 0,
             },
             onProgress,
             undefined,
@@ -708,7 +731,7 @@ async function uploadEntries(
         } else if (sftpId) {
           if (bridge.writeSftpBinaryWithProgress) {
             const onProgress = makeOnProgress();
-            const fileTransferId = crypto.randomUUID();
+            const fileTransferId = standaloneTransferId;
             controller?.addActiveTransfer(fileTransferId);
 
             let result;
@@ -770,6 +793,7 @@ async function uploadEntries(
           speed: 0,
           fileCount: 1,
           completedCount: 0,
+          sourcePath: getDropEntryLocalPath(entry),
         });
         pendingTaskIds.add(taskId);
       }
@@ -791,6 +815,7 @@ async function uploadEntries(
         speed: 0,
         fileCount: 1,
         completedCount: 0,
+        sourcePath: getDropEntryLocalPath(entry),
       });
       pendingTaskIds.add(taskId);
     }

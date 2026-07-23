@@ -3,6 +3,8 @@ import type { FileConflict, FileConflictAction, SftpFileEntry, SftpFilenameEncod
 import type { SftpPane } from "./types";
 
 export interface UseSftpTransfersParams {
+  ownerId: string;
+  canPrepareAdoption?: boolean;
   getActivePane: (side: "left" | "right") => SftpPane | null;
   getPaneByConnectionId: (connectionId: string) => SftpPane | null;
   getTabByConnectionId: (connectionId: string) => { side: "left" | "right"; tabId: string; pane: SftpPane } | null;
@@ -45,6 +47,9 @@ export interface UseSftpTransfersResult {
   addExternalUpload: (task: TransferTask) => void;
   updateExternalUpload: (taskId: string, updates: Partial<TransferTask>) => void;
   cancelTransfer: (transferId: string) => Promise<void>;
+  pauseTransfer: (transferId: string) => Promise<void>;
+  resumeTransfer: (transferId: string) => Promise<void>;
+  prioritizeTransfer: (transferId: string) => void;
   isTransferCancelled: (transferId: string) => boolean;
   retryTransfer: (transferId: string) => Promise<void>;
   clearCompletedTransfers: () => void;

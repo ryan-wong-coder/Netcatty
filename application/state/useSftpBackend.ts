@@ -180,6 +180,18 @@ export const useSftpBackend = () => {
     return bridge.cancelTransfer(transferId);
   }, []);
 
+  const pauseTransfer = useCallback(async (transferId: string) => {
+    const bridge = netcattyBridge.get();
+    if (!bridge?.pauseTransfer) return { success: false, reason: "Pause unavailable" };
+    return bridge.pauseTransfer(transferId);
+  }, []);
+
+  const resumeTransfer = useCallback(async (transferId: string) => {
+    const bridge = netcattyBridge.get();
+    if (!bridge?.resumeTransfer) return { success: false, reason: "Resume unavailable" };
+    return bridge.resumeTransfer(transferId);
+  }, []);
+
   const cancelSftpUpload = useCallback(async (transferId: string) => {
     const bridge = netcattyBridge.get();
     if (!bridge?.cancelSftpUpload) return undefined;
@@ -283,6 +295,8 @@ export const useSftpBackend = () => {
 
     startStreamTransfer,
     cancelTransfer,
+    pauseTransfer,
+    resumeTransfer,
     cancelSftpUpload,
     onTransferProgress,
     selectApplication,

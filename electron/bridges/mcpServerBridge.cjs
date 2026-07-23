@@ -34,6 +34,7 @@ function debugLog(...args) {
 
 let sessions = null;   // Map<sessionId, { sshClient, stream, pty, proc, conn, ... }>
 let terminalWorkerManager = null;
+let fileTransferBridge = null;
 let tcpServer = null;
 let tcpPort = null;
 let authToken = null;  // Random token generated when TCP server starts
@@ -329,6 +330,7 @@ const {
 function init(deps) {
   sessions = deps.sessions;
   terminalWorkerManager = deps.terminalWorkerManager || null;
+  fileTransferBridge = deps.transferBridge || null;
   electronModule = deps.electronModule || null;
   cliDiscoveryFilePath = deps.cliDiscoveryFilePath || getCliDiscoveryFilePath();
   debugLog("init", { hasSessions: Boolean(sessions), hasElectron: Boolean(electronModule) });
@@ -1874,6 +1876,9 @@ const sftpHandlerApi = createSftpHandlerApi({
   get sessions() { return sessions; },
   get terminalWorkerManager() { return terminalWorkerManager; },
   sftpBridge, registerSftpOp, setTimeout, clearTimeout, AbortController, Promise, Error,
+  createTransferId: () => require("node:crypto").randomUUID(),
+  reportTransferEvent: (payload) => broadcastApprovalEvent("netcatty:sftp:global-transfer", payload),
+  get transferBridge() { return fileTransferBridge; },
 });
 const {
   getSessionSftpEncodingStateKey,

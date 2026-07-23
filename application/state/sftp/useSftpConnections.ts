@@ -422,6 +422,7 @@ export const useSftpConnections = ({
           // non-interactive (loading=true) with stale cached files visible —
           // no worse than the previous UX of always showing a spinner.
           reusedConnection: !!options?.sourceSessionId,
+          fileProtocol: host.sftpFileProtocol ?? 'auto',
         };
 
         updateTab(side, activeTabId, (prev) => ({

@@ -4,6 +4,8 @@ export interface UploadProgress {
   speed: number;
   /** Percentage (0-100) */
   percent: number;
+  resumable?: boolean;
+  pauseUnavailableReason?: string;
 }
 
 export interface UploadTaskInfo {
@@ -19,6 +21,7 @@ export interface UploadTaskInfo {
   speed: number;
   fileCount: number;
   completedCount: number;
+  sourcePath?: string;
 }
 
 export interface UploadResult {
@@ -61,7 +64,10 @@ export interface UploadBridge {
     path: string,
     data: ArrayBuffer,
     taskId: string,
-    onProgress: (transferred: number, total: number, speed: number) => void,
+    onProgress: (transferred: number, total: number, speed: number, capability?: {
+      resumable?: boolean;
+      pauseUnavailableReason?: string;
+    }) => void,
     onComplete?: () => void,
     onError?: (error: string) => void
   ) => Promise<{ success: boolean; cancelled?: boolean } | undefined>;
@@ -78,7 +84,10 @@ export interface UploadBridge {
       targetSftpId?: string;
       totalBytes?: number;
     },
-    onProgress?: (transferred: number, total: number, speed: number) => void,
+    onProgress?: (transferred: number, total: number, speed: number, capability?: {
+      resumable?: boolean;
+      pauseUnavailableReason?: string;
+    }) => void,
     onComplete?: () => void,
     onError?: (error: string) => void
   ) => Promise<{ transferId: string; totalBytes?: number; error?: string; cancelled?: boolean }>;

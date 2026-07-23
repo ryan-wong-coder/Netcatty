@@ -40,6 +40,10 @@ export const createUploadTaskCallbacks = ({
       startTime: Date.now(),
       isDirectory: true,
       progressMode: "bytes",
+      origin: "drag-drop",
+      background: false,
+      resumable: true,
+      phase: "scanning",
     });
   },
   onScanningEnd: (taskId: string) => {
@@ -50,7 +54,7 @@ export const createUploadTaskCallbacks = ({
     addExternalUpload({
       id: task.id,
       fileName: task.displayName,
-      sourcePath: "local",
+      sourcePath: task.sourcePath ?? "local",
       targetPath: joinPath(targetPath, task.fileName),
       sourceConnectionId: "external",
       targetConnectionId: connectionId,
@@ -65,12 +69,26 @@ export const createUploadTaskCallbacks = ({
       isDirectory: task.isDirectory,
       progressMode: task.progressMode ?? "bytes",
       parentTaskId: task.parentTaskId,
+      origin: "drag-drop",
+      background: false,
+      resumable: true,
+      phase: "transferring",
     });
   },
   onTaskProgress: (taskId: string, progress) => {
     updateExternalUpload?.(taskId, {
       transferredBytes: progress.transferred,
+      checkpointBytes: progress.transferred,
       speed: progress.speed,
+      resumable: progress.resumable,
+      pauseUnavailableReason: progress.pauseUnavailableReason,
+    });
+  },
+  onTaskNameUpdate: (taskId: string, value: string) => {
+    const separator = value.lastIndexOf("|");
+    const phase = separator >= 0 ? value.slice(separator + 1) : "transferring";
+    updateExternalUpload?.(taskId, {
+      phase: phase === "compressed" ? "transferring" : phase as TransferTask["phase"],
     });
   },
   onTaskCompleted: (taskId: string, totalBytes: number) => {

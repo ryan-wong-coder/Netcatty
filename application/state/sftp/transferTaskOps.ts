@@ -63,15 +63,22 @@ export function useSftpTransferTaskOps({
       }
     }
 
-    const cancelTransferAtBackend = netcattyBridge.get()?.cancelTransfer;
-    if (!cancelTransferAtBackend) return;
+    const bridge = netcattyBridge.get();
+    const cancelTransferAtBackend = bridge?.cancelTransfer;
+    const cancelCompressedUpload = bridge?.cancelCompressedUpload;
+    if (!cancelTransferAtBackend && !cancelCompressedUpload) return;
 
     await Promise.all(
-      Array.from(idsToCancel).map((id) =>
-        cancelTransferAtBackend(id).catch((err) => {
-          logger.warn("Failed to cancel transfer at backend:", err);
-        }),
-      ),
+      Array.from(idsToCancel).map(async (id) => {
+        const operations = [
+          cancelTransferAtBackend?.(id),
+          cancelCompressedUpload?.(id),
+        ].filter((operation): operation is Promise<unknown> => operation !== undefined);
+        const results = await Promise.allSettled(operations);
+        if (results.some((result) => result.status === "rejected")) {
+          logger.warn("Failed to cancel one or more transfer backends");
+        }
+      }),
     );
   }, [activeChildIdsRef, cancelledTasksRef, transfersRef]);
 

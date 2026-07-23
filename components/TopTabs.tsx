@@ -23,6 +23,7 @@ import { Button } from './ui/button';
 import { ContextMenuItem, ContextMenuSeparator } from './ui/context-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { SyncStatusButton } from './SyncStatusButton';
+import { GlobalSftpTransferCenter } from './GlobalSftpTransferCenter';
 import { TopTabsQuickControls } from './TopTabsQuickControls';
 import {
   ActiveTabAutoScroller,
@@ -1089,6 +1090,7 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
           className="flex-shrink-0 flex items-center gap-0.5 app-drag self-end h-7 overflow-visible"
           style={dragRegionStyle}
         >
+          <GlobalSftpTransferCenter />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

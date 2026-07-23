@@ -763,6 +763,26 @@ function createPreloadApi(ctx) {
     cleanupTransferListeners(transferId);
     return ipcRenderer.invoke("netcatty:transfer:cancel", { transferId });
   },
+  pauseTransfer: async (transferId) => {
+    return ipcRenderer.invoke("netcatty:transfer:pause", { transferId });
+  },
+  resumeTransfer: async (transferId) => {
+    return ipcRenderer.invoke("netcatty:transfer:resume", { transferId });
+  },
+  prioritizeTransfer: async (transferId) => {
+    return ipcRenderer.invoke("netcatty:transfer:prioritize", { transferId });
+  },
+  setGlobalTransferConcurrency: async (limit) => {
+    return ipcRenderer.invoke("netcatty:transfer:set-concurrency", { limit });
+  },
+  cleanupTransferArtifacts: async (payload) => {
+    return ipcRenderer.invoke("netcatty:transfer:cleanup", payload);
+  },
+  onGlobalSftpTransferEvent: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("netcatty:sftp:global-transfer", handler);
+    return () => ipcRenderer.removeListener("netcatty:sftp:global-transfer", handler);
+  },
   sameHostCopyDirectory: async (sftpId, sourcePath, targetPath, encoding, transferId) => {
     return ipcRenderer.invoke("netcatty:transfer:same-host-copy-dir", { sftpId, sourcePath, targetPath, encoding, transferId });
   },
@@ -782,6 +802,12 @@ function createPreloadApi(ctx) {
     compressCompleteListeners.delete(compressionId);
     compressErrorListeners.delete(compressionId);
     return ipcRenderer.invoke("netcatty:compress:cancel", { compressionId });
+  },
+  pauseCompressedUpload: async (compressionId) => {
+    return ipcRenderer.invoke("netcatty:compress:pause", { compressionId });
+  },
+  resumeCompressedUpload: async (compressionId) => {
+    return ipcRenderer.invoke("netcatty:compress:resume", { compressionId });
   },
   checkCompressedUploadSupport: async (sftpId) => {
     return ipcRenderer.invoke("netcatty:compress:checkSupport", { sftpId });

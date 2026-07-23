@@ -22,11 +22,15 @@ import type { DropEntry } from "../../../lib/sftpFileUtils";
 export type { UploadResult };
 
 import type { UseSftpExternalOperationsParams, SftpExternalOperationsResult } from "./useSftpExternalOperations.types";
+import { globalSftpTransferScheduler } from "./globalTransferScheduler";
+import { localStorageAdapter } from "../../../infrastructure/persistence/localStorageAdapter";
+import { STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY } from "../../../infrastructure/config/storageKeys";
 
 export const useSftpExternalOperations = (
   params: UseSftpExternalOperationsParams
 ): SftpExternalOperationsResult => {
   const {
+    ownerId,
     getActivePane,
     getPaneByConnectionId,
     refresh,
@@ -237,6 +241,10 @@ export const useSftpExternalOperations = (
           startTime: Date.now(),
           isDirectory: false,
           retryable: false,
+          origin: "editor-sync",
+          background: true,
+          resumable: true,
+          phase: "transferring",
         });
 
         try {
@@ -249,6 +257,7 @@ export const useSftpExternalOperations = (
             (transferred, total, speed) => {
               updateExternalUpload(externalTransferId, {
                 transferredBytes: transferred,
+                checkpointBytes: transferred,
                 totalBytes: total,
                 speed,
               });
@@ -588,7 +597,15 @@ export const useSftpExternalOperations = (
               return { transferId: options.transferId, error: 'Stream transfer not available' };
             }
             try {
-              const result = await b.startStreamTransfer(options, onProgress, onComplete, onError);
+              const result = await globalSftpTransferScheduler.run(
+                ownerId,
+                options.transferId,
+                () => localStorageAdapter.readNumber(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY),
+                () => b.startStreamTransfer!({
+                  ...options,
+                  globalConcurrency: localStorageAdapter.readNumber(STORAGE_KEY_SFTP_TRANSFER_CONCURRENCY) ?? undefined,
+                }, onProgress, onComplete, onError),
+              );
               return result;
             } catch (error) {
               return {
@@ -600,7 +617,7 @@ export const useSftpExternalOperations = (
         : undefined,
       cancelTransfer: bridge?.cancelTransfer,
     };
-  }, []);
+  }, [ownerId]);
 
   const uploadExternalFiles = useCallback(
     async (side: "left" | "right", dataTransfer: DataTransfer, targetPath?: string): Promise<UploadResult[]> => {
