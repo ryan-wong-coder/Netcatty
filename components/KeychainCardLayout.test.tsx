@@ -258,6 +258,7 @@ test("keychain search shows both sections when both kinds match", () => {
 
 test("keychain browsing shows keys and identities together", () => {
   assert.equal(shouldShowKeySection({
+    identityCount: 1,
     filteredKeyCount: 1,
     search: "",
   }), true);
@@ -277,8 +278,25 @@ test("keychain browsing shows keys and identities together", () => {
 
 test("keychain search hides the keys section when only identities match", () => {
   assert.equal(shouldShowKeySection({
+    identityCount: 1,
     filteredKeyCount: 0,
     search: "identity-only",
+  }), false);
+});
+
+test("keychain search keeps keys visible for empty key searches without identities", () => {
+  assert.equal(shouldShowKeySection({
+    identityCount: 0,
+    filteredKeyCount: 0,
+    search: "no-results",
+  }), true);
+});
+
+test("keychain search hides keys when identities cover the empty-search state", () => {
+  assert.equal(shouldShowKeySection({
+    identityCount: 1,
+    filteredKeyCount: 0,
+    search: "no-results",
   }), false);
 });
 

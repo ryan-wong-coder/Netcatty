@@ -86,15 +86,17 @@ export const shouldShowIdentitySection = ({
 
 /** Always show the keys section when browsing; while searching, hide it if only identities match. */
 export const shouldShowKeySection = ({
+    identityCount,
     filteredKeyCount,
     search,
 }: Pick<
     IdentitySectionVisibilityOptions,
-    'filteredKeyCount' | 'search'
+    'identityCount' | 'filteredKeyCount' | 'search'
 >): boolean => {
     if (!search.trim()) return true;
 
-    return filteredKeyCount > 0;
+    // Keep keys visible when nothing matches and identities cannot cover the empty state.
+    return filteredKeyCount > 0 || identityCount === 0;
 };
 
 export const shouldShowSearchNoResults = (

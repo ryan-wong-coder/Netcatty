@@ -244,6 +244,7 @@ echo $3 >> "$FILE"`);
     search,
   });
   const showKeySection = shouldShowKeySection({
+    identityCount: identities.length,
     filteredKeyCount: filteredKeys.length,
     search,
   });
