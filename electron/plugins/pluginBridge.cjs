@@ -322,7 +322,10 @@ function registerPluginBridge(ipcMain, options) {
       signal.removeEventListener("abort", onAbort);
       resolve();
     }, connectionStatusPollMs);
-    timer.unref?.();
+    // A zero-delay poll is used by deterministic tests and should retain the
+    // event loop until its immediate callback runs. Longer production polls
+    // remain unrefed so monitoring cannot keep the Electron process alive.
+    if (connectionStatusPollMs > 0) timer.unref?.();
     signal.addEventListener("abort", onAbort, { once: true });
   });
   const pluginConnectionReadyMeta = Object.freeze({ pluginPipelineIngressBytes: 0 });
