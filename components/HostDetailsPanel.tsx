@@ -73,7 +73,11 @@ import { HostDetailsScriptsSection } from "./host/HostDetailsScriptsSection";
 import { ensureHostConnectScriptIds, getHostConnectScriptIds, prepareSnippetForHostConnectQueue } from "@/domain/hostConnectScripts.ts";
 import { isScriptSnippet } from "@/domain/snippetScript.ts";
 import { unlinkHostFromScripts } from "@/domain/snippetTargets.ts";
-import { isPluginHostProtocol, sanitizePluginConnection } from "../domain/pluginConnection";
+import {
+  isPluginHostProtocol,
+  sanitizePluginConnection,
+  stripBuiltInConnectionFieldsForPluginHost,
+} from "../domain/pluginConnection";
 import { PluginConnectionSection } from "./PluginConnectionSection";
 
 type CredentialType = "sshid" | "key" | "certificate" | "localKeyFile" | null;
@@ -524,7 +528,7 @@ const HostDetailsPanel: React.FC<HostDetailsPanelPropsWithResize> = ({
     if (pluginProtocolActive) {
       const pluginConnection = sanitizePluginConnection(cleaned.pluginConnection, cleaned.protocol);
       if (!pluginConnection) return;
-      cleaned.pluginConnection = pluginConnection;
+      cleaned = stripBuiltInConnectionFieldsForPluginHost({ ...cleaned, pluginConnection });
     }
     cleaned = prepareTelnetCredentialsForSave(normalizePrimaryTelnetState(cleaned));
     if (
@@ -604,7 +608,7 @@ const HostDetailsPanel: React.FC<HostDetailsPanelPropsWithResize> = ({
         onSnippetsChange(nextSnippets);
       }
     }
-    onSave(cleaned);
+    onSave(stripBuiltInConnectionFieldsForPluginHost(cleaned));
   };
 
   const handleCreateGroup = () => {

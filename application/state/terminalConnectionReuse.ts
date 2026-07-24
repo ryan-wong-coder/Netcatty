@@ -34,6 +34,9 @@ function createTerminalSessionClone(
     username: session.username,
     status: "connecting",
     protocol: session.protocol,
+    pluginConnection: session.pluginConnection == null
+      ? undefined
+      : structuredClone(session.pluginConnection),
     port: session.port,
     moshEnabled: session.moshEnabled,
     etEnabled: session.etEnabled,

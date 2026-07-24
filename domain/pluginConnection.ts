@@ -1,5 +1,6 @@
 import type {
   BuiltInHostProtocol,
+  Host,
   HostProtocol,
   PluginConfigurationValue,
   PluginConnectionConfig,
@@ -90,4 +91,58 @@ export function sanitizePluginConnection(
     ...(authenticationProviderId ? { authenticationProviderId } : {}),
     ...(credentialId ? { credentialId } : {}),
   };
+}
+
+/**
+ * Plugin Providers own their connection and authentication configuration.
+ * Remove hidden first-party protocol state so switching an existing host to a
+ * plugin cannot retain credentials or transport behavior that the plugin UI
+ * cannot display or manage.
+ */
+export function stripBuiltInConnectionFieldsForPluginHost(host: Host): Host {
+  if (!isPluginHostProtocol(host.protocol)) return host;
+  const {
+    port: _port,
+    identityId: _identityId,
+    identityFileId: _identityFileId,
+    identityFilePaths: _identityFilePaths,
+    password: _password,
+    savePassword: _savePassword,
+    authMethod: _authMethod,
+    authPolicyVersion: _authPolicyVersion,
+    requiresMfa: _requiresMfa,
+    useSshAgent: _useSshAgent,
+    identityAgent: _identityAgent,
+    identitiesOnly: _identitiesOnly,
+    addKeysToAgent: _addKeysToAgent,
+    useKeychain: _useKeychain,
+    agentForwarding: _agentForwarding,
+    x11Forwarding: _x11Forwarding,
+    proxy: _proxy,
+    proxyProfileId: _proxyProfileId,
+    proxyConfig: _proxyConfig,
+    hostChain: _hostChain,
+    moshEnabled: _moshEnabled,
+    moshServerPath: _moshServerPath,
+    etEnabled: _etEnabled,
+    etPort: _etPort,
+    protocols: _protocols,
+    telnetPort: _telnetPort,
+    telnetEnabled: _telnetEnabled,
+    telnetIdentityId: _telnetIdentityId,
+    telnetUsername: _telnetUsername,
+    telnetPassword: _telnetPassword,
+    serialConfig: _serialConfig,
+    sftpSudo: _sftpSudo,
+    legacyAlgorithms: _legacyAlgorithms,
+    skipEcdsaHostKey: _skipEcdsaHostKey,
+    algorithms: _algorithms,
+    keepaliveInterval: _keepaliveInterval,
+    keepaliveCountMax: _keepaliveCountMax,
+    keepaliveOverride: _keepaliveOverride,
+    sshTcpConnectTimeoutSeconds: _sshTcpConnectTimeoutSeconds,
+    sshAuthReadyTimeoutSeconds: _sshAuthReadyTimeoutSeconds,
+    ...pluginHost
+  } = host;
+  return pluginHost;
 }

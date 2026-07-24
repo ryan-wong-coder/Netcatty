@@ -168,6 +168,73 @@ test("sanitizeHost preserves valid unavailable plugin connection configuration",
   });
 });
 
+test("sanitizeHost removes hidden built-in credentials and transport state from plugin hosts", () => {
+  const providerId = "com.example.transport.connection";
+  const sanitized = sanitizeHost(makeHost({
+    protocol: `plugin:${providerId}`,
+    pluginConnection: {
+      providerId,
+      configuration: { endpoint: "example" },
+      credentialId: "credential-reference-1234",
+    },
+    port: 22,
+    identityId: "identity-1",
+    identityFileId: "key-1",
+    identityFilePaths: ["~/.ssh/id_work"],
+    password: "saved-secret",
+    savePassword: true,
+    authMethod: "key",
+    authPolicyVersion: 1,
+    requiresMfa: true,
+    useSshAgent: true,
+    identityAgent: "~/.ssh/agent.sock",
+    identitiesOnly: true,
+    addKeysToAgent: "confirm",
+    useKeychain: true,
+    agentForwarding: true,
+    x11Forwarding: true,
+    proxyProfileId: "proxy-1",
+    proxyConfig: { type: "http", host: "proxy.example", port: 8080 },
+    hostChain: { type: "hosts", hostIds: ["jump-1"] },
+    moshEnabled: true,
+    moshServerPath: "/usr/bin/mosh-server",
+    etEnabled: true,
+    etPort: 2022,
+    telnetEnabled: true,
+    telnetPort: 23,
+    telnetIdentityId: "telnet-identity",
+    telnetUsername: "legacy-user",
+    telnetPassword: "legacy-secret",
+    sftpSudo: true,
+    legacyAlgorithms: true,
+    skipEcdsaHostKey: true,
+    algorithms: { kex: ["diffie-hellman-group14-sha1"] },
+    keepaliveOverride: true,
+    keepaliveInterval: 10,
+    keepaliveCountMax: 3,
+    sshTcpConnectTimeoutSeconds: 15,
+    sshAuthReadyTimeoutSeconds: 20,
+  }));
+
+  assert.deepEqual(sanitized.pluginConnection, {
+    providerId,
+    configuration: { endpoint: "example" },
+    credentialId: "credential-reference-1234",
+  });
+  for (const field of [
+    "port", "identityId", "identityFileId", "identityFilePaths", "password", "savePassword",
+    "authMethod", "authPolicyVersion", "requiresMfa", "useSshAgent", "identityAgent",
+    "identitiesOnly", "addKeysToAgent", "useKeychain", "agentForwarding", "x11Forwarding",
+    "proxyProfileId", "proxyConfig", "hostChain", "moshEnabled", "moshServerPath", "etEnabled",
+    "etPort", "telnetEnabled", "telnetPort", "telnetIdentityId", "telnetUsername",
+    "telnetPassword", "sftpSudo", "legacyAlgorithms", "skipEcdsaHostKey", "algorithms",
+    "keepaliveOverride", "keepaliveInterval", "keepaliveCountMax", "sshTcpConnectTimeoutSeconds",
+    "sshAuthReadyTimeoutSeconds",
+  ]) {
+    assert.equal(field in sanitized, false, `${field} should be removed`);
+  }
+});
+
 test("sanitizeHost keeps legacy empty-password hosts on automatic authentication", () => {
   const sanitized = sanitizeHost(makeHost({
     password: undefined,

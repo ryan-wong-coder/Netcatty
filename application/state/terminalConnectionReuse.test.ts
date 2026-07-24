@@ -91,3 +91,25 @@ test("split and copy session clones preserve local start directory", () => {
     "/Users/alice/project with spaces ",
   );
 });
+
+test("split and copy session clones preserve isolated plugin connection snapshots", () => {
+  const pluginConnection = {
+    providerId: "com.example.transport.connection",
+    configuration: { endpoint: "gateway.example", options: ["fast"] },
+    credentialId: "credential-reference-1234",
+  };
+  const source = session({
+    protocol: `plugin:${pluginConnection.providerId}`,
+    pluginConnection,
+  });
+
+  const split = createSplitTerminalSessionClone(source, { id: "split-plugin" });
+  const copied = createCopiedTerminalSessionClone(source, { id: "copy-plugin" });
+
+  assert.deepEqual(split.pluginConnection, pluginConnection);
+  assert.deepEqual(copied.pluginConnection, pluginConnection);
+  assert.notEqual(split.pluginConnection, pluginConnection);
+  assert.notEqual(copied.pluginConnection, pluginConnection);
+  assert.equal(split.reuseConnectionFromSessionId, undefined);
+  assert.equal(copied.reuseConnectionFromSessionId, undefined);
+});
