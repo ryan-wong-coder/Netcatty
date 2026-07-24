@@ -2291,6 +2291,109 @@ test("resumable stream transfers pause without losing their checkpoint and conti
   assert.equal((await running).error, undefined);
 });
 
+test("stream upload pause survives write-stream drain without auto-resuming the pipe", async (t) => {
+  // Regression for transfer-list pause: Node's .pipe() resumes the source on
+  // destination 'drain'. pauseTransfer also waits for drain to flush bytes, so
+  // without unpipe the upload keeps flowing after UI reports paused.
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-pipe-pause-"));
+  t.after(async () => {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const payload = Buffer.alloc(256 * 1024, 91);
+  const localPath = path.join(tempDir, "upload.bin");
+  await fs.promises.writeFile(localPath, payload);
+
+  let durableBytes = 0;
+  const pendingWriteCallbacks = [];
+  let holdWrites = true;
+  const writeStream = new Writable({
+    highWaterMark: 16,
+    write(chunk, _encoding, callback) {
+      durableBytes += chunk.length;
+      if (holdWrites) {
+        pendingWriteCallbacks.push(callback);
+        return;
+      }
+      setImmediate(callback);
+    },
+  });
+
+  const streamSftp = createFastSftp({
+    createWriteStream() {
+      return writeStream;
+    },
+  });
+  const client = {
+    sftp: streamSftp,
+    stat() {
+      return Promise.resolve({ size: durableBytes || payload.length });
+    },
+    rename() {
+      return Promise.resolve();
+    },
+    delete() {
+      return Promise.resolve();
+    },
+    // Force sequential stream path (no isolated fast channel).
+    client: {
+      sftp(callback) {
+        callback(new Error("isolated channel unavailable"));
+      },
+    },
+  };
+  transferBridge.init({ sftpClients: new Map([["target", client]]) });
+
+  const sender = createSender();
+  const running = transferBridge.startTransfer(
+    { sender },
+    {
+      transferId: "upload-pipe-pause",
+      sourcePath: localPath,
+      targetPath: "/tmp/upload-pipe-pause.bin",
+      sourceType: "local",
+      targetType: "sftp",
+      targetSftpId: "target",
+      totalBytes: payload.length,
+      resumable: true,
+    },
+  );
+
+  const backpressureDeadline = Date.now() + 2000;
+  while (pendingWriteCallbacks.length === 0 && Date.now() < backpressureDeadline) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(pendingWriteCallbacks.length > 0, "write stream should be backpressured");
+  const bytesWhenPauseRequested = durableBytes;
+
+  const pausing = transferBridge.pauseTransfer(null, { transferId: "upload-pipe-pause" });
+  // Release buffered writes so destination emits drain (the pipe auto-resume hazard).
+  holdWrites = false;
+  for (const callback of pendingWriteCallbacks.splice(0)) callback();
+  const paused = await pausing;
+  assert.equal(paused.success, true);
+  const checkpoint = paused.checkpointBytes;
+  assert.ok(checkpoint >= bytesWhenPauseRequested);
+  assert.ok(
+    checkpoint < payload.length,
+    "pause must stop before the upload finishes under backpressure",
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    durableBytes,
+    checkpoint,
+    "paused stream upload must not keep writing after drain",
+  );
+
+  assert.deepEqual(
+    await transferBridge.resumeTransfer(null, { transferId: "upload-pipe-pause" }),
+    { success: true },
+  );
+  assert.equal((await running).error, undefined);
+  assert.equal(durableBytes, payload.length);
+});
+
 test("resumable downloads never promote a partial staged file", async (t) => {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "netcatty-transfer-partial-test-"));
   t.after(async () => {

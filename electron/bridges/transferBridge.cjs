@@ -797,8 +797,11 @@ async function uploadFile(localPath, remotePath, client, fileSize, transfer, sen
     transfer.readStream = readStream;
     transfer.writeStream = writeStream;
     // Honor a pause that raced stream open (fingerprint / dir ensure window).
+    // Do not pipe while paused — Node pipe auto-resumes on drain.
     if (transfer.paused) {
       try { readStream.pause(); } catch { }
+    } else {
+      readStream.pipe(writeStream);
     }
 
     const cleanup = (err) => {
@@ -833,7 +836,6 @@ async function uploadFile(localPath, remotePath, client, fileSize, transfer, sen
       }
       cleanup(null);
     });
-    readStream.pipe(writeStream);
   });
   await assertRemoteUploadSize(client, remotePath, fileSize);
   if (initialSource) {
@@ -1572,6 +1574,8 @@ async function downloadFile(remotePath, localPath, client, fileSize, transfer, s
     transfer.writeStream = writeStream;
     if (transfer.paused) {
       try { readStream.pause(); } catch { }
+    } else {
+      readStream.pipe(writeStream);
     }
 
     const cleanup = (err) => {
@@ -1607,7 +1611,6 @@ async function downloadFile(remotePath, localPath, client, fileSize, transfer, s
     writeStream.on('close', () => {
       if (transfer.cancelled) cleanup(new Error('Transfer cancelled'));
     });
-    readStream.pipe(writeStream);
   });
   if (initialSource) {
     const latestSource = await client.stat(remotePath);
@@ -1993,6 +1996,8 @@ async function startTransferNow(event, payload, onProgress) {
         transfer.writeStream = writeStream;
         if (transfer.paused) {
           try { readStream.pause(); } catch { }
+        } else {
+          readStream.pipe(writeStream);
         }
 
         const cleanup = (err) => {
@@ -2028,7 +2033,6 @@ async function startTransferNow(event, payload, onProgress) {
         writeStream.on('close', () => {
           if (transfer.cancelled) cleanup(new Error('Transfer cancelled'));
         });
-        readStream.pipe(writeStream);
       });
       if (transfer.resumable && transfer.stagedLocalPath) {
         await promoteLocalTransfer(transfer.stagedLocalPath, targetPath);
@@ -2410,6 +2414,17 @@ function clearPendingCancel(transferId) {
   if (transferId) pendingCancelTransferIds.delete(String(transferId));
 }
 
+/**
+ * Re-attach a paused stream pair and continue reading.
+ * pauseTransfer unpipes so destination drain cannot auto-resume the source.
+ */
+function resumeStreamPair(transfer) {
+  if (transfer.readStream && transfer.writeStream) {
+    try { transfer.readStream.pipe(transfer.writeStream); } catch { }
+  }
+  try { transfer.readStream?.resume?.(); } catch { }
+}
+
 async function pauseTransfer(_event, payload) {
   const queuedResult = pauseQueuedTransfer(payload?.transferId);
   if (queuedResult) return queuedResult;
@@ -2437,6 +2452,13 @@ async function pauseTransfer(_event, payload) {
   transfer.pauseSuperseded = false;
   const pauseOperation = (async () => {
   transfer.paused = true;
+  // Stream transfers use readStream.pipe(writeStream). Node's pipe resumes the
+  // source on destination 'drain', and pauseTransfer waits for that drain to
+  // flush durable bytes — so pause() alone is undone and upload continues while
+  // the UI shows paused. Unpipe first; resumeTransfer re-pipes.
+  if (transfer.readStream && transfer.writeStream) {
+    try { transfer.readStream.unpipe?.(transfer.writeStream); } catch { }
+  }
   try { transfer.readStream?.pause?.(); } catch { }
   const usesContiguousRangeCheckpoint = typeof transfer.waitForPause === "function";
   if (usesContiguousRangeCheckpoint) {
@@ -2494,7 +2516,7 @@ async function pauseTransfer(_event, payload) {
     }
   } catch {
     transfer.paused = false;
-    try { transfer.readStream?.resume?.(); } catch { }
+    resumeStreamPair(transfer);
     return { success: false, reason: "Could not verify the saved transfer checkpoint" };
   }
   if (transfer.resumeStage === 'download') transfer.downloadCheckpointBytes = transfer.checkpointBytes;
@@ -2509,7 +2531,7 @@ async function pauseTransfer(_event, payload) {
       });
     } catch {
       transfer.paused = false;
-      try { transfer.readStream?.resume?.(); } catch { }
+      resumeStreamPair(transfer);
       return { success: false, reason: "Could not verify that the source is safe to resume" };
     }
   }
@@ -2559,7 +2581,7 @@ async function resumeTransfer(_event, payload) {
   }
   transfer.paused = false;
   transfer.pauseSuperseded = false;
-  try { transfer.readStream?.resume?.(); } catch { }
+  resumeStreamPair(transfer);
   return { success: true };
 }
 
