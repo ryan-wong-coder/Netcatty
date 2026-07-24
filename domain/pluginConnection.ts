@@ -5,6 +5,7 @@ import type {
   PluginConfigurationValue,
   PluginConnectionConfig,
 } from './models';
+import { isEncryptedCredentialPlaceholder } from './credentials';
 
 const CONTRIBUTION_ID = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\.[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-])*$/u;
 const MAX_CONFIGURATION_BYTES = 128 * 1024;
@@ -27,6 +28,18 @@ export const isPluginHostProtocol = (protocol?: string): protocol is `plugin:${s
 
 export const isBuiltInHostProtocol = (protocol?: string): protocol is BuiltInHostProtocol => (
   typeof protocol === 'string' && BUILT_IN_HOST_PROTOCOLS.has(protocol as BuiltInHostProtocol)
+);
+
+export const isPluginCredentialCatalogEntryAvailable = (
+  id: string,
+  value: string | undefined,
+  catalogIds: ReadonlySet<string>,
+): value is string => (
+  catalogIds.has(id)
+  && typeof value === 'string'
+  && value.length > 0
+  && !isEncryptedCredentialPlaceholder(value)
+  && new TextEncoder().encode(value).byteLength <= 64 * 1024
 );
 
 export const isSafePluginAuthenticationUrl = (value: string): boolean => {

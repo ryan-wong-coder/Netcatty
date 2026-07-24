@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  isPluginCredentialCatalogEntryAvailable,
   isSafePluginAuthenticationUrl,
   pluginProtocolForProvider,
   sanitizePluginConnection,
@@ -40,6 +41,21 @@ test('plugin connection profiles preserve explicit null configuration', () => {
       pluginProtocolForProvider(providerId),
     ),
     { providerId, configuration: null },
+  );
+});
+
+test('plugin credentials are selectable only after secure catalog publication', () => {
+  const credentialId = 'credential-reference-0001';
+  const published = new Set([credentialId]);
+  assert.equal(isPluginCredentialCatalogEntryAvailable(credentialId, 'secret', published), true);
+  assert.equal(isPluginCredentialCatalogEntryAvailable(credentialId, 'secret', new Set()), false);
+  assert.equal(
+    isPluginCredentialCatalogEntryAvailable(credentialId, 'enc:v1:djEwAAAA', published),
+    false,
+  );
+  assert.equal(
+    isPluginCredentialCatalogEntryAvailable(credentialId, 'x'.repeat((64 * 1024) + 1), published),
+    false,
   );
 });
 

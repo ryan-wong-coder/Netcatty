@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Plug, RotateCcw } from "lucide-react";
 import type { Host, Identity, SSHKey } from "../types";
-import { isEncryptedCredentialPlaceholder } from "../domain/credentials";
 import {
+  isPluginCredentialCatalogEntryAvailable,
   isPluginHostProtocol,
   pluginProtocolForProvider,
   sanitizePluginConnection,
@@ -48,6 +48,12 @@ export const PluginConnectionSection: React.FC<Props> = ({
   ));
   const configurationTextRef = useRef(configurationText);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
+  const credentialCatalogIds = useSyncExternalStore(
+    pluginExtensionBridge.subscribeCredentialCatalog,
+    pluginExtensionBridge.getCredentialCatalogIds,
+    pluginExtensionBridge.getCredentialCatalogIds,
+  );
+  const credentialCatalogIdSet = useMemo(() => new Set(credentialCatalogIds), [credentialCatalogIds]);
   const active = isPluginHostProtocol(form.protocol);
   const providerId = form.pluginConnection?.providerId ?? (active ? form.protocol.slice(7) : "");
   const selectedProvider = providers.find((entry) => entry.provider.id === providerId);
@@ -108,18 +114,22 @@ export const PluginConnectionSection: React.FC<Props> = ({
   const credentialOptions = useMemo(() => {
     const options = [
       { value: "", label: t("hostDetails.plugin.credential.none") },
-      ...identities.flatMap((identity) => identity.password
-        && !isEncryptedCredentialPlaceholder(identity.password)
-        && new TextEncoder().encode(identity.password).byteLength <= 64 * 1024
+      ...identities.flatMap((identity) => isPluginCredentialCatalogEntryAvailable(
+        identity.id,
+        identity.password,
+        credentialCatalogIdSet,
+      )
         ? [{
             value: identity.id,
             label: identity.label,
             sublabel: t("hostDetails.plugin.credential.password"),
           }]
         : []),
-      ...keys.flatMap((key) => key.privateKey
-        && !isEncryptedCredentialPlaceholder(key.privateKey)
-        && new TextEncoder().encode(key.privateKey).byteLength <= 64 * 1024
+      ...keys.flatMap((key) => isPluginCredentialCatalogEntryAvailable(
+        key.id,
+        key.privateKey,
+        credentialCatalogIdSet,
+      )
         ? [{
             value: key.id,
             label: key.label,
@@ -136,7 +146,7 @@ export const PluginConnectionSection: React.FC<Props> = ({
       });
     }
     return options;
-  }, [form.pluginConnection?.credentialId, identities, keys, t]);
+  }, [credentialCatalogIdSet, form.pluginConnection?.credentialId, identities, keys, t]);
   const installed = providers.some((entry) => entry.provider.id === providerId);
 
   if (!active && providers.length === 0) return null;

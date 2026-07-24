@@ -6,12 +6,38 @@ const requireBridge = () => {
   return bridge;
 };
 
+const EMPTY_CREDENTIAL_IDS: ReadonlyArray<string> = Object.freeze([]);
+let credentialCatalogIds = EMPTY_CREDENTIAL_IDS;
+const credentialCatalogListeners = new Set<() => void>();
+
+const publishCredentialCatalogIds = (ids: ReadonlyArray<string>) => {
+  const next = ids.length > 0 ? Object.freeze([...new Set(ids)]) : EMPTY_CREDENTIAL_IDS;
+  if (next.length === credentialCatalogIds.length
+    && next.every((id, index) => id === credentialCatalogIds[index])) return;
+  credentialCatalogIds = next;
+  for (const listener of credentialCatalogListeners) listener();
+};
+
 export const pluginExtensionBridge = Object.freeze({
   async listProviders(kind: "connection" | "authentication" | "importer") {
     return requireBridge().listPluginExtensionProviders?.({ kind }) ?? [];
   },
   async updateCredentialCatalog(entries: ReadonlyArray<{ id: string; ciphertext: string }>) {
-    return requireBridge().updatePluginCredentialCatalog?.(entries) ?? 0;
+    try {
+      const accepted = await (requireBridge().updatePluginCredentialCatalog?.(entries) ?? 0);
+      publishCredentialCatalogIds(accepted === entries.length ? entries.map((entry) => entry.id) : []);
+      return accepted;
+    } catch (error) {
+      publishCredentialCatalogIds([]);
+      throw error;
+    }
+  },
+  getCredentialCatalogIds() {
+    return credentialCatalogIds;
+  },
+  subscribeCredentialCatalog(listener: () => void) {
+    credentialCatalogListeners.add(listener);
+    return () => credentialCatalogListeners.delete(listener);
   },
   async detectImporter(request: Parameters<NonNullable<NetcattyBridge["detectPluginImporter"]>>[0]) {
     const bridge = requireBridge();
@@ -35,10 +61,10 @@ export const pluginExtensionBridge = Object.freeze({
     return requireBridge().releasePluginImporterFile?.(selectionToken) ?? false;
   },
   onImporterProgress(listener: Parameters<NonNullable<NetcattyBridge["onPluginImporterProgress"]>>[0]) {
-    return requireBridge().onPluginImporterProgress?.(listener);
+    return netcattyBridge.get()?.onPluginImporterProgress?.(listener) ?? (() => {});
   },
   onAuthenticationChallenge(listener: Parameters<NonNullable<NetcattyBridge["onPluginAuthenticationChallenge"]>>[0]) {
-    return requireBridge().onPluginAuthenticationChallenge?.(listener);
+    return netcattyBridge.get()?.onPluginAuthenticationChallenge?.(listener) ?? (() => {});
   },
   async respondAuthenticationChallenge(
     response: Parameters<NonNullable<NetcattyBridge["respondPluginAuthenticationChallenge"]>>[0],
