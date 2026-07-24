@@ -230,15 +230,18 @@ function buildWrappedCommand(command, shellKind, marker) {
   }
 }
 
-function findEndMarker(outputText, marker) {
+function findEndMarker(outputText, marker, { allowInline = false } = {}) {
   const endPattern = marker + "_E:";
   let searchFrom = 0;
   while (searchFrom < outputText.length) {
     const endIdx = outputText.indexOf(endPattern, searchFrom);
     if (endIdx === -1) return null;
 
-    // Accept if at start of output, or preceded by \n or \r (line boundary)
-    if (endIdx === 0 || outputText[endIdx - 1] === "\n" || outputText[endIdx - 1] === "\r") {
+    // Before the start marker is confirmed, require a line boundary so the
+    // echoed wrapper command cannot be mistaken for real completion. Once the
+    // command has started, the random marker can safely follow output that did
+    // not end with a newline.
+    if (allowInline || endIdx === 0 || outputText[endIdx - 1] === "\n" || outputText[endIdx - 1] === "\r") {
       const afterEnd = outputText.slice(endIdx + endPattern.length);
       const codeMatch = afterEnd.match(/^(\d+)/);
       const exitCode = codeMatch ? parseInt(codeMatch[1], 10) : null;

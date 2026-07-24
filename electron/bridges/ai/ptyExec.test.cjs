@@ -1,17 +1,54 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
+const { EventEmitter } = require("node:events");
 const { mkdtempSync, rmSync, realpathSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
 const {
+  execViaPty,
+  startPtyJob,
   resolveEffectiveShellKind,
   execViaChannel,
 } = require("./ptyExec.cjs");
 const {
   buildWrappedCommand,
 } = require("./ptyExecHelpers.cjs");
+
+class ShellBackedPty extends EventEmitter {
+  write(data) {
+    if (data === "\x03") return;
+    const result = spawnSync("sh", ["-c", String(data)], { encoding: "utf8" });
+    queueMicrotask(() => {
+      this.emit("data", Buffer.from(result.stdout));
+    });
+  }
+}
+
+test("execViaPty completes when command output has no trailing newline", async () => {
+  const result = await execViaPty(new ShellBackedPty(), "printf 'abc'", {
+    shellKind: "posix",
+    timeoutMs: 1000,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout, "abc");
+  assert.equal(result.exitCode, 0);
+});
+
+test("background PTY jobs preserve output that has no trailing newline", async () => {
+  const job = startPtyJob(new ShellBackedPty(), "printf 'abc'", {
+    shellKind: "posix",
+    timeoutMs: 1000,
+    maxBufferedChars: 1024,
+  });
+  const result = await job.resultPromise;
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout, "abc");
+  assert.equal(result.exitCode, 0);
+});
 
 test("uses PowerShell wrapping when a session with no confirmed shell sees a PowerShell prompt", () => {
   // SSH sessions don't set shellKind (sshBridge never assigns one), which
