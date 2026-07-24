@@ -32,6 +32,17 @@ test('plugin connection profiles fail closed on protocol ownership mismatches an
   assert.equal(sanitizePluginConnection({ providerId, configuration: { constructor: 'spoof' } }, pluginProtocolForProvider(providerId)), undefined);
 });
 
+test('plugin connection profiles preserve explicit null configuration', () => {
+  const providerId = 'com.example.transport.connection';
+  assert.deepEqual(
+    sanitizePluginConnection(
+      { providerId, configuration: null },
+      pluginProtocolForProvider(providerId),
+    ),
+    { providerId, configuration: null },
+  );
+});
+
 test('plugin authentication URLs require HTTPS except for loopback HTTP callbacks', () => {
   assert.equal(isSafePluginAuthenticationUrl('https://login.example.com/authorize'), true);
   assert.equal(isSafePluginAuthenticationUrl('http://localhost:44123/callback'), true);

@@ -18,3 +18,10 @@ test('late plugin importer results cannot repopulate state after close or replac
   assert.match(source, /if \(isCurrent\(\)\) setPluginError/u);
   assert.match(source, /if \(selection && !consumed\)[\s\S]*releaseImporterFile\(selection\.selectionToken\)/u);
 });
+
+test('importer detection is cancellable before awaiting provider work', () => {
+  assert.match(
+    source,
+    /requestId = crypto\.randomUUID\(\);[\s\S]*activePluginImportRequestRef\.current = requestId;[\s\S]*await pluginExtensionBridge\.detectImporter\(\{\s*requestId,/u,
+  );
+});

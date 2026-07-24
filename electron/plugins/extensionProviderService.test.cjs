@@ -213,6 +213,51 @@ test("connection configuration is host-validated before invoking plugin code", a
   assert.equal(requests, 0);
 });
 
+test("connection and authentication providers preserve explicit null configuration", async () => {
+  let h;
+  const seen = [];
+  h = fixture({
+    connectionConfigurationSchema: { type: "null" },
+    async request({ params, identity, accept }) {
+      seen.push({ kind: params.kind, operation: params.operation, configuration: params.payload.configuration });
+      if (params.kind === "connection") {
+        const stream = incoming(params.payload.outputStreamId, async () => {});
+        assert.equal(await accept(stream, identity), true);
+        return {
+          requestId: params.requestId,
+          status: "ok",
+          result: { connectionId: "connection-null", status: "connected" },
+        };
+      }
+      return {
+        requestId: params.requestId,
+        status: "ok",
+        result: {
+          status: "authenticated",
+          credential: { kind: "credential", id: "credential-null-reference-1234" },
+        },
+      };
+    },
+  });
+
+  await h.service.openConnection({
+    providerId: "com.example.transport.connection",
+    sessionId: "session-null",
+    configuration: null,
+    columns: 80,
+    rows: 24,
+  });
+  await h.service.authenticate({
+    providerId: "com.example.transport.auth",
+    connectionProviderId: "com.example.transport.connection",
+    configuration: null,
+  }, () => {
+    throw new Error("challenge renderer must not run");
+  });
+
+  assert.deepEqual(seen.map((entry) => entry.configuration), [null, null]);
+});
+
 test("authentication secret challenges enter the runtime only as operation-bound one-use leases", async () => {
   const responses = [];
   const h = fixture({

@@ -153,7 +153,10 @@ export const ImportVaultDialog: React.FC<ImportVaultDialogProps> = ({
       try {
         selection = await pluginExtensionBridge.selectImporterFile();
         if (!selection || !isCurrent()) return;
+        requestId = crypto.randomUUID();
+        activePluginImportRequestRef.current = requestId;
         const detection = await pluginExtensionBridge.detectImporter({
+          requestId,
           providerId: provider.provider.id,
           sample: selection.sample,
           fileName: selection.fileName,
@@ -162,8 +165,6 @@ export const ImportVaultDialog: React.FC<ImportVaultDialogProps> = ({
         if (detection && detection.confidence <= 0) {
           throw new Error(detection.reason || t('vault.import.plugins.notRecognized'));
         }
-        requestId = crypto.randomUUID();
-        activePluginImportRequestRef.current = requestId;
         const preview = await pluginExtensionBridge.parseImporterFile({
           requestId,
           providerId: provider.provider.id,

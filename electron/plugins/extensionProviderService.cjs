@@ -421,7 +421,10 @@ class PluginExtensionProviderService {
 
   async openConnection(params, options = {}) {
     const providerId = assertString(params?.providerId, "Connection Provider ID");
-    const configuration = freezeJson(assertBoundedJson(params?.configuration ?? {}, "Connection configuration"));
+    const configuration = freezeJson(assertBoundedJson(
+      params?.configuration === undefined ? {} : params.configuration,
+      "Connection configuration",
+    ));
     const columns = params?.columns;
     const rows = params?.rows;
     if (!Number.isInteger(columns) || columns < 1 || columns > 16_384
@@ -559,7 +562,10 @@ class PluginExtensionProviderService {
         payload: {
           operationId,
           connectionProviderId,
-          configuration: freezeJson(assertBoundedJson(params?.configuration ?? {}, "Authentication configuration")),
+          configuration: freezeJson(assertBoundedJson(
+            params?.configuration === undefined ? {} : params.configuration,
+            "Authentication configuration",
+          )),
           ...(params.credential === undefined ? {} : { credential: params.credential }),
         },
       }, { ...options, activation });

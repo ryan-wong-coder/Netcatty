@@ -41,7 +41,11 @@ export const PluginConnectionSection: React.FC<Props> = ({
 }) => {
   const [providers, setProviders] = useState<ReadonlyArray<NetcattyExtensionProviderContribution>>([]);
   const [authenticationProviders, setAuthenticationProviders] = useState<ReadonlyArray<NetcattyExtensionProviderContribution>>([]);
-  const [configurationText, setConfigurationText] = useState(() => JSON.stringify(form.pluginConnection?.configuration ?? {}, null, 2));
+  const [configurationText, setConfigurationText] = useState(() => JSON.stringify(
+    form.pluginConnection?.configuration === undefined ? {} : form.pluginConnection.configuration,
+    null,
+    2,
+  ));
   const configurationTextRef = useRef(configurationText);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const active = isPluginHostProtocol(form.protocol);
@@ -69,7 +73,9 @@ export const PluginConnectionSection: React.FC<Props> = ({
   }, []);
 
   useEffect(() => {
-    const configuration = form.pluginConnection?.configuration ?? {};
+    const configuration = form.pluginConnection?.configuration === undefined
+      ? {}
+      : form.pluginConnection.configuration;
     let localConfigurationMatches = false;
     try {
       localConfigurationMatches = JSON.stringify(JSON.parse(configurationTextRef.current)) === JSON.stringify(configuration);
