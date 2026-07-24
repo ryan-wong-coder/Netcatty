@@ -192,6 +192,26 @@ function emitCodexToolResultOnce(item, emitter, state, output, toolName) {
 }
 
 /**
+ * Codex emits mid-turn `type:"error"` JSONL events while it reconnects after a
+ * dropped SSE/response body (`Reconnecting...`, `retrying N/M`). Those are
+ * recoverable — the same turn keeps producing items afterward. Treating them
+ * as fatal settles the Netcatty sidebar turn and stops UI refresh while the CLI
+ * process continues (issue #2456).
+ *
+ * Explicit `willRetry: false` / `will_retry: false` means Codex exhausted its
+ * retry budget — always fatal, even when the message still mentions stream /
+ * transport wording. Truly terminal failures also arrive as `turn.failed`.
+ */
+function isCodexRetryableStreamError(event) {
+  if (!event || typeof event !== "object") return false;
+  if (event.willRetry === false || event.will_retry === false) return false;
+  if (event.willRetry === true || event.will_retry === true) return true;
+  const message = String(event.message || "").toLowerCase();
+  if (!message) return false;
+  return /\breconnecting\b/.test(message) || /\bretrying\b/.test(message);
+}
+
+/**
  * Translate one Codex ThreadEvent into emitter calls.
  * `state` ({ reasoningOpen }) is threaded across events so reasoning summary
  * items render as a single collapsible thinking panel that closes when the first
@@ -206,12 +226,21 @@ function translateCodexEvent(event, emitter, state) {
 
   if (event.type === "turn.failed") {
     closeReasoning();
+    st.fatalError = true;
     emitter.emitError(event.error?.message || "Codex turn failed");
     return;
   }
   if (event.type === "error") {
+    const message = event.message || "Codex stream failed";
+    if (isCodexRetryableStreamError(event)) {
+      // Keep reasoning open — the turn is still in progress after Codex retries.
+      const warningCount = (st.streamWarningCount = (st.streamWarningCount || 0) + 1);
+      emitter.warning(`codex-stream-error:${warningCount}`, message);
+      return;
+    }
     closeReasoning();
-    emitter.emitError(event.message || "Codex stream failed");
+    st.fatalError = true;
+    emitter.emitError(message);
     return;
   }
   if (event.type === "turn.completed") {
@@ -345,11 +374,15 @@ async function runCodexTurn({
       if (signal?.aborted) break;
       if (event?.type === "item.completed") hasContent = true;
       translateCodexEvent(event, emitter, state);
+      if (state.fatalError) break;
     }
     if (state.reasoningOpen) emitter.reasoningEnd();
     if (!threadId) {
       threadId = thread.id || resumeThreadId || null;
       if (threadId) emitter.sessionId(threadId);
+    }
+    if (state.fatalError) {
+      return { threadId };
     }
     if (!hasContent && !signal?.aborted) {
       emitter.emitError(
