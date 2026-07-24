@@ -85,6 +85,7 @@ export const ImportVaultDialog: React.FC<ImportVaultDialogProps> = ({
   const pendingFormatRef = useRef<VaultImportFormat | null>(null);
   const pendingOptionsRef = useRef<ImportOptions | undefined>(undefined);
   const activePluginImportRequestRef = useRef<string | null>(null);
+  const pluginImportGenerationRef = useRef(0);
   const [showManagedChoice, setShowManagedChoice] = useState(false);
   const [showMobaEncodingChoice, setShowMobaEncodingChoice] = useState(false);
   const [pluginProviders, setPluginProviders] = useState<ReadonlyArray<NetcattyExtensionProviderContribution>>([]);
@@ -140,24 +141,28 @@ export const ImportVaultDialog: React.FC<ImportVaultDialogProps> = ({
 
   const pickPluginFile = useCallback((provider: NetcattyExtensionProviderContribution) => {
     if (pluginBusy) return;
+    const generation = ++pluginImportGenerationRef.current;
+    const isCurrent = () => pluginImportGenerationRef.current === generation;
     setPluginBusy(true);
     setPluginError(null);
     setPluginProgress(null);
     void (async () => {
       let selection: Awaited<ReturnType<typeof pluginExtensionBridge.selectImporterFile>> = null;
       let consumed = false;
+      let requestId: string | null = null;
       try {
         selection = await pluginExtensionBridge.selectImporterFile();
-        if (!selection) return;
+        if (!selection || !isCurrent()) return;
         const detection = await pluginExtensionBridge.detectImporter({
           providerId: provider.provider.id,
           sample: selection.sample,
           fileName: selection.fileName,
         });
+        if (!isCurrent()) return;
         if (detection && detection.confidence <= 0) {
           throw new Error(detection.reason || t('vault.import.plugins.notRecognized'));
         }
-        const requestId = crypto.randomUUID();
+        requestId = crypto.randomUUID();
         activePluginImportRequestRef.current = requestId;
         const preview = await pluginExtensionBridge.parseImporterFile({
           requestId,
@@ -165,16 +170,18 @@ export const ImportVaultDialog: React.FC<ImportVaultDialogProps> = ({
           selectionToken: selection.selectionToken,
         });
         consumed = true;
-        setPluginPreview(preview);
+        if (isCurrent()) setPluginPreview(preview);
       } catch (error) {
-        setPluginError(error instanceof Error ? error.message : t('common.unknownError'));
+        if (isCurrent()) setPluginError(error instanceof Error ? error.message : t('common.unknownError'));
       } finally {
-        activePluginImportRequestRef.current = null;
+        if (activePluginImportRequestRef.current === requestId) activePluginImportRequestRef.current = null;
         if (selection && !consumed) {
           await pluginExtensionBridge.releaseImporterFile(selection.selectionToken).catch(() => false);
         }
-        setPluginBusy(false);
-        setPluginProgress(null);
+        if (isCurrent()) {
+          setPluginBusy(false);
+          setPluginProgress(null);
+        }
       }
     })();
   }, [pluginBusy, t]);
@@ -226,11 +233,16 @@ export const ImportVaultDialog: React.FC<ImportVaultDialogProps> = ({
   const handleOpenChange = useCallback(
     (newOpen: boolean) => {
       if (!newOpen) {
+        pluginImportGenerationRef.current += 1;
+        const requestId = activePluginImportRequestRef.current;
+        activePluginImportRequestRef.current = null;
+        if (requestId) void pluginExtensionBridge.cancelRequest(requestId).catch(() => false);
         setShowManagedChoice(false);
         setShowMobaEncodingChoice(false);
         setPluginPreview(null);
         setPluginError(null);
         setPluginProgress(null);
+        setPluginBusy(false);
       }
       onOpenChange(newOpen);
     },

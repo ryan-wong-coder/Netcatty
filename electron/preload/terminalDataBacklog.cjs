@@ -7,6 +7,11 @@ function hasPluginPipelineIngress(meta) {
     && Number(meta.pluginPipelineIngressBytes) > 0;
 }
 
+function hasPluginPipelineIngressMarker(meta) {
+  return Number.isFinite(meta?.pluginPipelineIngressBytes)
+    && Number(meta.pluginPipelineIngressBytes) >= 0;
+}
+
 function createTerminalDataBacklog(options = {}) {
   const maxBytesPerSession = options.maxBytesPerSession ?? 64 * 1024;
   const pendingBySession = new Map();
@@ -17,7 +22,7 @@ function createTerminalDataBacklog(options = {}) {
   }
 
   function append(sessionId, data, meta) {
-    if (!sessionId || (!data && !hasPluginPipelineIngress(meta))) return;
+    if (!sessionId || (!data && !hasPluginPipelineIngressMarker(meta))) return;
     const previous = pendingBySession.get(sessionId) || { data: "", meta: undefined };
     const nextData = trimToLimit(previous.data + data);
     const preserveTerminalPerf = previous.data.length === 0 && nextData === data;
@@ -88,7 +93,7 @@ function createTerminalDataDispatcher({
   shouldDropSession = () => false,
 }) {
   return function deliverToListeners(sessionId, data, meta) {
-    if (!data && !hasPluginPipelineIngress(meta)) return;
+    if (!data && !hasPluginPipelineIngressMarker(meta)) return;
     if (shouldDropSession(sessionId)) return;
 
     if (!hasSessionListeners(displayDataListeners, sessionId)) {
@@ -130,4 +135,5 @@ module.exports = {
   createTerminalDataDispatcher,
   clearTerminalDataSession,
   hasPluginPipelineIngress,
+  hasPluginPipelineIngressMarker,
 };

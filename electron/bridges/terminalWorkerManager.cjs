@@ -1483,14 +1483,18 @@ function createTerminalWorkerManager(options = {}) {
     }
   }
 
-  async function pushExternalOutput(sessionId, data) {
+  async function pushExternalOutput(sessionId, data, meta) {
     const external = externalSessions.get(sessionId);
     if (!external) throw new Error("External terminal session is not registered");
     if (external.paused) {
       await new Promise((resolve) => external.resumeWaiters.push(resolve));
       if (!externalSessions.has(sessionId)) return false;
     }
-    await request("netcatty:external:output", { sessionId, data });
+    await request("netcatty:external:output", {
+      sessionId,
+      data,
+      ...(meta === undefined ? {} : { meta }),
+    });
     return true;
   }
 

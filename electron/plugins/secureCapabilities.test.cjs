@@ -213,8 +213,8 @@ test("companion requests consume operation-bound credential leases exactly once"
     method: "authenticate",
     params: { host: "example.test" },
     credentialLeases: {
-      username: { kind: "secretLease", id: "credential-lease-user" },
-      password: { kind: "secretLease", id: "credential-lease-password" },
+      username: { kind: "secret-lease", id: "credential-lease-user" },
+      password: { kind: "secret-lease", id: "credential-lease-password" },
     },
     operationId: "login",
     timeoutMs: 5_000,

@@ -514,7 +514,8 @@ test("plugin connection authentication uses host-rendered sender-owned challenge
       },
       async openConnection(params, options) {
         calls.push(["open", params]);
-        await options.onData(Uint8Array.from([65]));
+        await options.onData(Uint8Array.from([0xe2]));
+        await options.onData(Uint8Array.from([0x82, 0xac]));
         return { sessionId: params.sessionId, providerId: params.providerId, status: "connected", diagnostics: [] };
       },
       closeSessionLocal() {},
@@ -581,7 +582,7 @@ test("plugin connection authentication uses host-rendered sender-owned challenge
   });
   assert.equal(external[0][0], "start");
   assert.equal(external[0][1].sessionId, "session-auth-1");
-  assert.deepEqual(external[1], ["output", "session-auth-1", Uint8Array.from([65])]);
+  assert.deepEqual(external[1], ["output", "session-auth-1", "€"]);
 });
 
 test("plugin connection status monitoring releases silent connected sessions", async () => {
@@ -603,7 +604,7 @@ test("plugin connection status monitoring releases silent connected sessions", a
     },
     getTerminalWorkerManager: () => ({
       async startExternalSession(options) { return { sessionId: options.sessionId }; },
-      async pushExternalOutput(sessionId, data) { resolveConnectedOutput([sessionId, data]); },
+      async pushExternalOutput(sessionId, data, meta) { resolveConnectedOutput([sessionId, data, meta]); },
       async finishExternalSession() { return true; },
     }),
     connectionStatusPollMs: 0,
@@ -620,7 +621,11 @@ test("plugin connection status monitoring releases silent connected sessions", a
     rows: 24,
   });
   assert.equal(opened.status, "connecting");
-  assert.deepEqual(await connectedOutput, ["session-silent-start", ""]);
+  assert.deepEqual(await connectedOutput, [
+    "session-silent-start",
+    "",
+    { pluginPipelineIngressBytes: 0 },
+  ]);
   assert.equal(statusCalls.length, 2);
   assert.equal(statusCalls.every((call) => call[1] === "getStatus" && call[3] === false), true);
 });
@@ -638,7 +643,7 @@ test("plugin connections that open connected release silent terminal startup", a
     },
     getTerminalWorkerManager: () => ({
       async startExternalSession(options) { return { sessionId: options.sessionId }; },
-      async pushExternalOutput(sessionId, data) { output.push([sessionId, data]); return true; },
+      async pushExternalOutput(sessionId, data, meta) { output.push([sessionId, data, meta]); return true; },
       async finishExternalSession() { return true; },
     }),
     env: { NETCATTY_PLUGIN_DEV: "1" },
@@ -654,7 +659,11 @@ test("plugin connections that open connected release silent terminal startup", a
     rows: 24,
   });
   assert.equal(opened.status, "connected");
-  assert.deepEqual(output, [["session-silent-connected", ""]]);
+  assert.deepEqual(output, [[
+    "session-silent-connected",
+    "",
+    { pluginPipelineIngressBytes: 0 },
+  ]]);
 });
 
 test("silent connection readiness delivery failure closes the opened provider session", async () => {

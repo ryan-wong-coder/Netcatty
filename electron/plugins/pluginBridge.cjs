@@ -325,6 +325,7 @@ function registerPluginBridge(ipcMain, options) {
     timer.unref?.();
     signal.addEventListener("abort", onAbort, { once: true });
   });
+  const pluginConnectionReadyMeta = Object.freeze({ pluginPipelineIngressBytes: 0 });
   const monitorPluginConnection = async ({ sessionId, sessions, controller, terminalWorkerManager }) => {
     try {
       while (!controller.signal.aborted && sessions.has(sessionId)) {
@@ -339,7 +340,7 @@ function registerPluginBridge(ipcMain, options) {
         if (status.status === "connected") {
           // A zero-byte terminal delivery transitions silent protocols out of
           // the connecting UI without inventing visible terminal output.
-          await terminalWorkerManager.pushExternalOutput(sessionId, "");
+          await terminalWorkerManager.pushExternalOutput(sessionId, "", pluginConnectionReadyMeta);
           return;
         }
         if (status.status === "closed" || status.status === "error") {
@@ -548,6 +549,7 @@ function registerPluginBridge(ipcMain, options) {
       credential = authentication.credential;
     }
     const sessionId = payload?.sessionId;
+    const outputDecoder = new TextDecoder("utf-8");
     let closedDuringStart = false;
     let providerOpened = false;
     let providerCloseStarted = false;
@@ -587,10 +589,15 @@ function registerPluginBridge(ipcMain, options) {
         ...(credential === undefined ? {} : { credential }),
       }, {
         signal: connectionController.signal,
-        onData: (bytes) => terminalWorkerManager.pushExternalOutput(sessionId, bytes),
+        onData: async (bytes) => {
+          const data = outputDecoder.decode(bytes, { stream: true });
+          if (data) await terminalWorkerManager.pushExternalOutput(sessionId, data);
+        },
         onOutputClose: async (reason) => {
           closedDuringStart = true;
           sessions.delete(sessionId);
+          const finalData = outputDecoder.decode();
+          if (finalData) await terminalWorkerManager.pushExternalOutput(sessionId, finalData);
           await terminalWorkerManager.finishExternalSession(sessionId, {
             reason: typeof reason === "string" ? reason : "closed",
           });
@@ -610,7 +617,7 @@ function registerPluginBridge(ipcMain, options) {
           // The terminal renderer treats the first delivery as the connection
           // readiness boundary. Preserve that boundary for silent protocols
           // whose Provider completes open before producing terminal bytes.
-          await terminalWorkerManager.pushExternalOutput(opened.sessionId, "");
+          await terminalWorkerManager.pushExternalOutput(opened.sessionId, "", pluginConnectionReadyMeta);
         }
       }
       return opened;

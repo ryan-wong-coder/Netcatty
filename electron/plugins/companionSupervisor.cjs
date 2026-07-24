@@ -378,11 +378,11 @@ class PluginCompanionSupervisor {
       for (const [name, lease] of Object.entries(params.credentialLeases)) {
         if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(name)
           || !lease || typeof lease !== "object" || Array.isArray(lease)
-          || lease.kind !== "secretLease"
+          || lease.kind !== "secret-lease"
           || typeof lease.id !== "string" || lease.id.length < 16 || lease.id.length > 256) {
           throw new PluginRpcError(RPC_ERRORS.invalidArgument, "Plugin companion credential lease is invalid");
         }
-        credentialLeases[name] = Object.freeze({ kind: "secretLease", id: lease.id });
+        credentialLeases[name] = Object.freeze({ kind: "secret-lease", id: lease.id });
       }
       Object.freeze(credentialLeases);
     }

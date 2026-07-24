@@ -23,6 +23,9 @@ export const pluginExtensionBridge = Object.freeze({
     if (!bridge.parsePluginImporterFile) throw new Error("Plugin importer bridge is unavailable");
     return bridge.parsePluginImporterFile(request);
   },
+  async cancelRequest(requestId: string) {
+    return requireBridge().cancelPluginExtensionRequest?.(requestId) ?? false;
+  },
   async selectImporterFile() {
     const bridge = requireBridge();
     if (!bridge.selectPluginImporterFile) throw new Error("Plugin importer file selection is unavailable");

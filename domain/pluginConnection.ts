@@ -1,14 +1,31 @@
-import type { HostProtocol, PluginConfigurationValue, PluginConnectionConfig } from './models';
+import type {
+  BuiltInHostProtocol,
+  HostProtocol,
+  PluginConfigurationValue,
+  PluginConnectionConfig,
+} from './models';
 
 const CONTRIBUTION_ID = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\.[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-])*$/u;
 const MAX_CONFIGURATION_BYTES = 128 * 1024;
 const MAX_CONFIGURATION_DEPTH = 32;
 const MAX_CONFIGURATION_ENTRIES = 4096;
+const BUILT_IN_HOST_PROTOCOLS = new Set<BuiltInHostProtocol>([
+  'ssh',
+  'telnet',
+  'mosh',
+  'et',
+  'local',
+  'serial',
+]);
 
 export const pluginProtocolForProvider = (providerId: string): HostProtocol => `plugin:${providerId}`;
 
 export const isPluginHostProtocol = (protocol?: string): protocol is `plugin:${string}` => (
   typeof protocol === 'string' && protocol.startsWith('plugin:') && CONTRIBUTION_ID.test(protocol.slice(7))
+);
+
+export const isBuiltInHostProtocol = (protocol?: string): protocol is BuiltInHostProtocol => (
+  typeof protocol === 'string' && BUILT_IN_HOST_PROTOCOLS.has(protocol as BuiltInHostProtocol)
 );
 
 export const isSafePluginAuthenticationUrl = (value: string): boolean => {

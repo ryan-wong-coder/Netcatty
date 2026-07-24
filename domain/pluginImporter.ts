@@ -1,6 +1,6 @@
 import type { ImporterRecord, JsonValue } from '@netcatty/plugin-contract';
 import { sanitizeHost } from './host';
-import { isPluginHostProtocol } from './pluginConnection';
+import { isBuiltInHostProtocol, isPluginHostProtocol } from './pluginConnection';
 import type { Host, Identity, Snippet, SSHKey } from './models';
 import { buildVaultHostMergeKey } from './vaultHostCreate';
 
@@ -109,7 +109,9 @@ const stringArray = (value: JsonValue | undefined, maximumItems = 128): string[]
 const normalizeHost = (value: JsonValue): Host | null => {
   const object = asObject(value);
   if (!object) return null;
-  const protocol = stringValue(object.protocol, 192) as Host['protocol'] | undefined;
+  const protocolValue = stringValue(object.protocol, 192);
+  if (protocolValue && !isBuiltInHostProtocol(protocolValue) && !isPluginHostProtocol(protocolValue)) return null;
+  const protocol = protocolValue as Host['protocol'] | undefined;
   const pluginProtocol = isPluginHostProtocol(protocol);
   const providerId = asObject(object.pluginConnection)
     ? stringValue(asObject(object.pluginConnection)?.providerId, 192)

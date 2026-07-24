@@ -227,6 +227,7 @@ function main() {
         await event.sender.send("netcatty:data", {
           sessionId: payload.sessionId,
           data: payload.data,
+          ...(payload.meta === undefined ? {} : { meta: payload.meta }),
         });
         return null;
       });

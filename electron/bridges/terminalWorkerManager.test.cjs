@@ -183,13 +183,20 @@ test("external sessions reuse worker output routing and propagate input, resize,
   ]);
 
   let outputResolved = false;
-  const output = manager.pushExternalOutput("plugin-1", "world").then(() => { outputResolved = true; });
+  const output = manager.pushExternalOutput("plugin-1", "world", {
+    pluginPipelineIngressBytes: 0,
+  }).then(() => { outputResolved = true; });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(outputResolved, false);
   child.emit("message", { kind: "external-session-event", sessionId: "plugin-1", event: "flow", paused: false });
   await new Promise((resolve) => setImmediate(resolve));
   const outputRequest = child.messages.at(-1);
   assert.equal(outputRequest.channel, "netcatty:external:output");
+  assert.deepEqual(outputRequest.payload, {
+    sessionId: "plugin-1",
+    data: "world",
+    meta: { pluginPipelineIngressBytes: 0 },
+  });
   child.emit("message", { kind: "response", requestId: outputRequest.requestId, result: null });
   await output;
 

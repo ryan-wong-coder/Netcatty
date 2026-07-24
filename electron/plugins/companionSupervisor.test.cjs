@@ -52,6 +52,34 @@ function runtimeContext(packageRoot, digest, overrides = {}) {
   };
 }
 
+test("companion requests accept only the public secret-lease reference shape", () => {
+  const supervisor = new PluginCompanionSupervisor({
+    paths: { data: path.join(os.tmpdir(), "netcatty-plugin-companion-validation") },
+  });
+  const params = {
+    handleId: "companion-handle-0001",
+    method: "authenticate",
+    credentialLeases: {
+      password: { kind: "secret-lease", id: "credential-lease-password" },
+    },
+    operationId: "login",
+  };
+
+  assert.deepEqual(supervisor.validateRequest(params), {
+    ...params,
+    timeoutMs: 30_000,
+  });
+  assert.throws(
+    () => supervisor.validateRequest({
+      ...params,
+      credentialLeases: {
+        password: { kind: "secretLease", id: "credential-lease-password" },
+      },
+    }),
+    (error) => error.code === RPC_ERRORS.invalidArgument,
+  );
+});
+
 test("ordinary browser runtimes cannot authorize or launch native companions", async (context) => {
   const root = createRoot(context);
   let spawnCalls = 0;

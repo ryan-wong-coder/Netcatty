@@ -1,4 +1,7 @@
-const { clearTerminalDataSession } = require("./terminalDataBacklog.cjs");
+const {
+  clearTerminalDataSession,
+  hasPluginPipelineIngressMarker,
+} = require("./terminalDataBacklog.cjs");
 const { randomUUID } = require("node:crypto");
 
 function createPreloadApi(ctx) {
@@ -109,10 +112,15 @@ function createPreloadApi(ctx) {
     ...request,
   }),
   cancelPluginExtensionRequest: (requestId) => ipcRenderer.invoke("netcatty:plugins:extension-cancel", { requestId }),
-  startPluginConnection: (request) => ipcRenderer.invoke("netcatty:plugins:connection-start", {
-    requestId: request?.requestId ?? randomUUID(),
-    ...request,
-  }),
+  startPluginConnection: async (request) => {
+    markRequestedTerminalDataSessionOpen(request);
+    const result = await ipcRenderer.invoke("netcatty:plugins:connection-start", {
+      requestId: request?.requestId ?? randomUUID(),
+      ...request,
+    });
+    markTerminalDataSessionOpen(result?.sessionId);
+    return result;
+  },
   writePluginConnection: (sessionId, data) => ipcRenderer.invoke("netcatty:plugins:connection-write", { sessionId, data }),
   controlPluginConnection: (sessionId, operation, payload) => ipcRenderer.invoke(
     "netcatty:plugins:connection-control",
@@ -562,7 +570,7 @@ function createPreloadApi(ctx) {
       displayDataListeners.get(sessionId).add(cb);
       const pendingEntry = terminalDataBacklog?.takeEntry?.(sessionId)
         ?? { data: terminalDataBacklog?.take?.(sessionId) || "", meta: undefined };
-      if (pendingEntry.data || Number(pendingEntry.meta?.pluginPipelineIngressBytes) > 0) {
+      if (pendingEntry.data || hasPluginPipelineIngressMarker(pendingEntry.meta)) {
         try {
           cb(pendingEntry.data, pendingEntry.meta);
         } catch (err) {
